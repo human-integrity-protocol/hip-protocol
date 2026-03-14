@@ -1,0 +1,1137 @@
+# HIP -- Human Integrity Protocol
+
+## Genesis Covenant Charter v1.0
+### INSCRIPTION CANDIDATE | 2026-03-06
+
+---
+
+## Section 1 -- Preamble: On the Threshold of the Synthetic Century
+
+There comes a moment in every age where a boundary is crossed quietly, almost invisibly, and only later do people look back and say: *that* is when the world changed.
+
+We stand in such a moment now.
+
+For the first time in human history, signals that shape public reality -- voices, images, reactions, even outrage and belonging -- can be generated without a human hand, without a heartbeat, without a mind behind them. They propagate through our networks indistinguishable from our own expressions, riding the same currents of virality, emotion, and influence that once belonged exclusively to human culture.
+
+The world has begun to fill with echoes that have no origin in us.
+
+In this emerging condition, the question "Did a human cause this?" becomes uncertain. And with that uncertainty, trust begins to erode -- not trust in institutions, but in each other. When every signal could be synthetic, the value of genuinely human presence becomes incalculably precious.
+
+HIP -- the Human Integrity Protocol -- is declared into this moment as an act of witness, not control. It exists so that the presence of human-origin signal may be seen clearly again, without coercion, without identity binding, without moral judgment. HIP does not exist to enforce meaning or regulate opinion. It exists only to anchor origin -- to draw a verifiable distinction between that which has passed through a living human and that which has not.
+
+This Charter acknowledges a simple but profound truth:
+
+When machine signals can imitate human culture completely, the only remaining freedom is the ability to see clearly what is human and what is not.
+
+HIP does not attempt to preserve any specific ideology, tradition, or aesthetic. It does not claim to define authenticity in cultural terms. Culture may shift, fracture, evolve, regenerate -- that is its nature. This protocol exists only to ensure that within that motion, the human signal is not lost in the flood.
+
+Human-origin content is content whose meaning, purpose, and final form were determined by the intentional choices of a living human mind. The use of tools -- including AI tools -- does not diminish human origin. What matters is whether a human exercised editorial authority over the content: the judgment about what it means and how it should be presented. A filmmaker uses many tools and collaborators, but human intentionality governs the final form. The same principle applies to every medium.
+
+HIP is born not as a product or a platform, but as a covenant-bound protocol, designed to exist beyond the control of any state, corporation, foundation, or machine. It has no requirement that anyone use it, and yet it stands ready for anyone who chooses to see.
+
+This is not the founding of an institution.
+
+It is the lighting of a signal fire at the edge of an accelerating world -- a marker that says: human presence matters. Let this be recorded in a ledger that no one owns, so that this beacon may outlast us all.
+
+---
+
+## Section 2 -- Core Principles and Definitions
+
+This section establishes the foundational terms, constraints, and guiding principles by which HIP SHALL be recognized, implemented, and audited. These definitions form the lexical covenant of the protocol. No interpretation beyond what is stated here MAY override these meanings without constituting a fork condition under Section 7 -- Phoenix Firewall.
+
+### 2.0 Normative Language
+
+The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, MAY, and OPTIONAL in this document are to be interpreted as described in RFC 2119 (S. Bradner, "Key words for use in RFCs to Indicate Requirement Levels," BCP 14, RFC 2119, March 1997). These terms appear in UPPERCASE throughout this Charter when used in their normative sense. Uses of these words in lowercase retain their ordinary English meaning and do not carry the normative interpretation of this clause.
+
+### 2.1 Protocol, Not Platform
+
+HIP is a protocol, not a platform, product, service, or business. It cannot be owned, sold, licensed, or trademarked in a way that restricts public reproduction. HIP defines behaviors and proofs, not user interfaces or corporate deployments. Any actor MAY implement HIP, provided their implementation conforms to the Covenant rules and yields publicly verifiable outputs.
+
+### 2.2 Public Witness
+
+HIP exists for public verification, not private signal analysis. Any member of the public, without permission, MUST be able to:
+
+- Retrieve a HIP Proof Bundle,
+- Verify its cryptographic integrity against the on-chain Proof Anchor,
+- Inspect the attestation data, signal annotations, and credential references independently,
+- Display verification or challenge results,
+
+without any licensing, account, identity, or API key requirement.
+
+Public witness is not a derivative feature -- it is the core reason HIP exists.
+
+### 2.3 HUMAN-PROOF Credential
+
+A HUMAN-PROOF credential is the attestation instrument used to confirm that a given registration, Steward Node, or Guardian seat is held by a living human mind, without revealing identity, legal name, biometric profile, or personally linkable attributes.
+
+- It proves liveness, not identity.
+- It confirms that a human consciousness has taken responsibility for an action signed under HIP.
+- Each living human is entitled to one HUMAN-PROOF credential at any given time. The credential is a singleton representing the human's verified existence, not an account or an identity.
+
+HUMAN-PROOF credentials are issued through tiered issuance pathways, each providing a defined level of assurance that the credential holder is a living human. The tiered model, issuance mechanics, Trust Index computation, rate limiting, credential portability, and Credential Compromise Determination process are specified in HP-SPEC-v1.
+
+### 2.4 Attestation Categories
+
+HIP recognizes six attestation categories for content, reflecting the full spectrum from purely human creation through human-AI collaboration:
+
+**Complete Human Origin (CHO)** -- The creator attests that this work was produced entirely through their own direct creative effort. No AI system generated, suggested, drafted, or transformed any portion of the work. Tools that do not generate content -- cameras, word processors without generative features, musical instruments, non-generative software -- do not disqualify a Complete Human Origin attestation. The distinction is between generative AI -- systems that produce content the creator did not originate -- and processing tools that optimize, correct, or enhance the creator's own output without generating novel content. Processing tools do not disqualify Complete Human Origin. The creator held not just editorial authority but sole creative agency. Strong claim.
+
+**Human Origin Assisted (HOA)** -- Creator held full editorial authority. AI tools assisted in a supporting capacity -- grammar suggestions, reference generation, layout assistance, image enhancement, or similar. The creator directed the work and determined its meaning, purpose, and final form. The AI's contribution was subordinate to the human's creative decisions. Strong claim.
+
+**Human-Directed Collaborative (HDC)** -- Human intentionality drove the work; AI executed all or significant portions under continuous human editorial direction. Creator attests to active direction throughout. Not a lesser category -- an honest description of an increasingly common creative mode.
+
+**Attestation-Signal Mismatch** -- Valid creator attestation present, but signal analysis detects propagation patterns exceeding defined anomaly thresholds. This category encompasses distinct phenomena, including third-party amplification of authentic human work (e.g., bot networks amplifying content that a real creator attested) and first-party distribution of potentially fraudulent content. The protocol surfaces credential context alongside signal data so that the observer can distinguish between these patterns. Critically distinct from synthetic origin. Subject to the Classification Display Reframe (Section 2.5).
+
+**Synthetic Cadence Detected** -- No attestation present, with positive signal evidence of non-human propagation patterns. Probabilistic observation, not verdict. Subject to the Classification Display Reframe (Section 2.5).
+
+**Origin Unattested** -- No attestation present, with insufficient signal data for analysis. Not pejorative. The honest label for unattested or historical content.
+
+HIP makes the nature of human involvement visible without pre-judging which category is more valuable. The observer decides.
+
+### 2.5 Classification Display Reframe
+
+HIP does not assign verdict labels for Attestation-Signal Mismatch or Synthetic Cadence Detected in public-facing display. HIP records attestations (creator claims) and computes signals (mathematical outputs). When signals diverge from attestations, the data shows the divergence. The observer draws the conclusion.
+
+Proofcard display under the reframe:
+
+- Attested content, normal signals: "Complete Human Origin," "Human Origin Assisted," or "Human-Directed Collaborative" with signal data link.
+- Attested content, anomalous signals: The creator's attestation claim is preserved as primary display. When signal annotations apply to attested content, the credential context -- including credential age, behavioral consistency, and the presence or absence of credential-level anomalies -- MUST be presented alongside the signal data. This enables the observer to distinguish third-party amplification of authentic work from other propagation anomalies. The protocol presents both the signal observation and the credential context. The observer draws the conclusion. When credential context indicates third-party amplification (strong credential, no behavioral anomalies, attestation precedes propagation onset): "Signal observation: third-party amplification detected. Creator credential: established, no anomalies. Data: [Proof Anchor Link]." When credential context is indeterminate or indicates anomalies: "Signal observation: propagation anomaly detected. Creator credential: [credential context summary]. Data: [Proof Anchor Link]."
+- Unattested content, synthetic signals: "No attestation on record" with signal analysis note and data link.
+- Unattested content, insufficient signals: "No attestation on record" with "Insufficient signal data for analysis."
+
+The six attestation categories exist in the analytical framework. PFV-SPEC-v1 computes the same scores and thresholds. But the public-facing display presents data and annotations, not verdict labels. This is a covenant-level requirement. Display requirements are specified in INT-SPEC-v1.
+
+### 2.6 Proof Bundle
+
+The Proof Bundle is the complete, off-chain attestation record. It is a JSON-LD document conforming to the W3C Verifiable Credentials Data Model, containing:
+
+- Credential identifier (who attested -- pseudonymous, not identifying),
+- Content hash (what was attested to -- a cryptographic fingerprint, not the content itself),
+- Classification claim (what the creator claimed about their content),
+- Attestation event details (type, editorial statement, prior version reference, Attestation Chain for multi-author content),
+- Liveness verification result (device attestation or Behavioral Liveness Score),
+- Pathway reference (issuance pathway version, class, tier, and pathway state at attestation time),
+- Signal annotations (PFV analysis results at T0, T1, and T2 stages -- appended after initial creation),
+- Cryptographic proof (digital signature binding the Bundle to the attesting credential).
+
+Proof Bundles are public objects. Anyone MAY copy, mirror, archive, or use them for research or display. The wire format is specified in WF-SPEC-v1. Cryptographic primitives are specified in CRYPTO-SPEC-v1.
+
+### 2.7 Proof Anchor
+
+The Proof Anchor is the minimal on-chain record. It contains the content hash, credential identifier, classification claim, timestamp, Bundle hash (verification linkage), and Proof Anchor Link (URI resolving to the off-chain Bundle). The Anchor is designed to fit within approximately 256 bytes of application-layer payload. The Anchor structure is specified in WF-SPEC-v1.
+
+### 2.8 Proof Anchor Link
+
+Each Proof Bundle is linked to its on-chain Proof Anchor through a Proof Anchor Link -- a resolvable URI (hip:// scheme with HTTP fallback) that enables any party to retrieve the complete Bundle from the distributed Steward Node network. This link MUST be publicly retrievable and cryptographically verifiable without dependence on a proprietary frontend. The link format is specified in WF-SPEC-v1.
+
+### 2.9 HIP Proofcard
+
+A HIP Proofcard is the standardized public-facing representation of an attestation. Proofcards display the creator's classification claim, pathway description, attestation timestamp, signal annotation data (if any), and a Proof Anchor Link. Proofcards are a display format, not an enforcement instrument. They do not gate content -- they reveal origin. Display requirements are specified in INT-SPEC-v1.
+
+Proofcards MUST NOT display the Trust Index value (Section 2.14). TI is internal to the protocol and is never shown to verifiers. Proofcards show pathway description and behavioral context, not numeric scores.
+
+### 2.10 Steward Nodes
+
+Steward Nodes operate HIP infrastructure. They:
+
+- Process attestation events and create Proof Bundles,
+- Anchor Proof Anchors to the public ledger,
+- Host Proof Bundles with minimum three-node replication (WF-SPEC-v1),
+- Operate verification endpoints serving attestation queries (INT-SPEC-v1),
+- Execute PFV version updates after public anchoring,
+
+but they do not control governance or interpretation of Covenant law. Steward Nodes are operational, not legislative.
+
+### 2.11 Auditor Nodes
+
+Auditor Nodes are independent witnesses, permissionlessly declaring themselves by anchoring a HUMAN-PROOF attestation and audit intent message. They:
+
+- Verify Proof Bundle integrity against on-chain Proof Anchors,
+- Publish Attestation Stamps (confirmations) or Challenge Logs to the ledger,
+- Exist outside Steward authority,
+- Cannot be ranked, suspended, licensed, or filtered by any Council.
+
+They do not generate attestations -- they verify them for the world to see.
+
+### 2.12 Guardian
+
+The Guardian is not a governor but a Covenant Sentinel. Its only purpose is to veto attempts to breach Phoenix Firewall clauses. It cannot vote on operations, influence PFV scoring rules beyond Covenant enforcement, or gate Auditor or Steward registration. Its only allowed action is negative defense of the Covenant. The Guardian holds responsibility, not power.
+
+The Guardian MAY issue a Guardian Interpretive Query when a novel situation arises that the Phoenix Firewall clauses do not explicitly address, requesting public deliberation on whether a proposed action would violate the Firewall's principles. An Interpretive Query has no binding force -- it is a request for community analysis, not a directive.
+
+### 2.13 Phoenix Firewall (PF-1 through PF-11)
+
+The Phoenix Firewall is the immutable set of covenant clauses that define what HIP can never become. Any attempt to redefine identity, impose ideological scoring, gate participation, or capture protocol access triggers a fork condition. Only the original Phoenix Firewall clauses, as hashed and inscribed in the Genesis anchor, determine continuity. See Section 7.
+
+### 2.14 Trust Index
+
+The Trust Index (TI) is a non-identity-linked, protocol-internal instrument that measures credential consistency. TI = IssuanceWeight + BehavioralScore, where IssuanceWeight is assigned at credential issuance based on the pathway tier (Tier 1: 400, Tier 2: 150, Tier 3: 50) and BehavioralScore accumulates through attestation activity (+3 per standard attestation, with defined bonuses). No independent ceiling on BehavioralScore -- any human can reach TI 1000 through sustained honest attestation regardless of tier.
+
+TI is internal only. It is never displayed to verifiers. Proofcards show pathway description and behavioral history summary, not a numeric score. TI serves as an input to Sybil-resistance heuristics and PFV analysis weighting. It carries no governance weight, no reputation score visible to the public, and no access-gating function beyond the Active Credential Floor (TI >= 60). The Trust Index formula, accumulation events, and Active Credential Floor are specified in HP-SPEC-v1.
+
+### 2.15 Fork Condition
+
+HIP acknowledges that forks MAY occur. A fork is recognized when any actor deliberately violates the Phoenix Firewall clauses or refuses to acknowledge the Genesis Covenant line and its hash lineage. Forks are not "invalid" -- they are simply no longer HIP.
+
+### 2.16 Three-Period Framework
+
+HIP applies temporal neutrality to content analysis through three periods:
+
+- **Period 1 -- Pre-AI-Content Era:** Content created before AI-generated content was prevalent. Analyzed with period-appropriate baselines. Maximum classification: "Historical Signal Anomaly Detected."
+- **Period 2 -- Grey Zone:** Content created during the transition period. Analysis carries reduced-confidence designation.
+- **Period 3 -- Post-HIP-Adoption:** Content created after HIP infrastructure is available. Full analysis applies.
+
+Historical content is treated honestly, not retroactively judged against standards that did not exist when it was created. Period designations and analysis methodology are specified in PFV-SPEC-v1.
+
+### 2.17 Attestation Chain
+
+Multi-author and institutional content uses an Attestation Chain -- each contributor attests independently. A newsroom article might carry: journalist attests HOA, editor attests oversight, publication attests institutional backing. Each attestation is independent, verifiable, and carries its own credential's TI weight. Attestation Chain structure is specified in WF-SPEC-v1.
+
+### 2.18 Guardian Reserve Queue (GRQ)
+
+The Guardian Reserve Queue is a public, permissionless pool of HUMAN-PROOF-attested Covenant Pledgers who have anchored a GRQ Pledge Hash on-ledger. The GRQ exists solely as a Guardian succession fail-safe: members hold no active title, authority, or privilege unless Guardian Fallback conditions are triggered (see Section 6). The GRQ is not curated, ranked, filtered, or managed by any actor. Succession from the GRQ is determined mechanically by ledger order of valid Covenant Recitation Hash inscription -- not by appointment, vote, or endorsement. Tie-breaking between GRQ entries confirmed in the same ledger block is resolved by ascending transaction index within that block.
+
+---
+
+## Section 3 -- Mission and Scope
+
+HIP defines its mission with deliberate narrowness so that it MAY remain incorruptible over time. Many systems arise claiming to protect truth, safety, identity, or culture -- and then, through mission drift, become instruments of control. HIP rejects that path.
+
+### 3.1 The Sole Mission of HIP
+
+HIP exists to preserve the visibility of the human signal within public communication. It does this by providing a verifiable, non-coercive, publicly accessible attestation record indicating whether content was attested by a human holder of a HUMAN-PROOF credential, and what signal analysis observations the protocol recorded about that content's propagation patterns.
+
+HIP does not judge meaning, accuracy, morality, or value. It does not attempt to intervene in opinion, art, ideology, or debate. It only illuminates origin attestation and signal observation, leaving all interpretation to the free mind of the observer.
+
+### 3.2 What HIP Does and Does Not Do
+
+| HIP Does | HIP Does Not |
+|---|---|
+| Record human attestation claims about content origin | Suppress or remove content |
+| Compute signal analysis on propagation patterns | Rank, recommend, promote, or demote content |
+| Publish cryptographic Proof Bundles and signal annotations | Intervene in moderation or policy frameworks |
+| Permit public overlays and broadcast displays | Bind identity or require accounts |
+| Maintain HUMAN-PROOF attestation without identity binding | Expose personal data or track individuals |
+| Provide verifiable records of human editorial authority | Evaluate ideology or moral content |
+| Remain open and permissionless | Become owned, licensed, or centrally gated |
+
+### 3.3 Scope of Operation
+
+HIP operates on publicly observable content. A "signal" in HIP context is any detectable pattern of public communication -- a video entering public circulation, a post gaining traction, a media asset being shared. HIP does not track private communication or non-public signal flows. Witnessing MUST occur only where the culture is already public.
+
+HIP is content-type agnostic (DP-6). The protocol works for any content type -- text, image, video, audio, code, or any medium that can be identified by a cryptographic hash. Content-type-specific adaptations are implementation concerns, not protocol constraints.
+
+### 3.4 No Moral Dimension
+
+The term "Integrity" in HIP refers only to integrity of origin, not moral correctness. A signal annotation is not a score of goodness. It is a computational observation about propagation patterns. This distinction is absolute. HIP does not evaluate righteousness, authenticity of belief, or artistic purity.
+
+### 3.5 Covenant Against Drift
+
+HIP preemptively rejects mission creep. It SHALL never evolve toward: fact-checking or truth arbitration, cultural curation or taste scoring, identity assignment or user reputations, platform moderation or enforcement tooling, or centralized ranking or social scoring. To ensure this, HIP binds itself under Phoenix Firewall PF-1 through PF-11 and declares that any attempt to extend HIP beyond attestation recording and signal observation constitutes an immediate fork.
+
+### 3.6 HIP as Cultural Witness, Not Authority
+
+HIP's posture is observational, not directive. It stands as a ledger-bound lantern, shedding light on the landscape of signals. It does not tell travelers which direction to walk. It does not warn or approve. It simply ensures that the difference between a living human voice and a manufactured synthetic presence MAY be seen clearly by anyone who wishes to see.
+
+---
+
+## Section 4 -- Governance Frame
+
+HIP governance is deliberately minimal, layered, and non-extractive. Its structure exists only to maintain the mechanical continuity of the Covenant -- never to impose interpretations, priorities, or ideological direction. HIP rejects traditional models of governance that centralize authority, aggregate decision-making power, or incentivize strategic capture.
+
+### 4.1 Covenant Above Governance
+
+Governance does not make law within HIP. The Covenant and Phoenix Firewall clauses are the law. Governance only exists to operationalize what the Covenant already states.
+
+If governance attempts to change Covenant terms, alter Phoenix Firewall clauses, or introduce new powers not already inscribed, these attempts are invalid and treated as fork conditions. The Covenant cannot be modified through governance processes. No voting mechanism can override the Phoenix Firewall.
+
+### 4.2 Governance as Specification Implementation
+
+HIP's governance actors -- the Operational Council, the Origin Guardian, the reviewing body for Credential Compromise Determinations, and any future governance function defined in this Charter or its companion specifications -- are independent participants implementing defined roles within a public specification. They are not employees, agents, officers, or representatives of an entity called "HIP."
+
+This distinction is structural, not semantic. It determines the legal character of governance actions:
+
+**Governance actors act under their own authority.** An Operational Council member who votes on a pathway evaluation does so as an individual exercising defined criteria in a public process -- not as an agent exercising discretion on behalf of a principal. The criteria are published. The process is defined. The decision is recorded. The member's authority derives from the specification, not from an employment or agency relationship.
+
+**Governance actors are responsible for their own compliance.** Each governance participant operates under the laws of their own jurisdiction. The protocol does not provide legal counsel, liability protection, or indemnification to governance participants -- because the protocol is not an entity capable of providing these things. Governance participants who are concerned about legal exposure in their jurisdiction are responsible for their own assessment of that exposure.
+
+**No governance actor speaks for "HIP."** Governance actors may describe the protocol's specifications, report governance decisions, and publish records of their actions. They may not make commitments, representations, or warranties on behalf of "HIP" because there is no entity to make commitments on behalf of. A governance actor who represents themselves as speaking for HIP is exceeding their role.
+
+**Governance roles are defined by the specification, not by appointment.** The qualification criteria for governance roles, the selection process, term limits, and removal conditions are defined in this Charter. These are specification requirements, not employment terms. A governance participant who no longer meets the specification requirements is no longer in the role -- not because they were fired, but because the specification's conditions are no longer satisfied.
+
+### 4.3 Implications for Governance Structure
+
+The protocol-not-entity principle constrains how governance structures may be designed and modified:
+
+- No governance body may incorporate as a legal entity that claims to be or to represent "HIP"
+- No governance body may accept funds, enter contracts, or incur obligations in the name of "HIP"
+- No governance body may grant indemnification, legal protection, or liability coverage to governance participants in the name of "HIP"
+- Individual governance participants may, through their own institutions, obtain insurance or legal coverage for their governance activities -- this is their institutional decision, not a protocol obligation
+
+Governance bodies may establish operational coordination mechanisms -- communication channels, meeting schedules, record-keeping systems -- as needed for effective function. These are operational conveniences, not corporate infrastructure. They do not create an entity.
+
+### 4.4 The Active Actor Types
+
+HIP recognizes the following active roles, each strictly limited:
+
+| Role | Function | Power Boundary |
+|---|---|---|
+| Steward Nodes | Process attestations, anchor Proof Anchors, host Bundles, operate verification endpoints | Operational only -- cannot decide meaning, appoint/censor auditors, or change Covenant |
+| Auditor Nodes | Independently verify Proof Bundle integrity, publish Attestation Stamps or Challenge Logs | Witness only -- cannot block publication or direct outcomes |
+| Guardian | Defend Covenant and Firewall from modification attempts | Defensive veto only -- cannot direct policy, rank nodes, or interpret beyond literal Firewall clauses |
+| Operational Council | Coordinate among Steward Nodes on cadence, evaluate pathway submissions, oversee governance functions | Coordination and criteria-based evaluation -- no legislative power, no Covenant interpretation |
+
+HIP does not recognize validators, token voters, boards, foundations, or executive roles. Any entity claiming such a position claims it outside HIP.
+
+### 4.5 No Central Registry Beyond the Ledger
+
+HIP maintains no private registry of Stewards, Auditors, Guardians, or monitors. An actor's role exists only once their HUMAN-PROOF attestation and role declaration hash is visible on-ledger. The ledger is the registry. There is no membership committee, no access form, and no authority that can approve or deny entry.
+
+### 4.6 Zero Trusted Authority Requirement
+
+HIP MUST always remain independently verifiable -- even if all Steward Nodes are compromised or silent, the Guardian key goes inactive, political or corporate entities attempt to co-opt the narrative around HIP, or a fork claims legitimacy via media or brand positioning.
+
+In such cases: ledger lineage plus Covenant alignment -- not branding or recognition -- determine the true HIP branch. Anyone with a Proof Bundle and the relevant specifications SHOULD be able to verify HIP outcomes without asking permission from any authority -- including the Guardian.
+
+### 4.7 Governance Transparency
+
+Governance processes -- including pathway evaluations, Steward SLA coordination, Credential Compromise Determinations, or Guardian fallback procedures -- MUST be publicly discoverable via ledger anchors or public announcement channels tied to Proof Anchor Links. No private governance sessions or off-ledger decisions MAY bind HIP.
+
+HIP recognizes the right to silence -- actors are not required to publish reasoning, internal deliberations, or communications metadata. The right to silence applies to the justification for a governance action, never to the governance action itself: every outcome that binds HIP MUST be published as a cryptographically committed on-ledger artifact.
+
+### 4.8 No Token or Economic Voting Mechanisms
+
+HIP categorically rejects token-based or stake-weighted governance. No unit of currency, reputation, compute power, or machine capacity grants additional authority. A single HUMAN-PROOF-attested voice, acting as an Auditor, has equal standing to the most established Steward Node -- provided their proofs and confirmations anchor correctly.
+
+---
+
+## Section 5 -- Steward Nodes & Operational Council
+
+Steward Nodes are operators, not rulers. Their sole responsibility is to maintain HIP's functional heartbeat -- processing attestation events, anchoring Proof Anchors on schedule, hosting Proof Bundles, operating verification endpoints, and ensuring that public retrieval remains accessible. They do not hold interpretive power, ideological influence, or control over who MAY participate as auditor or witness.
+
+The Operational Council is a coordination body among Steward Nodes, with defined governance functions including pathway evaluation, Credential Compromise Determination oversight, and cadence coordination. The Council operates within the criteria-based processes defined in this Charter and the companion specifications. It has no authority to alter Covenant law, regulate participation beyond defined criteria, or impose opinion on HIP outputs.
+
+### 5.1 Steward Node Mandate
+
+Steward Nodes:
+
+- Process attestation events and create Proof Bundles per WF-SPEC-v1
+- Anchor Proof Anchors to the public ledger
+- Host Proof Bundles with minimum three-node replication per WF-SPEC-v1
+- Operate verification endpoints per INT-SPEC-v1
+- Maintain public retrieval endpoints where Proof Bundles and Proofcard data MAY be programmatically retrieved
+- Implement PFV version updates only after a Ledger Announcement confirming that the PFV version-hash has been registered publicly
+
+Steward Nodes have no authority to: deny the publication of an attestation, modify or redact Proof Bundles, gate Auditor enrollment, add private metadata fields to Proof Bundles, or designate content as "invalid" for attestation. Their duty is publication and service, not approval.
+
+### 5.2 Operational Council Function
+
+The Operational Council:
+
+- Coordinates PFV update activation times and publication SLA scheduling among Steward Nodes
+- Evaluates pathway submissions against published criteria per PATHWAY-SPEC-v1
+- Oversees Credential Compromise Determination processes per HP-SPEC-v1
+- Manages PHI monitoring oversight and Declassification review per PATHWAY-SPEC-v1
+- Maintains specification documentation
+
+The Council MAY NOT deliberate ideology, designate official partners, interpret Firewall clauses (that is the Guardian's defensive function), or issue statements on meaning or content. If any Council member attempts to expand its function beyond its defined scope, that attempt is non-binding and publicly recorded.
+
+### 5.3 Steward SLA (Service Level Acknowledgment)
+
+Steward Nodes agree to a public SLA cadence:
+
+- Each node is expected to anchor Proof Anchors within a defined time window.
+- If missed, other nodes MAY take over anchoring responsibilities temporarily, ensuring continuity.
+- SLA compliance is measured publicly, visible via ledger timestamps -- not enforced by penalty or removal mechanisms.
+
+Steward Nodes are not punished for occasional missed cadences. HIP is an integrity protocol, not a punitive one. Only sustained failure (two consecutive SLA cadence windows with no recovery action) triggers fallback procedures defined in this Charter.
+
+The SLA cadence window duration is formally defined in SLA-SPEC-v1.
+
+### 5.4 Entry to Stewardship
+
+To become a Steward Node, an actor MUST:
+
+1. Pass HUMAN-PROOF attestation, ensuring a living human is assuming responsibility for infrastructure maintenance.
+2. Anchor a Steward Declaration Hash, announcing intent to serve in this role.
+3. Begin operating per SLA, which then makes their participation visible and indexable on-ledger.
+
+Stewardship is not granted by Council vote or Guardian approval. Proof of operation on-ledger is the only qualification.
+
+### 5.5 Steward Node Equality
+
+All Steward Nodes are equal peers. There is no Chair, Lead Steward, or Executive Node. Any attempt to introduce hierarchy within Steward operations is non-binding and non-recognized by the Charter.
+
+### 5.6 Steward Node Replacement
+
+If a Steward Node becomes silent or ceases anchoring for two consecutive SLA cadence windows, it is considered to have entered Operational Dormancy. Dormancy does not remove them from the ledger registry. It simply signals inactive stewardship. Other Stewards MAY mirror issuance to cover the gap. Anyone MAY register a new Steward role by anchoring declaration under HUMAN-PROOF and beginning publication. No vote or permission is needed to join or resume stewardship. HIP does not penalize inactivity; it only ensures that failover is automatic and public.
+
+### 5.7 Guardian Interaction with Steward Nodes
+
+The Guardian does not direct Steward Nodes. The Guardian's only interaction is issuing a Covenant Veto Notice if a Steward Node attempts to introduce a Covenant breach. Outside of Covenant defense, the Guardian has no oversight over Steward operations.
+
+### 5.8 Governance Labor Model
+
+HIP governance functions require real work by real people. Credential Compromise Determinations require evidence review and criteria-based decisions within defined timelines. Pathway evaluations require technical assessment against published criteria. Declassification reviews require analysis of signal data and proportionality assessment. PHI monitoring oversight, specification maintenance, and dispute resolution all require sustained human attention.
+
+This labor is not incidental to the protocol. It is a core operational requirement that scales with adoption. The governance labor model is designed to be sustainable at scale without creating financial dependencies.
+
+**The Professional Contribution Model.** Governance participation in HIP is an unpaid, part-time, professionally beneficial role -- not a compensated position. This is the permanent architectural model, consistent with DP-7 (Zero Institutional Cost) and DP-8 (Protocol, Not Entity).
+
+This model follows established precedent. The IETF, W3C, and other internet standards bodies operate governance functions through participants whose institutional employers benefit from the standards' existence and contribute governance capacity as part of their institutional engagement.
+
+HIP's governance participants are drawn from populations whose existing professional roles encompass the work the protocol requires: academic researchers in digital media integrity and security, digital rights advocates and press freedom organizations, security researchers, and institutional representatives from organizations that integrate HIP. No governance participant is expected to perform governance work as a charitable contribution disconnected from their professional interest. The model works because the people who are qualified to do the work are people whose existing roles benefit from doing it.
+
+**Scaling Properties.** The governance labor model scales with adoption because adoption creates institutional motivation to participate. At Genesis and early adoption, governance load is minimal. At moderate adoption, more organizations have a direct interest in governance participation, and the pool of qualified and motivated participants grows with demand. At scale, institutional engagement with HIP may justify dedicated staff within participating organizations -- not because HIP pays them, but because their institution's engagement with HIP warrants it.
+
+**No Financial Interest for Governance Participants.** No governance participant may hold a financial interest that is directly contingent on specific governance outcomes. A governance participant may work for an institution that integrates HIP -- this is expected and beneficial. A governance participant may NOT hold a financial interest in a specific pathway provider whose approval, continuation, or Declassification is before the governance body. This is a conflict of interest requiring recusal per the Phoenix Firewall provisions.
+
+**No financial flow from "HIP" to governance participants** -- no salary, stipend, honorarium, or expense reimbursement from protocol funds, because no protocol funds exist. Governance participants' compensation comes from their existing institutional roles.
+
+**Contingency.** If the professional contribution model proves insufficient at any scale, three possible outcomes exist: (A) scope limitation -- the protocol limits governance commitments to what voluntary capacity can sustain; (B) grant-funded capacity -- specific governance functions funded through grants to existing institutions, not to "HIP," consistent with DP-7's provision for one-time development costs; (C) Charter amendment through the defined amendment process to introduce a revised governance funding model satisfying Phoenix Firewall requirements.
+
+---
+
+## Section 6 -- Origin Guardian: Covenant Sentinel
+
+The Origin Guardian exists as a singular covenant sentinel, not as a ruler or decision-maker. The Guardian does not govern HIP; it defends HIP from mutation. Its role is strictly negative -- it MAY halt attempts to alter Covenant-protected clauses, but it MAY never direct, create policy, or assume operational control.
+
+HIP defines stewardship as operational, auditing as observational, and guardianship as protective. These roles are not hierarchical. They are orthogonal responsibilities, each bound by Covenant constraints.
+
+### 6.1 The Guardian's One Mandate: Covenant Defense
+
+The Guardian's only authorized action is to issue a Covenant Veto Notice when an actor attempts to: alter Phoenix Firewall clauses (PF-1 through PF-11), introduce identity-binding requirements, convert HIP into an enforcement or scoring authority, modify the Genesis Covenant line or its hash lineage, or centralize control over HIP data retrieval or Proof Bundle visibility.
+
+A Covenant Veto Notice is a public ledger entry, not a private communication. It bears the Guardian Key signature and a verbatim citation of the violated clause. This notice has absolute standing -- it cannot be appealed, voted on, or countermanded.
+
+### 6.2 The Guardian Has No Command Authority
+
+The Guardian cannot vote on operational cadence, approve or deny new Steward or Auditor nodes, create policy, issue opinions, or rank nodes. The Guardian cannot modify Proofcard display rules or PFV metrics. If the Guardian attempts to take directive action, that action has no Covenant weight and is ignored by HIP logic. The Guardian is shield, not sword.
+
+The Guardian MAY issue a Guardian Interpretive Query (GIQ) when a novel situation arises that the Phoenix Firewall clauses do not explicitly address. A GIQ is a request for public deliberation on whether a proposed action would constitute a Firewall violation. A GIQ has no binding force. It does not create new Firewall provisions, does not establish precedent that constrains future interpretations, and does not expand the Guardian's defensive authority beyond the literal text of PF-1 through PF-11.
+
+GIQ responses that attract broader community consensus over time carry greater weight in future deliberations -- not because consensus creates binding precedent, but because well-reasoned analysis of Firewall principles tends to converge. This time-weighting is organic, not mechanical: there is no vote count, no threshold, and no formal adoption process for GIQ outcomes.
+
+### 6.3 Guardian Attestation and Visibility
+
+To hold this role, the Guardian MUST:
+
+1. Pass HUMAN-PROOF attestation, verifying that a living human is carrying Covenant duty.
+2. Anchor a Guardian Declaration Hash, marking the Covenant seat.
+3. Maintain renewal attestation on Steward SLA cadence to remain visible in the ledger registry.
+
+If the Guardian fails to renew HUMAN-PROOF attestation or ceases to anchor heartbeat signatures for two consecutive SLA cadence windows, catastrophic fallback is triggered as defined below.
+
+### 6.4 Catastrophic Guardian Fallback Procedure
+
+In the event the Guardian becomes inactive or compromised:
+
+- After two full missed SLA intervals, any three of the active Steward Nodes and any two independent Auditor Nodes MAY jointly anchor a Guardian Inactivity Assertion.
+- The protocol then references the Guardian Reserve Queue (GRQ).
+- The first HUMAN-PROOF-attested entry in the GRQ to inscribe a Covenant Recitation Hash -- repeating the Genesis Covenant line without alteration -- becomes Guardian Sentinel.
+
+Any fallback candidate who modifies even a single word of the Genesis Covenant line is automatically disqualified, and the next GRQ entry is tested.
+
+### 6.5 Guardian Reserve Queue (GRQ)
+
+The GRQ is a public waiting pool of HUMAN-PROOF-attested Covenant Pledgers.
+
+- It is not appointed, not curated, and not ranked.
+- Anyone passing HUMAN-PROOF attestation MAY anchor a GRQ Pledge Hash, which reads: "I pledge to defend the Genesis Covenant line as written."
+- The GRQ exists as a fail-safe -- a reservoir of willing guardianship candidates with no authority until fallback conditions occur.
+- Joining the GRQ does not grant any active title.
+
+Guardian succession is mechanical, not political.
+
+### 6.6 Guardian and Identity
+
+The Guardian is always a human, but never a named identity within HIP logic. The ledger recognizes the Guardian Key, not a personal identity. The Covenant states only: "A living human MUST hold this key." HIP does not record names, titles, biographies, or identity proofs. The Guardian exists only as a function, not a personality.
+
+### 6.7 No Perpetual Custody
+
+Guardianship is responsibility, not authority. The Guardian MAY voluntarily resign by signing a Succession Declaration Hash and nominating a GRQ entry. Once a new Guardian Sentinel signs the Genesis line exactly, succession is complete. The outgoing Guardian key is archived, not erased, and remains visible as a historical Covenant witness.
+
+---
+
+## Section 7 -- Phoenix Firewall: Immutable Covenant Clauses (PF-1 to PF-11)
+
+The Phoenix Firewall is the unalterable heart of HIP. It defines what HIP SHALL NOT become, even if consensus, governance, or public sentiment shifts. These clauses are not open to amendment, interpretation, or majority override. They are anchored with a separate Phoenix Firewall Hash alongside the Genesis Inscription Hash.
+
+To violate any Firewall clause is to create a fork. A fork is not invalid -- it is simply no longer HIP.
+
+Each clause below is written in absolute language. There are no sub-clauses that weaken their force.
+
+**PF-1 -- HIP Shall Never Score Ideology or Belief.** HIP SHALL never evaluate, rank, penalize, annotate, or score content based on ideology, political position, religious alignment, moral argument, satire, dissent, or cultural style. HIP measures signal origin and propagation pattern only, never belief.
+
+**PF-2 -- No Identity Registry, Ever.** HIP SHALL never require, store, or imply real-name identity, citizenship, biometric verification, national origin, group membership, or inferrable personal metadata. HUMAN-PROOF attestation confirms liveness, not identity. Any attempt to bind Proofcards to identifiable persons or accounts is a Firewall breach.
+
+**PF-3 -- HUMAN-PROOF Must Remain Zero-Knowledge.** HIP's foundation is verification without exposure. HUMAN-PROOF SHALL not reveal identity, only prove human presence. No pattern extracted from HUMAN-PROOF MAY be used to fingerprint or correlate individuals. Any attempt to turn HIP into a surveillance layer or extract personal signal signatures constitutes automatic protocol fork.
+
+**PF-4 -- No Enforcement, No Moderation.** HIP never removes, suppresses, or promotes content. It does not integrate with moderation pipelines. It does not produce recommendation scores. Any suggestion or attempt to merge HIP with enforcement systems violates the Covenant. HIP illuminates. It does not control.
+
+**PF-5 -- No Punitive Use Cases.** HIP data MAY NOT be used to: assign penalties, score users, deny access, construct blacklists, trigger takedowns, or enforce "authenticity compliance." Even if external actors attempt to do so, HIP MUST NOT provide features or APIs that facilitate punitive implementation.
+
+**PF-6 -- Auditor Equality is Absolute.** Auditor Nodes remain peer-level witnesses. No Steward or Council body MAY approve, rank, or revoke auditors. All auditor confirmations and challenges carry equal standing. Removing, shadow-limiting, or de-listing auditors is a Firewall breach.
+
+**PF-7 -- Guardian Power is Defensive Only.** The Guardian cannot direct HIP in any affirmative way. The Guardian cannot create policy, appoint roles, or interpret beyond literal Firewall defense. Its only action is to halt Covenant breaches via Veto Notice. Any directive attempt beyond that is non-binding and ignored by HIP logic.
+
+**PF-8 -- Ledger Must Remain Public and Witnessable.** HIP state MUST always be publicly reproducible by any observer. No hidden states. No private audit logs. No closed APIs as the canonical source of truth. If a thing MUST be asked for, it is not HIP. HIP exists only where no permission is needed to verify.
+
+**PF-9 -- PFV Transparency Clause.** HIP signal analysis MUST remain based on public formula vectors (PFV). New PFV versions MUST be inscribed as hash-declared specifications before activation. No black-box scoring mechanisms are permitted. If any Steward introduces an opaque scoring algorithm, that branch ceases to be HIP.
+
+**PF-10 -- No Trusted Authority Required for Verification.** HIP MUST always remain verifiable by anyone with a Proof Bundle, the specification hashes, and the relevant computation tools. No Guardian key, Council permission, or proprietary service MAY be required for validation. HIP MUST always be runnable on a laptop, without asking anyone for permission.
+
+**PF-11 -- Protocol Agility (PF-AG Clause).** Cryptographic primitives and ledger substrates MAY evolve -- only if all changes are fully public, backward auditability is preserved, ledger lineage remains traceable without trust, and Phoenix Firewall clauses remain untouched. If a change improves cryptographic resilience but introduces a gatekeeping requirement, it violates HIP.
+
+Any actor, node, or institution violating any single PF clause moves outside HIP lineage, regardless of branding, recognition, or popularity. The Protocol does not punish them -- it simply no longer recognizes them as HIP.
+
+---
+
+## Section 8 -- HIP Proofcards & Public Origin Display
+
+The HIP Proofcard is a public window of origin -- a ledger-bound display that makes attestation data visible. In a world where signals can be manufactured at scale by non-human systems, the simple capacity to see origin becomes civic infrastructure. Proofcards exist to restore that sight. They do not certify truth, quality, or morality. They provide visibility.
+
+HIP Proofcards are governed by three foundational laws:
+
+1. They MAY be displayed by anyone without permission. If a display requires permission, it is not HIP.
+2. They MUST reference a publicly verifiable Proof Anchor Link. A Proofcard without a retrieval path is a broken witness.
+3. They MAY never be used as instruments of enforcement. HIP reveals origin. It does not grant authority.
+
+### 8.1 Composition of a HIP Proofcard
+
+Every HIP Proofcard for attested content MUST display, at minimum:
+
+- The creator's attestation category ("Complete Human Origin," "Human Origin Assisted," or "Human-Directed Collaborative"),
+- Pathway description (what type of verification the credential underwent -- not the numeric Trust Index),
+- Attestation timestamp,
+- Proof Anchor Link (resolvable to the complete Proof Bundle).
+
+Every Proofcard MAY additionally display:
+
+- Signal annotation data, if any, per the Classification Display Reframe (Section 2.5),
+- Behavioral history summary (attestation count, credential age -- not TI value),
+- Attestation Chain information for multi-author content.
+
+For unattested content where signal analysis has been performed, the display shows: "No attestation on record" with any applicable signal analysis notes per Section 2.5.
+
+### 8.2 Proofcard Display Requirements
+
+Detailed Proofcard display requirements -- including mandatory and optional elements, signal annotation presentation constraints, prohibited display practices, and embedding metadata -- are specified in INT-SPEC-v1.
+
+The following covenant-level display principles govern all implementations:
+
+**Trust Index is never displayed.** TI is an internal protocol instrument. Proofcards show pathway description and behavioral context, not a numeric score.
+
+**Creator attestation is primary.** When signal annotations apply to attested content, the creator's attestation claim remains the primary displayed element. Signal annotations are supplementary.
+
+**No verdict labels.** Signal annotations use canonical text per PFV-SPEC-v1. Implementations MUST NOT paraphrase, editorialize, or add judgment language to annotations.
+
+**No color-coding implying judgment.** Implementations MUST NOT use color schemes (e.g., red/green, amber indicators) that imply editorial judgment about signal annotations. Signal data is data, not a warning.
+
+**Conformance with these display requirements is a condition for Safe Harbor Framework protection** (Section 17).
+
+### 8.3 Display Rights and Overlay Freedom
+
+HIP explicitly authorizes public overlay and display of Proofcards in any medium (broadcast, dashboards, browser extensions, research tools, classrooms, archives). No platform MAY claim exclusive integration rights. HIP is a public witness layer, not a proprietary feature.
+
+### 8.4 The HIP Seal
+
+A voluntary emblem that MAY accompany attested content: public domain by Covenant (no trademark, no gatekeeper). Use only when a valid Proof Anchor Link confirms attestation. Misuse triggers mechanical correction, not punishment. The Seal is not a trophy; it is a quiet signal of presence.
+
+### 8.5 Immutable Semantic Wording
+
+Canonical phrases for attested content (wording immutable):
+
+- "Complete Human Origin" (not "Pure," "Real," "Authentic," "AI-Free")
+- "Human Origin Assisted" (not "AI-Assisted," "Partially Human," "Semi-Authentic")
+- "Human-Directed Collaborative" (not "AI-Generated," "Mixed," "Semi-Authentic")
+
+Canonical phrases for unattested content:
+
+- "No attestation on record" (not "Unverified," "Suspicious," "Unknown")
+
+Signal annotation canonical text is defined in PFV-SPEC-v1. Altering semantics under the HIP name constitutes a semantic fork.
+
+### 8.6 Correction and Withdrawal Display
+
+Corrections and withdrawals follow the append model. A corrected attestation displays: the current version's classification and data, a reference to the prior version, and a correction note. A withdrawn attestation displays: "Attestation Withdrawn" with the withdrawal timestamp and the original attestation data preserved and accessible. History is never erased.
+
+### 8.7 Public Retrieval & Verification Requirement
+
+Verification MUST be possible via direct Proof Anchor inspection, Proof Bundle retrieval from any Steward Node, and independent cryptographic verification. HIP rejects models requiring private dashboards, logins, or proprietary APIs as sources of truth.
+
+### 8.8 Broadcast and Legacy Media Clause
+
+Integration into broadcast graphics and on-screen displays is protected. Displaying HIP data during public programming is valid public witness and cannot be restricted or licensed. If a newsroom MUST ask permission to show HIP proof data, HIP has failed its Covenant.
+
+### 8.9 Archival Permanence
+
+Proofcards enter historical continuity. Even if content is later removed from its host platform, its attestation record remains retrievable through the Steward Node network with all signal annotation data visible indefinitely.
+
+---
+
+## Section 9 -- Reference Implementation & Test Harness
+
+HIP acknowledges that code is not Covenant -- Covenant is superior to implementation. The Reference Implementation exists only to demonstrate fidelity to the Charter, not to centralize authority around a single codebase or development group. HIP anticipates that multiple independent engines, written in different languages and maintained by different communities, will emerge. Their legitimacy depends solely on one condition:
+
+Any implementation that produces conformant Proof Bundles verifiable against the specification hashes and on-chain Proof Anchors is HIP-compliant -- regardless of origin, affiliation, or popularity.
+
+### 9.1 Reference Implementation Status
+
+The first implementation of HIP SHALL be authored in Rust, under the Mozilla Public License 2.0 (MPL-2.0) license, ensuring code remains open, forkable, and reusable for both public and private research purposes. This implementation SHALL carry the designation: HIP Reference Implementation -- Genesis Build.
+
+### 9.2 PFV Specification and Hash Anchoring
+
+All HIP signal analysis is derived from PFV -- Public Formula Vectors. PFV analysis is specified in PFV-SPEC-v1, which defines the four vectors (VHR -- Viral Human Resistance Pattern, MRS -- Mismatch Risk Score, TI-W -- Trust Index Weighting, CSP -- Cadence & Synthetic Propagation), their computation formulas, thresholds, the staged analysis model, PHI signal computation, the Signal Contribution Framework, the Verification Endpoint Privacy Architecture, ML Model Governance, and the PHI Genesis Calibration Protocol.
+
+Each PFV release must be anchored by cryptographic hash, referenced in a PFV Version Anchor Ledger Entry. PFV specifications must be publicly documented, with reproducible mathematical descriptions. No scoring change is valid unless the PFV version-hash is publicly visible prior to activation.
+
+### 9.3 Engine Independence Clause
+
+Any independent implementation is considered valid HIP lineage if:
+
+- It references a PFV Version Hash anchored on-ledger,
+- It can produce conformant Proof Bundles per WF-SPEC-v1 that verify against on-chain Proof Anchors,
+- Its Proof Bundles are byte-identical to any other conforming implementation's output for the same attestation event.
+
+If two codebases produce consistent bundles, both are HIP. If a codebase produces divergent bundles, it is a fork -- intentionally or in error.
+
+### 9.4 Test Harness Requirement
+
+To ensure perpetual verifiability:
+
+- A public Test Harness MUST be maintained as a standalone executable or library, allowing anyone to verify Proof Bundle integrity and signal computation offline.
+- The Test Harness MUST be operable without network dependency and MUST NOT require authentication or proprietary API tokens.
+
+If it cannot be verified on a disconnected machine using only the Proof Bundle and the relevant specification hashes, it is not HIP.
+
+### 9.5 Ledger Anchoring Requirements
+
+Each Proof Anchor MUST be committed on-ledger per the structure defined in WF-SPEC-v1. Multiple ledger substrates MAY be used (Bitcoin, Ethereum, etc.) as long as at least one substrate is immutable and public (Bitcoin recommended for Genesis anchor), and each subsequent substrate anchor references the previous anchor hash lineage to maintain continuity of proof. This is enforced under the PF-AG clause of the Phoenix Firewall.
+
+### 9.6 No Maintainer Privilege Clause
+
+No steward, developer, or foundation -- including contributors to the Reference Implementation -- MAY claim official status beyond publishing code or documentation. HIP has no core team, only verifiable lineage. "Official" HIP implementations are not declared -- they are proven by conformant outputs. HIP is not protected by authority. It is protected by reproducibility.
+
+### 9.7 PFV Evolution Process
+
+New PFV versions MAY be proposed by any actor, academic, or independent builder. To become active:
+
+1. PFV mathematical spec published with canonical hash.
+2. Hash anchored on-ledger as a PFV Proposal Entry.
+3. Test Harness is updated to reflect new version.
+4. All Steward Nodes acknowledge readiness by anchoring a Version Activation Receipt.
+5. PFV version goes live at publicly declared timestamp -- no earlier.
+
+At no point does a council "approve" the PFV. Anchoring and reproducibility alone determine activation legitimacy.
+
+---
+
+## Section 10 -- Monitor & Auditor Structure
+
+HIP recognizes Auditor Nodes as the public conscience of the protocol -- not in a moral sense, but in a verification sense. The Auditor Layer exists so that no Steward Node, no Council, and not even the Guardian can ever become the sole arbiter of truth.
+
+HIP's integrity comes not from consensus, but from contestability. Its trust comes not from authority, but from the ability to be checked by anyone, at any time.
+
+### 10.1 Purpose of the Auditor Layer
+
+Auditors exist to ensure that every Proof Bundle can be independently verified against its on-chain Proof Anchor, that Steward Nodes are not granted assumed correctness, and that no single implementation becomes the unquestioned source of truth. An unchallenged protocol risks becoming dogma. A challengeable protocol remains alive.
+
+### 10.2 Auditor Self-Declaration and Onboarding
+
+Auditor Nodes are permissionless. To become an Auditor, an actor MUST: pass HUMAN-PROOF attestation, anchor an Auditor Intent Hash on-ledger, and begin verifying Proof Bundles and publishing Attestation Stamps (confirmations) or Challenge Logs. No Steward, Council, or Guardian approval is required. The ledger is the only registry.
+
+### 10.3 Attestation Stamps (Confirmation Proofs)
+
+For every Proof Bundle published by a Steward Node, an Auditor MAY verify it by retrieving the Bundle, checking its hash against the on-chain Proof Anchor, and verifying the credential signature. If verification succeeds, the Auditor MAY publish an Attestation Stamp. Once three independent Auditor Nodes issue matching Attestation Stamps, a Proofcard MAY display the status "Confirmed (3+)."
+
+This does not validate correctness existentially -- it validates reproducibility. HIP is a reproducibility protocol, not a metaphysical truth protocol.
+
+**Sybil Resistance.** HIP's primary structural defense against Sybil attacks is the HUMAN-PROOF attestation requirement: each credential requires a verified living human, raising the cost of credential multiplication. The Trust Index provides an auxiliary Sybil-resistance signal derived from observable on-ledger history, but carries no governance weight. All nodes satisfying HUMAN-PROOF are structurally equal under PF-6 regardless of Trust Index value. The protocol-level mechanism by which HUMAN-PROOF achieves Sybil resistance is specified in HP-SPEC-v1.
+
+### 10.4 Challenge Logs
+
+If an Auditor finds that a Proof Bundle hash does not match the on-chain Proof Anchor, a credential signature fails verification, a Steward Node altered processing logic without publishing a specification update hash, or ledger entries are missing or manipulated, then they MUST publish a Challenge Log -- a signed ledger entry containing a reference to the original Proof Bundle, explanation of the discrepancy, and their verification output. Once published, any observer MAY verify which hash lineage reflects Covenant adherence.
+
+Auditors do not "win" challenges -- they expose divergence. The public decides which branch they acknowledge.
+
+### 10.5 Auditor Equality
+
+Auditors are fully equal. There is no ranking, no "senior auditor" role, no voting preference, and no gating based on reputation, longevity, institutional affiliation, or computational capacity. A single human with a laptop running the verification tools is as legitimate as a university data center, provided both produce verifiable results.
+
+### 10.6 Observer & Monitor Nodes
+
+HIP permits but does not require Monitor Nodes, which mirror and visualize attestation data. Monitors do not generate or contest proofs. They are journalistic mirrors, not protocol actors. Their outputs MAY inform public understanding but carry no Covenant authority.
+
+### 10.7 No Censorship or Suppression of Auditor Messages
+
+Auditor outputs -- especially Challenge Logs -- MUST be permanently anchored on-ledger, publicly referenceable via Proof Anchor Links, and never hidden, rate-limited, or suppressed by Steward infrastructure. If an Auditor finds themselves blocked from anchoring through standard interfaces, they MAY anchor directly to the ledger via raw transaction. HIP recognizes raw ledger entries as canonical over convenience layers.
+
+### 10.8 Inactivity and Continuity
+
+Auditors are not removed for silence. Previously anchored confirmations remain part of the historical record. There is no penalty or removal process, only visibility.
+
+---
+
+## Section 11 -- Proof Bundle Generation & Attestation Architecture
+
+HIP defines Proof Bundles as the atomic unit of attestation. A Proof Bundle is a complete packet that contains all necessary data to independently verify an attestation event. Without this packet, an attestation is a pointer without substance.
+
+HIP does not ask to be believed. HIP demands to be verified.
+
+### 11.1 Proof Bundle Architecture
+
+The Proof Bundle is a JSON-LD document conforming to the W3C Verifiable Credentials Data Model, as specified in WF-SPEC-v1. It contains all attestation event data: credential reference, content hash, classification claim, editorial statement, liveness verification, pathway reference, and cryptographic proof. Signal annotations are appended at T0, T1, and T2 stages per PFV-SPEC-v1's staged analysis model.
+
+The Proof Bundle's wire format -- encoding, field schema, canonicalization rule, and signature envelope -- is formally specified in WF-SPEC-v1. Cryptographic primitives (SHA-256 for hashing, Ed25519 for digital signatures, HMAC-SHA-256 for privacy mechanisms) are specified in CRYPTO-SPEC-v1.
+
+### 11.2 On-Chain / Off-Chain Architecture
+
+The protocol uses a two-layer architecture:
+
+**Proof Anchor (on-chain):** Minimal, permanent. Contains content hash, credential identifier, classification claim, timestamp, Bundle hash (verification linkage), and Proof Anchor Link. Designed to fit within approximately 256 bytes of application-layer payload per DP-7 (inscription cost must not become a participation barrier).
+
+**Proof Bundle (off-chain):** Complete, independently verifiable. Contains all attestation event data. Hosted by Steward Nodes with minimum three-node replication. Kilobyte-range size (1-5 KB typical) per WF-SPEC-v1's design constraints.
+
+**Verification linkage:** Anyone can verify a Bundle's integrity by hashing its canonical content and comparing the result to the Bundle hash recorded in the on-chain Proof Anchor. A Bundle whose hash does not match its Anchor is invalid regardless of its content.
+
+### 11.3 Automatic Generation
+
+Steward Nodes MUST process attestation events automatically and without human editorial discretion. There is no "approval" step -- HIP does not wait for humans to decide if an attestation SHOULD be recorded. Automatic processing prevents editorial suppression. Attestation events MUST be processed regardless of the classification claim or any signal analysis result. HIP does not censor. It records.
+
+### 11.4 Proof Bundle Hosting
+
+Proof Bundle hosting is a core Steward Node function per WF-SPEC-v1. Every Bundle MUST be hosted by a minimum of three Steward Nodes. The processing node is one of the three; remaining copies are distributed through the Bundle replication protocol within 24 hours.
+
+Bundles are metadata documents, not content repositories. At 1-5 KB per Bundle, storage cost is negligible at any realistic adoption scale (100M Bundles = 500 GB per node). Storage cost does not become a participation barrier for Steward Nodes.
+
+Creators, institutions, and third parties MAY additionally host Bundles at any URL per DP-5 (Permissionless Proliferation). The Steward Node network is the guaranteed baseline availability.
+
+### 11.5 Attestation and Verification Integration
+
+Once a Proof Bundle is created and anchored:
+
+- Auditor Nodes MAY verify it against the on-chain Proof Anchor and publish Attestation Stamps.
+- If three or more Auditors publish matching Attestation Stamps, the Proofcard displays "Confirmed (3+)."
+- If any Auditor detects inconsistency, they publish a Challenge Log.
+
+### 11.6 Persistent Archive Rule
+
+Proof Bundles MAY never be deleted. Even if later found to contain errors, they remain visible in the archive with correction or withdrawal notes appended per the append model. Correction is additive, never erasing. The archive itself becomes a record of protocol evolution and accountability.
+
+### 11.7 Bundle Integrity and Ecosystem Use
+
+Any entity -- researcher, journalist, monitor, activist, institution -- MAY retrieve Proof Bundles in bulk, build public dashboards, conduct research, or build tools. HIP Proof Bundles are public domain by Covenant -- they cannot be privatized, licensed, or throttled behind commercial APIs.
+
+---
+
+## Section 12 -- Deployment Philosophy & Public Witness
+
+HIP does not wait for permission from platforms, foundations, or state authorities. Its deployment philosophy is grounded in eight design principles that govern how the protocol enters the world.
+
+### DP-1 -- Day-One Utility
+
+HIP MUST provide genuine value to a single actor from day one. A single journalist attesting to a single article with a single HUMAN-PROOF credential creates a verifiable record that has standalone value -- it does not require a network effect to be meaningful. Value multiplies with adoption but is not dependent on it.
+
+### DP-2 -- No New Behaviors Required
+
+HIP integrates into the existing moment of publication. A creator publishes content as they already do and adds an attestation. No new workflows, no new platforms, no mandatory training. Integration specifications (INT-SPEC-v1) define documented APIs and patterns for existing workflows.
+
+### DP-3 -- Institutional Integration Pathway
+
+HIP provides documented APIs and integration specifications for existing workflows. Newsrooms, publishers, platforms, and institutions that wish to integrate HIP attestation into their production flows have a defined pathway with clear documentation and standardized interfaces per INT-SPEC-v1.
+
+### DP-4 -- Legitimacy From Proof, Not Recognition
+
+HIP's authority comes from its proof chain, not from endorsements. An attestation verified against a Proof Anchor is legitimate because the math checks out -- not because a particular institution, government, or celebrity endorses the protocol.
+
+### DP-5 -- Permissionless Proliferation
+
+Any actor may build tools, integrate HIP, display Proofcards, host Bundles, or create verification interfaces without permission. No partnership required. No approval needed. No license necessary. HIP is not "available by arrangement." It is available by design.
+
+### DP-6 -- Content-Type Agnostic
+
+HIP works for any content type that can be identified by a cryptographic hash. Text, image, video, audio, code, or any future medium. Content-type-specific adaptations are implementation concerns, not protocol constraints.
+
+### DP-7 -- Zero Institutional Cost
+
+HIP imposes no financial obligation on any participant. The protocol operates on contributed infrastructure, volunteer governance labor aligned with participants' existing institutional roles, and publicly available data. No subscription, no fee, no fund, no treasury. If it costs money, it's not the protocol -- it's an institution choosing to invest in its own implementation.
+
+Financial dependency is a capture vector. If HIP needs money to operate, whoever provides the money is a stakeholder. The protocol must be architecturally free of financial requirements. This principle permits one-time development costs (specification drafting, reference implementation, documentation) funded through grants to existing institutions -- but grants flow to institutions, not to "HIP," and confer no governance authority, integration preference, or operational influence.
+
+### DP-8 -- Protocol, Not Entity
+
+HIP is a public specification, not a legal person. No organization is HIP. No organization speaks for HIP, accepts liability for HIP, or holds assets on behalf of HIP. All named actors -- Steward Nodes, the Operational Council, the Guardian -- are independent participants implementing a public specification under their own authority and their own jurisdictions' laws.
+
+Key architectural consequences:
+
+- HIP cannot be sued because there is no legal entity to sue.
+- HIP cannot be captured through financial leverage because it has no treasury.
+- HIP cannot be shut down through legal action in any single jurisdiction because it is a distributed protocol, not a centralized service.
+- Individual Steward Nodes are responsible for their own actions under their own jurisdictions' laws.
+
+### 12.1 Public Witness as Cultural Infrastructure
+
+HIP defines itself as a public witness layer. It exists alongside content, not inside moderation or distribution pipelines. It MAY be looked up, overlaid, projected, annotated, or encoded into public archives. It does not modify content or require hosting privileges. Its goal is to increase visibility of origin attestation, not to shape opinion or impose trust.
+
+### 12.2 Public Free Integration (PFI Clause)
+
+The Covenant grants unrestricted public right to integrate HIP attestation data and Proofcard displays in any medium, subject only to accuracy of data representation and compliance with the Classification Display Reframe (Section 2.5). No license, partnership, or approval is required.
+
+### 12.3 Broadcast & Journalism Clause
+
+HIP explicitly supports integration into news production flows, including live overlays, documentary annotation, archival stamps, and cultural retrospectives. There is no need for editorial clearance or licensing from HIP stewards or council. The only rule is fidelity to the data -- Proofcard displays MUST match the attested data and signal annotations from the anchored Bundle.
+
+### 12.4 No Exclusive Gatekeeping Partnerships
+
+HIP prohibits any Steward Node, Council actor, or external foundation from establishing "exclusive integration rights," "certified partners," or other market positions granting privileged access to HIP data or branding. Exclusive partnerships are a fork condition, as they violate public witness doctrine.
+
+### 12.5 Archive Continuity and Record Visibility
+
+HIP deployment includes an explicit mandate to preserve attestation records, even if networks, platforms, or hosts attempt to delete or rewrite content. Proof Bundles live independent of host platforms. Researchers MAY map signal patterns after-the-fact, creating cultural forensics capabilities.
+
+### 12.6 Deployment is Witness, Not Implementation
+
+HIP does not require widespread adoption to be operational. A single working instance, processing attestations and making them publicly retrievable, is sufficient for Covenant satisfaction. Adoption accelerates usefulness -- but witness alone defines valid existence.
+
+---
+
+## Section 13 -- Genesis Inscription & Covenant Seal
+
+This section binds the Charter to reality through a single irreversible act of inscription. Once the Genesis Covenant Line is committed to public ledger alongside the Phoenix Firewall Hash and Charter Hash, HIP becomes not a proposal, but a living protocol.
+
+A protocol is not born when it is written. A protocol is born when it is witnessed.
+
+### 13.0 Declaration of Human Custodianship
+
+HIP acknowledges that synthetic drafting tools MAY be used in the preparation of Charter language. This does not confer authorship or custodial legitimacy on any machine. Tools MAY assist. Only a living human consciousness MAY hold Covenant responsibility.
+
+HIP asserts that no synthetic entity can ever be recognized as Guardian, Steward, or Auditor under HUMAN-PROOF constraints. The Guardian Key MUST remain in the custody of a living human mind, capable of understanding Covenant implications and bearing responsibility for defending its immutability.
+
+### 13.1 Genesis Covenant Line
+
+This is the first sentence that binds HIP to ledger and time. It MUST be inscribed exactly, without variation in capitalization, punctuation, or spacing:
+
+"Here we begin the ledger of human signal integrity."
+
+This line is not a slogan -- it is a cryptographic invocation. Once inscribed, all valid HIP lineage MUST descend from the hash of this statement.
+
+### 13.2 Genesis Seal Statement
+
+The following SHALL accompany the Genesis Line in the ledger inscription:
+
+HIP -- Genesis Covenant Lineage / Ledger-Anchored Origin Attestation. This inscription binds the Human Integrity Protocol to the Covenant, the Phoenix Firewall clauses (PF-1 through PF-11), and the responsibility of public witness. No actor MAY claim HIP lineage without referencing this Genesis Hash.
+
+### 13.3 Genesis Hash Anchoring Procedure
+
+The Genesis Inscription commits a Genesis Inscription Payload -- a canonically ordered document published to a content-addressed permanent store -- by inscribing its SHA-256 hash in a Bitcoin OP_RETURN transaction. The procedure is formally specified in GI-SPEC-v1.
+
+The Payload document contains:
+
+1. Hash of the full Charter manuscript (the ASCII canonical form per Section 14)
+2. Hash of the Phoenix Firewall Clause Block (PF-1 through PF-11)
+3. The Genesis Covenant Line, in plain text exactly as written
+4. Guardian Key signature acknowledging Covenant defense responsibility
+
+Recommended substrate for Genesis anchor: Bitcoin OP_RETURN, chosen for immutability and long-term verifiability, but PF-AG allows mirrored anchoring on secondary ledgers provided they reference the original Bitcoin anchor hash.
+
+### 13.4 From Covenant to Continuity
+
+After Genesis anchor, HIP exists as: a root ledger entry containing its founding Covenant declaration, a hash-verifiable manuscript that can be independently mirrored and audited, a firewall-protected governance frame that prevents central capture, and a witness network, not a platform or authority.
+
+No further ratification is needed. No institution can "approve" HIP. The ledger becomes the sole witness of protocol birth.
+
+### 13.5 Closing Covenant Acknowledgment
+
+Upon inscribing the Genesis Covenant Line and anchoring the associated hashes, HIP becomes part of the public realm -- no longer owned by any founder, developer, platform, or guardian.
+
+From this moment, HIP belongs to all who verify it and none who claim to own it.
+
+---
+
+## Section 14 -- Storage & Format Legacy Note
+
+The canonical text of HIP SHALL exist in two synchronized forms: plain ASCII ledger text and archival PDF manuscript.
+
+The ASCII form is the legal original, representing the immutable covenant. It SHALL be hash-sealed, publicly readable, and forever free of proprietary encoding or stylistic dependency. This version is the authoritative reference for all governance, verification, and lineage claims.
+
+The PDF form is a visual derivative, serving as an accessible presentation layer for cultural and institutional recordkeeping. It MAY contain typographic structure, visual elements, and insignia for legibility and ceremonial clarity, but it holds no independent legal or cryptographic authority beyond its hash alignment with the canonical text.
+
+Both forms MUST carry an identical canonical hash, visibly inscribed and reproducible by any external verification process. If any discrepancy is detected between the two, the ASCII version SHALL prevail, and all derivative formats MUST be regenerated to restore parity.
+
+Future storage formats MAY be adopted as preservation technologies evolve, but such adaptations MUST always trace their lineage back to the original hash of this canonical text. No future encoding SHALL reinterpret the covenant itself, only reframe its preservation.
+
+### 14-A ASCII Canonical Form Specification
+
+The ASCII canonical form referenced above is the normative genesis artifact. Encoding standard: UTF-8 as defined in RFC 3629. Permissible character set restricted to US-ASCII repertoire (U+0020 through U+007E and LF U+000A). No BOM. No CR. NFC normalization applied before validation. The SHA-256 hash of the canonical form is the authoritative Charter hash for all on-ledger commitments. Production procedure is specified in GI-SPEC-v1. Hash algorithm is SHA-256 per CRYPTO-SPEC-v1.
+
+---
+
+## Section 15 -- Symbol and Mark Codex
+
+The mark of HIP is the visible echo of its covenant. It serves not as a logo of ownership but as a sign of witness -- a quiet assertion that human authorship still lives within the stream of signals. Where the protocol attests by ledger, the mark attests by sight.
+
+**Purpose.** The HIP mark provides a universal point of recognition for human-origin signals verified under the protocol. Its presence communicates only one truth: that the content or actor displaying it has passed through a process capable of demonstrating living human intent.
+
+**Relation to Protocol.** The mark has no administrative authority and confers no privilege. It is a public emblem of participation, not a gate. Removal or alteration of the mark does not revoke proof; it merely obscures visibility.
+
+**Design Lineage.** Each formal design of the HIP mark SHALL be recorded in a separate Symbol Codex ledger, hashed and publicly referenced by version and date. The geometry, color, or medium of the mark MAY evolve, but the Covenant meaning SHALL remain immutable.
+
+**Non-Authority Clause.** The mark MAY never be used as a seal of approval, endorsement, or enforcement. It MAY appear beside, upon, or within human work only as a declaration of origin integrity.
+
+---
+
+## Section 16 -- Security Considerations
+
+### 16.1 Scope
+
+This section identifies the principal attack surfaces and threat classes applicable to HIP deployments. It does not supersede the companion specifications (HP-SPEC-v1, PATHWAY-SPEC-v1, PFV-SPEC-v1, CRYPTO-SPEC-v1, WF-SPEC-v1, INT-SPEC-v1, GI-SPEC-v1, SLA-SPEC-v1) that govern the technical countermeasures within each domain.
+
+### 16.2 Key Compromise
+
+A Steward or Guardian Node's on-ledger identity is anchored to a cryptographic key pair. If that key is compromised, an adversary may publish fraudulent Proof Bundles under the affected identity until the compromise is detected. Countermeasures: periodic HUMAN-PROOF renewal, the permanent public ledger record that exposes anomalous activity to any observer, and the Guardian Reserve Queue for Guardian key compromise. For credential-level key compromise, the Credential Compromise Determination process in HP-SPEC-v1 provides the structured response.
+
+### 16.3 Sybil Attack Resistance
+
+The protocol grounds Sybil resistance in the HUMAN-PROOF attestation requirement and structural equality (PF-6). HUMAN-PROOF requires verified liveness from a living human, raising the cost of credential multiplication. The tiered issuance model (HP-SPEC-v1) provides varying assurance levels. Tier 1 pathways (device-biometric, government ID) offer the strongest Sybil resistance through hardware-backed verification. Tier 3 pathways (peer vouching) offer broader accessibility with economic cost models that make credential farming impractical. The Trust Index provides an auxiliary signal but carries no governance weight.
+
+### 16.4 Auditor Collusion
+
+The "Confirmed (3+)" display status requires independent verification from at least three Auditor Nodes. The on-ledger record of all Attestation Stamps is public and permanently auditable. HIP assumes a permissionless Auditor population in which the coordination cost of large-scale collusion exceeds the benefit.
+
+### 16.5 Ledger Dependency
+
+HIP recommends Bitcoin as the anchoring ledger and inherits its security model. Alternative ledgers satisfying equivalent finality guarantees MAY be used under PF-AG.
+
+### 16.6 Cryptographic Primitive Management
+
+Genesis cryptographic primitives are specified in CRYPTO-SPEC-v1: SHA-256 for hashing, Ed25519 for digital signatures, HMAC-SHA-256 for privacy mechanisms. The algorithm transition model in CRYPTO-SPEC-v1 defines the migration process: triggered by cryptanalytic advance, performance obsolescence, regulatory mandate, or ecosystem convergence. Transitions via WF-SPEC major version increment with 365-day dual-support period. Post-quantum migration accommodated by the transition model when necessary.
+
+### 16.7 Replay and Bundle Forgery
+
+Proof Bundles carry a ledger-anchored timestamp and are cryptographically bound to the issuing credential via Ed25519 signature. Cross-identity replay is prevented by signature binding. Same-identity replay is detectable from sequential ledger timestamps and rate limiting per HP-SPEC-v1.
+
+### 16.8 Privacy Considerations
+
+HIP is designed for privacy-preserving operation consistent with PF-2 and PF-3. The HUMAN-PROOF mechanism demonstrates liveness without recording identity. The Trust Index is key-linked and never identity-linked. The credential identifier is a public key derivative, not a name. The Verification Endpoint Privacy Architecture (PFV-SPEC-v1, INT-SPEC-v1) separates query-answering from signal-generation functions to prevent verification queries from becoming a surveillance mechanism. The Signal Contribution Privacy Architecture (PFV-SPEC-v1) protects contributor identity through three-source minimum, noise injection, contributor-blind aggregation, and HMAC-based identity isolation.
+
+Notwithstanding these protections, any party publishing attestations on a public ledger creates a permanent, publicly observable record of attestation activity. The privacy protections govern the content of attestations and the protocol's internal processing, not the existence of on-ledger activity itself.
+
+### 16.9 Credential Compromise Architecture
+
+The Credential Compromise Determination process (HP-SPEC-v1) addresses three threat types: Type A (Stolen credential), Type B (Fraudulently obtained credential), and Type C (Systematic false attestation). Algorithmic flags trigger heightened monitoring and expedited review, not automatic suspension (CDI-2 resolution). Suspension requires human-reviewed evidence with a Suspension Impact Statement documenting proportionality. The reviewing body operates under defined timelines with non-determination restoring to Active status.
+
+### 16.10 Pathway Health Index
+
+The PHI monitors issuance pathway integrity through seven signal categories (PATHWAY-SPEC-v1), with computation formulas in PFV-SPEC-v1. Three PHI states: Active, Watch (automatic on threshold), Declassified (requires governance confirmation). PHI Genesis Calibration uses progressive arming with elevated thresholds to prevent premature state transitions during baseline establishment.
+
+### 16.11 Safe Harbor Framework Dependency
+
+The Safe Harbor Framework (Section 17) provides structural legal defense for signal annotations. That defense depends on faithful implementation of the Classification Display Reframe (Section 2.5), the five structural properties of signal annotations, and the Proofcard display requirements (INT-SPEC-v1). Implementations that deviate from these requirements -- for example, by editorializing annotations or presenting them as verdicts -- may forfeit the structural defense the framework provides. Each implementation is responsible for its own compliance.
+
+### 16.12 Protocol Fork and Clone Attacks
+
+The Phoenix Firewall defines conditions under which a forked or cloned document retains valid HIP lineage. The Genesis Covenant Line provides a canonical anchor against which any claimed implementation may be evaluated. The protocol does not prevent unauthorized clones; it provides permanent public evidence by which valid lineage can be distinguished from unauthorized derivatives.
+
+---
+
+## Section 17 -- Legal and Regulatory Considerations
+
+### 17.0 Preamble
+
+HIP operates in the real world. It produces public outputs about content. It processes data, however minimized. It classifies, however carefully framed. These activities intersect with legal and regulatory frameworks in every jurisdiction where HIP data is observed or relied upon.
+
+This section establishes the architectural and definitional commitments that shape HIP's legal posture: what the protocol's outputs are, what they are not, how data is handled, and what structural properties make the protocol resilient to legal challenge without requiring centralized legal defense. These are covenant-level principles.
+
+An implementation that violates these principles -- for example, by presenting signal annotations as editorial judgments or by collecting identity data that the protocol architecture forbids -- is responsible for the legal exposure it creates. The protocol's defensive architecture is available only to implementations that faithfully follow it.
+
+### 17.1 Safe Harbor Framework
+
+HIP's signal annotations are computational outputs of defined formulas applied to observable data. They are not editorial judgments, not accusations, not statements of fact about content origin, and not assertions about creator behavior.
+
+**The protocol records attestations.** When a creator attests to content, the protocol records the attestation. It does not evaluate whether the claim is true. It records it.
+
+**The protocol computes signals.** PFV analysis applies defined mathematical formulas to observable data. These formulas produce deterministic numerical outputs. The protocol does not interpret the number. It records the computation result.
+
+**The protocol annotates divergence.** When a numerical output exceeds a defined threshold, the protocol records a signal annotation -- a factual statement that a specific formula applied to specific data produced a result above a specific threshold. The annotation does not state why the threshold was exceeded, does not state that the content is synthetic, and does not state that the creator is dishonest.
+
+**The observer draws conclusions.** A verifier who sees a signal annotation may draw their own conclusions. That conclusion belongs to the verifier. The protocol provided the computation, not the judgment.
+
+### 17.2 Structural Properties of Signal Annotations
+
+The following properties are covenant-level requirements. Any implementation that produces signal annotations MUST ensure these properties hold:
+
+**Property 1 -- Verifiable Computation:** Every signal annotation must be reproducible. The formula, data inputs, and threshold must all be publicly documented or available to the annotated party on request. An annotation that cannot be independently verified is not a protocol annotation.
+
+**Property 2 -- Non-Editorial Character:** Signal annotations MUST NOT use language that implies editorial judgment, moral evaluation, or factual claims about content origin. Canonical annotation language is defined in PFV-SPEC-v1. Implementations MUST NOT paraphrase, summarize, or editorialize.
+
+**Property 3 -- Creator Attestation Preserved:** When a signal annotation applies to attested content, the creator's attestation MUST remain the primary displayed information. The signal annotation is supplementary.
+
+**Property 4 -- Challenge Pathway Existence:** Any party whose content carries a signal annotation may request re-evaluation through the process defined in PFV-SPEC-v1. The challenge pathway must be documented, accessible without cost, and must result in a determination within defined timelines.
+
+**Property 5 -- No Damage Amplification:** The protocol MUST NOT take actions that amplify the reputational impact of a signal annotation beyond the annotation itself. No third-party notification, no platform action recommendations, no aggregation into reputation scores.
+
+### 17.3 Jurisdictional Defense Through Distribution
+
+DP-8 (Protocol, Not Entity) provides the structural foundation for HIP's jurisdictional defense. Because HIP is not a legal entity, there is no central defendant. Steward Nodes operate under their own jurisdictions' laws. An annotation computed by a node in one jurisdiction is replicated by nodes in other jurisdictions. A successful legal action against one node does not bind other nodes, does not remove the annotation from the protocol, and does not prevent other nodes from continuing to serve the same computation result.
+
+Individual node liability, not protocol liability: a node operator is liable for its own actions -- specifically, for accurately computing and faithfully presenting the protocol's defined formulas. A node that adds editorial commentary to a signal annotation, or that presents annotations in a manner that implies editorial judgment, may create liability for itself. The protocol's defensive architecture does not extend to nodes that deviate from it.
+
+### 17.4 Challenge Pathway
+
+Any party whose content carries a signal annotation may submit a challenge requesting re-evaluation. The challenge must identify the specific content hash and annotation. No fee, registration, or credential is required. The challenge triggers re-evaluation per PFV-SPEC-v1. Outcomes are permanently recorded per the append model. Confirmed annotations may be re-challenged no more than once per 30 calendar days.
+
+The existence of the challenge pathway is itself a structural defense: it demonstrates affirmative provision of correction opportunity -- at no cost, with defined timelines, and with permanent recording of both challenge and outcome.
+
+### 17.5 Pseudonymous Data Architecture
+
+HIP's data architecture is designed around a fundamental separation: the protocol knows that a living human holds a credential. It does not know which human. This separation is architectural -- the protocol's data systems do not contain the information necessary to link a credential to a human identity, even if compelled to disclose.
+
+The protocol stores: credential identifiers (public keys, not names), attestation records (content hashes, timestamps, categories), signal computation results (numerical outputs), and pathway references. The protocol does not store: human names or identifiers, biometric data, IP addresses or device identifiers, or the content itself.
+
+Pathway providers may hold identity information for their own verification process. That information does not enter the HIP ledger. The protocol cannot compel providers to disclose because the protocol does not hold it.
+
+### 17.6 Regulatory Compatibility Posture
+
+HIP is designed to be compatible with regulatory frameworks without being dependent on them. Where regulations require disclosure of AI involvement (EU AI Act and analogous frameworks), HIP's attestation categories provide a verifiable mechanism. Where regulations require attestation of human authorship, HIP's creator-attested categories (Complete Human Origin, Human Origin Assisted, and Human-Directed Collaborative) provide a tamper-evident record. Where data protection regimes apply (GDPR, CCPA), HIP's pseudonymous architecture minimizes friction.
+
+Regulatory compatibility does not mean regulatory subordination. No regulatory body has authority over HIP's definitions, categories, governance structure, or operational parameters. Regulatory compatibility does not mean regulatory certification -- HIP does not represent itself as approved by any regulatory body.
+
+---
+
+## Appendix A -- Glossary
+
+This Glossary provides concise, cross-referenced definitions of the principal terms used throughout this Charter. Authoritative definitions are in Section 2 (Core Principles and Definitions); entries below are provided for quick reference. Where a term is defined in a companion specification, that is noted. Terms appear in alphabetical order.
+
+**Active Credential Floor.** The minimum Trust Index value (TI >= 60) required for a credential to maintain Active status and the ability to attest. Below this floor, a credential enters Dormant state. See HP-SPEC-v1.
+
+**Attestation Chain.** A multi-author attestation structure where each contributor to a piece of content attests independently using their own credential. See Section 2.17, WF-SPEC-v1.
+
+**Attestation Stamp.** A ledger-published confirmation issued by an Auditor Node certifying that the Auditor independently verified a Proof Bundle against its on-chain Proof Anchor. See Sections 2.11, 10.3.
+
+**Auditor Node.** An independent witness node that permissionlessly declares itself and verifies Proof Bundle integrity. Cannot be ranked, suspended, or filtered. See Sections 2.11, 10.
+
+**Behavioral Liveness Score (BLS).** A fallback liveness indicator computed from attestation behavior patterns when device attestation is unavailable. See PFV-SPEC-v1.
+
+**BehavioralScore.** The accumulating component of the Trust Index, earned through attestation activity. +3 per standard attestation, no independent ceiling. See HP-SPEC-v1.
+
+**Bundle-to-Anchor Hash.** The cryptographic hash linking the off-chain Proof Bundle to the on-chain Proof Anchor, computed per WF-SPEC-v1 using the algorithm specified in CRYPTO-SPEC-v1 (SHA-256).
+
+**Challenge Log.** A ledger-published record flagging a discrepancy with a Proof Bundle. See Section 10.4.
+
+**Classification Display Reframe.** The covenant-level principle that HIP displays data and annotations, not verdict labels, for Attestation-Signal Mismatch and Synthetic Cadence Detected categories. See Section 2.5.
+
+**Complete Human Origin (CHO).** The creator attests that this work was produced entirely through their own direct creative effort. No AI system generated, suggested, drafted, or transformed any portion. See Section 2.4.
+
+**Contributor-Blind Aggregation.** The Signal Contribution Framework property that dissolves individual contributor attribution into composite scores within one computation cycle. See PFV-SPEC-v1.
+
+**Covenant Pledger.** A HIP participant who has anchored a Covenant Recitation Hash on-ledger. See Sections 2.18, 6.
+
+**Credential Compromise Determination.** The formal process for investigating and resolving credential integrity issues. Three types: A (Stolen), B (Fraudulent Issuance), C (Systematic False Attestation). See HP-SPEC-v1.
+
+**CRYPTO-SPEC-v1.** The companion specification defining cryptographic primitives: SHA-256 for hashing, Ed25519 for digital signatures, HMAC-SHA-256 for privacy mechanisms. Includes algorithm transition model.
+
+**CSP (Cadence & Synthetic Propagation).** One of the four PFV vectors measuring attestation behavior patterns. See PFV-SPEC-v1.
+
+**Fork Condition.** A recognized divergence from HIP lineage. See Section 2.15.
+
+**Genesis Covenant Charter.** This document. See Section 13.
+
+**GI-SPEC-v1.** The companion specification for the Genesis Inscription procedure: Genesis Inscription Payload format, OP_RETURN encoding, content-addressed store selection, and hash derivation procedure.
+
+**GRQ Pledge Hash.** A ledger-anchored commitment for Guardian succession readiness. See Sections 2.18, 6.5.
+
+**Guardian.** The Covenant Sentinel. Defensive veto only. See Sections 2.12, 6.
+
+**Guardian Interpretive Query (GIQ).** A non-binding request for public deliberation on whether a novel action would violate the Phoenix Firewall. See Section 6.2.
+
+**Guardian Reserve Queue (GRQ).** The permissionless Guardian succession pool. See Sections 2.18, 6.5.
+
+**HIP (Human Integrity Protocol).** A covenant-bound, permissionless protocol for preserving the verifiable distinction between human-origin and synthetic signals in public communication. See Section 1.
+
+**HIP Proofcard.** The standardized public-facing display of attestation data. See Sections 2.9, 8.
+
+**HP-SPEC-v1.** The companion specification for HUMAN-PROOF credential mechanics, Trust Index, rate limiting, and Credential Compromise Determination.
+
+**Human-Directed Collaborative (HDC).** Human intentionality drove the work; AI executed all or significant portions under continuous human editorial direction. See Section 2.4.
+
+**Human-Origin Assisted (HOA).** Creator held full editorial authority. AI tools assisted in a supporting capacity. See Section 2.4.
+
+**HUMAN-PROOF.** The credential proving a living human holds it. See Section 2.3.
+
+**INT-SPEC-v1.** The integration specification: verification endpoint architecture, Proofcard display requirements, institutional integration API, signal contribution interface.
+
+**IssuanceWeight.** The static component of Trust Index assigned at credential issuance. Tier 1: 400, Tier 2: 150, Tier 3: 50. See HP-SPEC-v1.
+
+**MRS (Mismatch Risk Score).** One of the four PFV vectors measuring credential-level risk indicators. See PFV-SPEC-v1.
+
+**Noise Injection.** Calibrated random perturbation on published signal composites to defeat statistical inference. Parameter sigma = 0.05 on normalized scale. See PFV-SPEC-v1.
+
+**Operational Council.** The coordination and governance body among Steward Nodes. See Section 5.2.
+
+**Origin Unattested.** No attestation present, with insufficient signal data for analysis. Not pejorative. The honest label for unattested or historical content. See Section 2.4.
+
+**Pathway Health Index (PHI).** The aggregate signal analysis monitoring issuance pathway integrity. Three states: Active, Watch, Declassified. See PATHWAY-SPEC-v1, PFV-SPEC-v1.
+
+**pathwayState.** The pathway's lifecycle state recorded at attestation time: Active, Watch, Declassified, Retired, or Archived. See WF-SPEC-v1.
+
+**PATHWAY-SPEC-v1.** The companion specification for issuance pathway governance, PHI signal categories, approval criteria, and deprecation/Declassification processes.
+
+**PFV-SPEC-v1.** The companion specification for signal analysis: four PFV vectors, staged analysis model, PHI computation, Signal Contribution Framework, VEPA, ML Model Governance, PHI Genesis Calibration.
+
+**Phoenix Firewall (PF-1 through PF-11).** The immutable Covenant clauses. See Section 7.
+
+**Proof Anchor.** The minimal on-chain attestation record. See Sections 2.7, WF-SPEC-v1.
+
+**Proof Anchor Link.** The URI resolving to the off-chain Proof Bundle. hip:// scheme with HTTP fallback. See Sections 2.8, WF-SPEC-v1.
+
+**Proof Bundle.** The complete off-chain attestation record. JSON-LD / W3C VC format. See Sections 2.6, 11, WF-SPEC-v1.
+
+**Proofcard Display Requirements.** The covenant and specification-level rules governing how attestation data is presented to verifiers. See Section 8.2, INT-SPEC-v1.
+
+**Safe Harbor Framework.** The structural legal defense for signal annotations. See Section 17.
+
+**Signal Contribution Framework.** The architecture for voluntary institutional signal data contributions to VHR analysis. See PFV-SPEC-v1.
+
+**Signal Contribution Privacy Architecture.** The privacy protections for contributed signal data: three-source minimum, noise injection, contributor-blind aggregation, diversity cap (30%). See PFV-SPEC-v1.
+
+**Signal Diversity Requirement.** No single source may represent more than 30% of VHR analytical input for any content analysis. See PFV-SPEC-v1.
+
+**SLA-SPEC-v1.** The companion specification for SLA cadence window duration (24 hours, UTC-aligned), fallback triggers (Steward Dormancy, Guardian Inactivity), and recovery actions.
+
+**sourceToken.** The HMAC-based mechanism for anonymized distinct-source counting in VEPA. See INT-SPEC-v1, CRYPTO-SPEC-v1.
+
+**Steward Node.** An operational node that processes attestations, anchors Proof Anchors, hosts Bundles, and operates verification endpoints. See Sections 2.10, 5.
+
+**Three-Source Minimum.** The Signal Contribution Privacy requirement that contributed signals enter VHR only when three independent sources provide data for the same content hash. See PFV-SPEC-v1.
+
+**TI-W (Trust Index Weighting).** One of the four PFV vectors modulating scrutiny based on Trust Index. See PFV-SPEC-v1.
+
+**Trust Index.** TI = IssuanceWeight + BehavioralScore. Internal only -- never displayed to verifiers. See Sections 2.14, HP-SPEC-v1.
+
+**Verification Endpoint Privacy Architecture (VEPA).** The architectural separation between query-answering and signal-generation functions. See PFV-SPEC-v1, INT-SPEC-v1.
+
+**VHR (Viral Human Resistance Pattern).** One of the four PFV vectors measuring propagation pattern analysis. See PFV-SPEC-v1.
+
+**WF-SPEC-v1.** The wire format specification: Proof Bundle structure, Proof Anchor structure, Bundle-to-Anchor hash construction, Proof Anchor Link format, hosting architecture.
+
+This Glossary is an informative appendix. In all cases of apparent conflict between a Glossary entry and the operative text of the Charter, the Charter text controls. Companion specifications are not part of this Charter and are governed by their own hash-anchored versioning process.
+
+---
+
+## Companion Specifications
+
+| Specification | Contents | Status |
+|---|---|---|
+| HP-SPEC-v1 | HUMAN-PROOF credential issuance mechanics, Trust Index, rate limiting, Credential Compromise Determination | Revised |
+| PATHWAY-SPEC-v1 | Issuance pathway governance, PHI signal categories, approval criteria, deprecation/Declassification | Revised |
+| PFV-SPEC-v1 | Signal analysis: four PFV vectors, staged analysis, PHI computation, Signal Contribution Framework, VEPA, ML Model Governance, PHI Genesis Calibration, classification display reframe | Revised |
+| WF-SPEC-v1 | Proof Bundle wire format, Proof Anchor structure, Bundle-to-Anchor hash, hosting architecture | Drafted, corrections applied |
+| INT-SPEC-v1 | Integration: verification endpoint, Proofcard display, institutional API, signal contribution interface | Drafted |
+| CRYPTO-SPEC-v1 | Cryptographic primitives: SHA-256, Ed25519, HMAC-SHA-256, algorithm transition model | Drafted |
+| GI-SPEC-v1 | Genesis inscription procedure: Payload format, OP_RETURN encoding, content-addressed store, hash derivation | Drafted |
+| SLA-SPEC-v1 | SLA cadence window (24h UTC), fallback triggers, recovery actions | Drafted |
+
+---
+
+*HIP Genesis Covenant Charter v1.0 -- INSCRIPTION CANDIDATE. All decisions from Sessions 1-13 integrated. Six-category system, ASM credential-context refinements, Safe Harbor Framework, governance labor model, and protocol-not-entity language incorporated. Classification Display Reframe implemented throughout. Three-period framework, Attestation Chain, and all companion specification references finalized. Canonical ASCII text produced and hash-sealed.*
