@@ -18,6 +18,7 @@ const G = {
   arweavePayload: "nTCa0kDBClUjUyregW-SYnf_vYlq5FwNqLMS5U-ahNI",
   arweaveCharter: "rG0zqLOaTmeDfYUw_uN4tqcw6xPj186Yc0HfubgkP1Y",
   explorer: "https://mempool.space/tx/d025505337a2e9c5a19adfcf312843432b256fe856a7e6dff5caa4842faf1a72",
+  github: "https://github.com/human-integrity-protocol/hip-protocol",
 };
 
 // ── Crypto helpers ──
@@ -82,6 +83,7 @@ export default function HIPLanding() {
             <a href="#genesis" style={S.navLink}>Genesis</a>
             <a href="#verify" style={S.navLink}>Verify</a>
             <a href="#build" style={S.navLink}>Build</a>
+            <a href={G.github} target="_blank" rel="noopener" style={S.navLink}>GitHub</a>
           </div>
           <div style={S.navTools}>
             <button style={S.navToolBtn} onClick={() => setToolOpen(toolOpen === "attest" ? null : "attest")}>Try Attestation</button>
@@ -425,8 +427,9 @@ export default function HIPLanding() {
                 ))}
               </div>
               <div style={S.specAccess}>
-                <div style={S.specAH}>Accessing the Specifications</div>
-                <p style={S.specAP}>The full specifications, sealed Charter, and Genesis Payload are being prepared for publication to a public repository. The protocol's root of trust is already public and permanent on-chain. No license, NDA, or partnership required. Watch this space for the repository announcement.</p>
+                <div style={S.specAH}>Access the Specifications</div>
+                <p style={S.specAP}>The Charter, specifications, Genesis Payload, and verification tools are published as an open repository. No license, NDA, or partnership required.</p>
+                <a href={G.github} target="_blank" rel="noopener" style={{...S.btnG, display: "inline-block", marginTop: 12}}>View on GitHub →</a>
               </div>
             </div>
           </Fade>
@@ -450,7 +453,7 @@ export default function HIPLanding() {
             <div style={S.footLogo}>HIP</div>
             <div style={S.footTag}>Human Integrity Protocol</div>
             <div style={S.footLinks}>
-              {[["Verify on-chain", G.explorer], ["IPFS", `https://gateway.pinata.cloud/ipfs/${G.ipfsPayload}`], ["Arweave", `https://arweave.net/${G.arweavePayload}`], ["Blockstream", `https://blockstream.info/tx/${G.txid}`]].map(([l, u], i) => (
+              {[["Verify on-chain", G.explorer], ["GitHub", G.github], ["IPFS", `https://gateway.pinata.cloud/ipfs/${G.ipfsPayload}`], ["Arweave", `https://arweave.net/${G.arweavePayload}`], ["Blockstream", `https://blockstream.info/tx/${G.txid}`]].map(([l, u], i) => (
                 <span key={i}>{i > 0 && <span style={{ color: t2, margin: "0 6px" }}>·</span>}<a href={u} target="_blank" rel="noopener" style={S.footLink}>{l}</a></span>
               ))}
             </div>
