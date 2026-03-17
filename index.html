@@ -194,8 +194,8 @@ async function importCredential(obj) {
 // ============================================================
 var PROOFCARD_VERSION = "hip-proofcard-v1";
 
-function buildProofcard(bundle, anchor, publicKey) {
-  return {
+function buildProofcard(bundle, anchor, publicKey, originalFilename) {
+  var pc = {
     version: PROOFCARD_VERSION,
     description: "HIP Proofcard — self-contained, independently verifiable attestation record. Drop this file into any HIP verification tool.",
     proofBundle: bundle,
@@ -203,6 +203,8 @@ function buildProofcard(bundle, anchor, publicKey) {
     publicKey: publicKey,
     created: new Date().toISOString()
   };
+  if(originalFilename) pc.originalFilename = originalFilename;
+  return pc;
 }
 
 // ============================================================
@@ -267,6 +269,31 @@ e("input",{ref:ref,type:"file",accept:".json",style:{display:"none"},onChange:fu
 props.label||"Drop your file here, or tap to browse")}
 
 // ============================================================
+// CREDENTIAL PERSISTENCE — localStorage auto-save/load
+// ============================================================
+var HIP_CRED_KEY = "hip_credential_v1";
+
+function saveCredToStorage(cred) {
+  try {
+    var obj = Object.assign({}, cred);
+    delete obj._priv; delete obj._pub;
+    localStorage.setItem(HIP_CRED_KEY, JSON.stringify(obj));
+  } catch(ex) { /* localStorage may be unavailable */ }
+}
+
+function loadCredFromStorage() {
+  try {
+    var raw = localStorage.getItem(HIP_CRED_KEY);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  } catch(ex) { return null; }
+}
+
+function clearCredStorage() {
+  try { localStorage.removeItem(HIP_CRED_KEY); } catch(ex) {}
+}
+
+// ============================================================
 // CREDENTIAL PANEL
 // ============================================================
 function CredPanel(props){
@@ -276,21 +303,60 @@ var bs=useState(false);var busy=bs[0];var setBusy=bs[1];
 var ws=useState(null);var waEnv=ws[0];var setWaEnv=ws[1];
 var ms=useState(null);var mode=ms[0];var setMode=ms[1];
 var was=useState(0);var waStep=was[0];var setWaStep=was[1];
+var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
+// S21: biometric confirmation state
+var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
 
 useEffect(function(){detectWA().then(setWaEnv)},[]);
 
-var doT2=async function(){setBusy(true);setErr(null);setWaStep(1);
+// S21: Auto-load credential from localStorage on mount
+useEffect(function(){
+  if(cred) return; // already have one
+  var saved = loadCredFromStorage();
+  if(saved && saved.version === "hip-credential-v1") {
+    (async function(){
+      try {
+        var computed = await sha256(unhex(saved.publicKey));
+        if(computed !== saved.credentialId) return;
+        saved._priv = await crypto.subtle.importKey("pkcs8", b64d(saved.privateKey), "Ed25519", false, ["sign"]);
+        saved._pub = await crypto.subtle.importKey("raw", unhex(saved.publicKey), "Ed25519", true, ["verify"]);
+        setCred(saved);
+        setAutoLoaded(true);
+      } catch(ex) { /* silent fail — corrupted storage */ }
+    })();
+  }
+}, []);
+
+// S21: Save credential to localStorage whenever it changes
+var wrapSetCred = function(c) {
+  setCred(c);
+  if(c) { saveCredToStorage(c); } else { clearCredStorage(); }
+};
+
+var doT2=async function(){
+  // S21: Check for existing credential and warn
+  var existing = loadCredFromStorage();
+  if(existing && !window._hipDupWarned) {
+    window._hipDupWarned = true;
+    if(!confirm("You already have a saved credential ("+existing.credentialId.substring(0,12)+"…). Creating a new one will replace it. Continue?")) {
+      setBusy(false); return;
+    }
+  }
+  setBusy(true);setErr(null);setWaStep(1);
 try{var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
 var cid=await sha256(unhex(pub));
 var wa=await createWACred(cid.slice(0,32));
 var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
-setCred({version:"hip-credential-v1",credentialId:cid,publicKey:pub,privateKey:b64e(privBytes),
+var newCred={version:"hip-credential-v1",credentialId:cid,publicKey:pub,privateKey:b64e(privBytes),
 tier:2,pathway:"device-biometric-webauthn-v1",
 webauthn:{credentialId:wa.credId,attestationObject:wa.attObj,clientDataJSON:wa.cdj},
 issuanceProof:{type:"webauthn-platform-biometric",timestamp:wa.ts,userVerification:"required"},
 created:new Date().toISOString(),warning:"This file contains your private key. Store it securely.",
-_priv:kp.privateKey,_pub:kp.publicKey});
+_priv:kp.privateKey,_pub:kp.publicKey};
+wrapSetCred(newCred);
+// S21: Show biometric confirmation before advancing
+setBioConfirmed(true);
 setWaStep(2);setBusy(false)}catch(ex){setBusy(false);setWaStep(0);
 setErr(ex.name==="NotAllowedError"?"Biometric cancelled or timed out. Try again.":ex.name==="NotSupportedError"?"Device doesn't support biometric.":"Error: "+ex.message)}};
 
@@ -300,20 +366,26 @@ try{var computed=await sha256(unhex(d.publicKey));
 if(computed!==d.credentialId){setErr("Credential integrity check failed.");return}
 d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);
 d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);
-setCred(d);setErr(null)}catch(ex){setErr("Failed to load: "+ex.message)}};
+wrapSetCred(d);setErr(null)}catch(ex){setErr("Failed to load: "+ex.message)}};
 
 if(cred){
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — BIOMETRIC":cred.tier===3?"TIER 3 — PEER VOUCH":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+// S21: Biometric confirmation banner (shows immediately after biometric creation)
+bioConfirmed&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.06)",border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,marginBottom:4,textAlign:"center"}},
+e("div",{style:{fontSize:22,marginBottom:6}},"✓"),
+e("div",{style:{fontFamily:mo,fontSize:13,fontWeight:600,color:"#4ade80",marginBottom:4}},"Biometric Verified"),
+e("div",{style:{fontSize:12,color:t2,lineHeight:1.5}},"Your device confirmed your identity via "+(navigator.userAgent.match(/iPhone|iPad/i)?"Face ID / Touch ID":navigator.userAgent.match(/Mac/i)?"Touch ID":"Windows Hello / biometric")+". This verification is cryptographically bound to your credential.")),
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:6}},tn),
-e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},"✓ Credential loaded")),
-e("button",{onClick:function(){setCred(null);setMode(null);setWaStep(0)},style:btnSm},"Change")),
+e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},autoLoaded?"✓ Credential restored automatically":"✓ Credential loaded")),
+e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
+autoLoaded&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
 e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e("code",{style:wizRV},cred.credentialId),
 e("div",{style:wizRL},"Public Key"),e("code",{style:wizRV},cred.publicKey),
 e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—")),
 e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Save Credential File"),
-ToolAlert("warn",e("span",null,e("strong",null,"Keep this file safe.")," It is your identity in HIP. If you lose it, you'll need to re-verify.")))}
+ToolAlert("warn",e("span",null,e("strong",null,"Keep this file safe.")," Your credential is also saved in this browser, but downloading a backup ensures you never lose access.")))}
 
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you're a verified human. Choose how to verify, or load an existing credential."),
@@ -345,12 +417,15 @@ e(StepDot,{n:1,title:"Generate Cryptographic Identity",active:waStep===0,done:wa
 e("p",{style:{color:t2,fontSize:13,margin:0}},"A unique key pair is created in your browser.")),
 e(StepDot,{n:2,title:"Verify with Your Biometric",active:waStep<=1,done:waStep>=2},
 e("p",{style:{color:t2,fontSize:13,margin:0}},"Your device prompts for face, fingerprint, or PIN. No biometric data is sent to HIP."),
-waStep===1&&ToolAlert("info",e("span",null,e("strong",null,"Waiting for your device...")," Complete the biometric check now."))),
+waStep===1&&ToolAlert("info",e("span",null,e("strong",null,"Waiting for your device...")," Complete the biometric check now.")),
+waStep>=2&&ToolAlert("success",e("span",null,"✓ ",e("strong",null,"Your biometric was verified.")," Your device confirmed a live human is present. This proof is bound to your credential."))),
 e(StepDot,{n:3,title:"Credential Ready",active:false,done:waStep>=2},
-e("p",{style:{color:t2,fontSize:13,margin:0}},"Your Tier 2 credential is issued. ",e("strong",null,"Save it now."))),
+e("p",{style:{color:t2,fontSize:13,margin:0}},"Your Tier 2 credential is issued and saved in this browser. ",e("strong",null,"Download a backup copy now.")),
+waStep>=2&&e("div",{style:{marginTop:8,padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd,fontSize:12,color:t2,lineHeight:1.6}},
+"Your device may have also offered to save a \"passkey\" — that's your operating system storing the WebAuthn credential for you. This is normal and expected.")),
 waStep===0&&e("button",{style:waEnv&&waEnv.ok?btnG:btnDis,onClick:doT2,disabled:busy||!(waEnv&&waEnv.ok)},busy?"Starting...":waEnv&&waEnv.ok?"Begin Biometric Verification →":"Biometric not available")),
 
-mode==="t3"&&e(T3Flow,{onDone:setCred,onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+mode==="t3"&&e(T3Flow,{onDone:wrapSetCred,onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 
 // ============================================================
 // TIER 3 — PEER VOUCH
@@ -463,6 +538,7 @@ var content={
 attestation:{attestationChain:null,editorialStatement:editorial,priorVersion:null,type:"OriginalAttestation"},
 bundleMetadata:{processingNode:"local-poc",schemaExtensions:[]},
 credentialSubject:{classification:cls,contentHash:hash,contentType:"application/octet-stream",hashAlgorithm:"sha-256",id:"urn:hip:content:"+hash,
+originalFilename:fname||null,
 credentialTier:cred.tier,credentialPathway:cred.pathway,livenessDesignation:ld},
 issuanceDate:now,
 issuer:{id:cred.credentialId,issuanceTier:cred.tier||2,pathwayVersion:cred.pathway||"unknown",type:"HIPCredential"},
@@ -475,7 +551,7 @@ var full=Object.assign({},content,{id:"urn:hip:bundle:"+ch,
 proof:{created:now,proofPurpose:"assertionMethod",proofValue:b64e(sigBuf),type:"Ed25519Signature2020",verificationMethod:cred.credentialId},
 signalAnnotations:[]});
 var anch={anchorLink:"hip://"+ch.substring(0,8)+"/"+ch,bundleHash:ch,classification:cls,contentHash:hash,credentialId:cred.credentialId,timestamp:now,type:"HIPProofAnchor",version:"WF-v1.0"};
-setProofcard(buildProofcard(full,anch,cred.publicKey));setBuilding(false);setStep(4)};
+setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);setStep(4)};
 
 var cats=[["CompleteHumanOrigin","CHO","Complete Human Origin — I made this entirely myself"],["HumanOriginAssisted","HOA","Human Origin Assisted — I used some AI help"],["HumanDirectedCollaborative","HDC","Human-Directed Collaborative — I directed AI to make this"]];
 
@@ -487,6 +563,7 @@ e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-s
 e("div",{style:{display:"flex",alignItems:"center",gap:8}},e(Ico,{name:"chart",size:18,color:go}),e("span",{style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:go}},"HIP Proof Card")),
 e("div",{style:{fontSize:11,fontFamily:mo,padding:"3px 10px",background:"rgba(74,222,128,0.08)",color:"#4ade80",borderRadius:20,border:"1px solid rgba(74,222,128,0.2)",fontWeight:600,textTransform:"uppercase"}},"VERIFIED")),
 e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Classification"),e("div",{style:{fontFamily:serif,fontSize:18,fontWeight:400,color:t1}},clsN)),
+fname&&e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Attested Content"),e("div",{style:{fontSize:13,color:t1,fontWeight:500}},fname)),
 e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Credential Tier"),e("div",{style:{fontSize:13,color:go,fontWeight:600}},"Tier "+(cred.tier||"?"))),
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Liveness"),e("div",{style:{fontSize:13,color:lv==="done"?"#4ade80":t2,fontWeight:600}},lv==="done"?"Confirmed":"Not verified"))),
@@ -499,7 +576,7 @@ e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e("code",{
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{style:wizRV},proofcard.proofBundle.id)),
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(212,160,84,0.2)"}},
-e("button",{style:Object.assign({},btnG,{width:"100%"})  ,onClick:function(){dl(proofcard,"HIP_Proofcard_"+bHash.substring(0,8)+".json")}},"↓ Save Proof Card")),
+e("button",{style:Object.assign({},btnG,{width:"100%"})  ,onClick:function(){var pcName="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_")+"_":"")+bHash.substring(0,8)+".json";dl(proofcard,pcName)}},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
 e("button",{style:btnDl,onClick:function(){dl(proofcard.proofBundle,"HIP_Bundle.json")}},"↓ Bundle"),
 e("button",{style:btnDl,onClick:function(){dl(proofcard.proofAnchor,"HIP_Anchor.json")}},"↓ Anchor")),
@@ -528,21 +605,35 @@ e("button",{style:btnSm,onClick:function(){setStep(1)}},"← Back"),
 e("button",{style:btnG,onClick:buildIt,disabled:building},building?"Building…":"Build Proof Bundle →")))}
 
 // ============================================================
-// VERIFICATION (kept from S19, same logic)
+// VERIFICATION — S21: Two-part verification (crypto + content)
 // ============================================================
 function VerifyWizard() {
-  var s1=useState("proofcard"); var mode=s1[0]; var setMode=s1[1]; // "proofcard" | "manual"
+  var s1=useState("proofcard"); var mode=s1[0]; var setMode=s1[1];
   var s2=useState(""); var pcText=s2[0]; var setPcText=s2[1];
   var s3=useState(""); var bt=s3[0]; var setBt=s3[1];
   var s4=useState(""); var at=s4[0]; var setAt=s4[1];
   var s5=useState(null); var res=s5[0]; var setRes=s5[1];
   var s6=useState(false); var run=s6[0]; var setRun=s6[1];
   var pcFileRef = useRef(null);
+  // S21: Content matching state
+  var cf=useState(null); var contentFile=cf[0]; var setContentFile=cf[1];
+  var cfn=useState(null); var contentFileName=cfn[0]; var setContentFileName=cfn[1];
+  var cfh=useState(null); var contentFileHash=cfh[0]; var setContentFileHash=cfh[1];
+  var contentRef = useRef(null);
 
   var loadPcFile = async function(ev) {
     var f = ev.target.files && ev.target.files[0]; if(!f) return;
     var text = await f.text();
     setPcText(text);
+  };
+
+  var loadContentFile = async function(ev) {
+    var f = ev.target.files && ev.target.files[0]; if(!f) return;
+    setContentFileName(f.name);
+    var buf = await f.arrayBuffer();
+    var h = await sha256(new Uint8Array(buf));
+    setContentFileHash(h);
+    setContentFile(true);
   };
 
   var verify = async function() {
@@ -557,7 +648,6 @@ function VerifyWizard() {
           a = pc.proofAnchor;
           pubKeyHex = pc.publicKey || null;
         } else if(pc.proofBundle && pc.proofAnchor) {
-          // Looks like a proofcard without version — try anyway
           b = pc.proofBundle;
           a = pc.proofAnchor;
           pubKeyHex = pc.publicKey || null;
@@ -571,47 +661,34 @@ function VerifyWizard() {
 
       var r = [];
 
-      // Reconstruct canonical content (exclude proof, id, signalAnnotations per WF-SPEC)
+      // ── PART 1: Cryptographic Verification ──
+      r.push({l:"PART 1 — CRYPTOGRAPHIC VERIFICATION", p:null, d:"Validates the Proof Card's internal integrity.", section:true});
+
       var content = {};
       Object.keys(b).forEach(function(k) { if(k!=="proof"&&k!=="id"&&k!=="signalAnnotations") content[k]=b[k]; });
       var canon = canonJSON(content);
       var ch = await sha256(canon);
 
-      // 1. Bundle hash matches Anchor
       r.push({l:"Bundle hash matches Anchor", p:ch===a.bundleHash, d:ch===a.bundleHash ? ch.substring(0,24)+"…" : "Computed: "+ch.substring(0,16)+"… vs Anchor: "+(a.bundleHash||"").substring(0,16)+"…"});
-
-      // 2. Bundle ID matches hash
       r.push({l:"Bundle ID matches hash", p:b.id==="urn:hip:bundle:"+ch, d:b.id||"(missing)"});
-
-      // 3. Content hash consistent
       r.push({l:"Content hash consistent", p:b.credentialSubject&&b.credentialSubject.contentHash===a.contentHash, d:(a.contentHash||"").substring(0,24)+"…"});
 
-      // 4. Credential ID consistent across Bundle and Anchor
       var credOk = b.issuer&&b.issuer.id===a.credentialId && b.proof&&b.proof.verificationMethod===b.issuer.id;
       r.push({l:"Credential ID consistent", p:credOk, d:(a.credentialId||"").substring(0,24)+"…"});
-
-      // 5. Classification valid
       r.push({l:"Valid classification", p:["CompleteHumanOrigin","HumanOriginAssisted","HumanDirectedCollaborative"].indexOf(b.credentialSubject&&b.credentialSubject.classification)!==-1, d:b.credentialSubject&&b.credentialSubject.classification||"(missing)"});
-
-      // 6. Schema version
       r.push({l:"Schema version WF-v1.0", p:b.version==="WF-v1.0"&&a.version==="WF-v1.0", d:"Bundle: "+(b.version||"?")+", Anchor: "+(a.version||"?")});
-
-      // 7. Anchor link format
       r.push({l:"Anchor link format", p:a.anchorLink&&a.anchorLink.indexOf("hip://")===0, d:a.anchorLink||"(missing)"});
 
-      // 8. Timestamp valid
       var ts = b.issuanceDate;
       var tsValid = ts && !isNaN(Date.parse(ts)) && ts.charAt(ts.length-1)==="Z";
       r.push({l:"Timestamp format (ISO 8601 UTC)", p:tsValid, d:ts||"(missing)"});
 
-      // 9. Credential ID = SHA-256(publicKey) — only if public key available
       if(pubKeyHex) {
         var computedCid = await sha256(unhex(pubKeyHex));
         var cidMatch = computedCid === (b.issuer&&b.issuer.id);
         r.push({l:"Credential ID = SHA-256(publicKey)", p:cidMatch, d:cidMatch ? "Verified: credential ID derives from public key" : "Mismatch — public key does not match credential ID"});
       }
 
-      // 10. Ed25519 signature verification
       var sigResult = null;
       var sigDetail = "";
       if(b.proof && b.proof.proofValue) {
@@ -621,7 +698,6 @@ function VerifyWizard() {
             sigResult = false;
             sigDetail = "Signature is " + sigBytes.length + " bytes — expected 64 for Ed25519.";
           } else if(pubKeyHex) {
-            // We have the public key — do full verification
             try {
               var pubBuf = unhex(pubKeyHex);
               var importedKey = await crypto.subtle.importKey("raw", pubBuf, "Ed25519", false, ["verify"]);
@@ -647,6 +723,26 @@ function VerifyWizard() {
       }
       r.push({l:"Ed25519 signature", p:sigResult, d:sigDetail});
 
+      // ── PART 2: Content Matching ──
+      if(contentFileHash) {
+        r.push({l:"PART 2 — CONTENT MATCHING", p:null, d:"Confirms this Proof Card belongs to the provided file.", section:true});
+        var expectedHash = b.credentialSubject && b.credentialSubject.contentHash;
+        var match = contentFileHash === expectedHash;
+        r.push({l:"Content file matches Proof Card", p:match,
+          d:match
+            ? "File hash matches. This Proof Card attests to \"" + (contentFileName||"this file") + "\"."
+            : "MISMATCH — File hash: " + contentFileHash.substring(0,16) + "… vs Proof Card: " + (expectedHash||"").substring(0,16) + "…. This Proof Card does not attest to this file."});
+        if(match) {
+          var pcFn = null;
+          try { var ppc = JSON.parse(pcText); pcFn = ppc.originalFilename; } catch(ex){}
+          if(pcFn && pcFn !== contentFileName) {
+            r.push({l:"Filename note", p:null, d:"Proof Card was originally created for \"" + pcFn + "\". Current file is \"" + contentFileName + "\". Content matches, but filename differs — file may have been renamed."});
+          }
+        }
+      } else {
+        r.push({l:"PART 2 — CONTENT MATCHING", p:null, d:"No content file provided. Add the original file above to verify this Proof Card belongs to specific content.", section:true});
+      }
+
       setRes(r);
     } catch(ex) { setRes([{l:"Parse error", p:false, d:ex.message}]); }
     setRun(false);
@@ -655,7 +751,7 @@ function VerifyWizard() {
   var canVerify = mode==="proofcard" ? !!pcText : (!!bt && !!at);
 
   return e("div", {style:{display:"flex",flexDirection:"column",gap:14}},
-    e("p", {style:{fontSize:14,fontWeight:400,color:t2,lineHeight:1.6}}, "Verify a HIP attestation. Drop a Proofcard file for full verification including Ed25519 signature, or paste Bundle + Anchor separately."),
+    e("p", {style:{fontSize:14,fontWeight:400,color:t2,lineHeight:1.6}}, "Verify a HIP attestation. Two-part verification: (1) cryptographic integrity and (2) content matching."),
     // Mode toggle
     e("div", {style:{display:"flex",gap:8,marginBottom:4}},
       e("button", {style:Object.assign({},mode==="proofcard"?btnG:btnSm,{flex:1}), onClick:function(){setMode("proofcard");setRes(null)}}, "Proofcard"),
@@ -665,7 +761,7 @@ function VerifyWizard() {
       e("div", {style:{border:"2px dashed "+bd,borderRadius:8,padding:"20px",textAlign:"center",cursor:"pointer"}, onClick:function(){pcFileRef.current&&pcFileRef.current.click()}},
         e("input", {ref:pcFileRef, type:"file", accept:".json", style:{display:"none"}, onChange:loadPcFile}),
         pcText ? e("span", {style:{color:"#4ade80",fontFamily:mo,fontSize:12}}, "✓ Proofcard loaded ("+Math.round(pcText.length/1024)+" KB)")
-          : e("span", {style:{color:t2,fontSize:14}}, "Click to load Proofcard file")
+          : e("span", {style:{color:t2,fontSize:14}}, "Drop your Proof Card here, or tap to browse")
       ),
       e("div", {style:{fontSize:12,color:t2,fontFamily:mo}}, "Or paste JSON:"),
       e("textarea", {style:Object.assign({},wizTxt,{fontSize:11}), value:pcText, onChange:function(ev){setPcText(ev.target.value)}, rows:4, placeholder:"Paste Proofcard JSON..."})
@@ -681,9 +777,25 @@ function VerifyWizard() {
       ),
       e("div", {style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}}, "Note: Without the public key, Ed25519 signature verification is limited to structural checks. Use a Proofcard for full verification.")
     ),
+    // S21: Content file input for Part 2 verification
+    e("div", {style:{borderTop:"1px solid "+bd,paddingTop:12,marginTop:4}},
+      e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}}, "Content Matching (optional)"),
+      e("p", {style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:8}}, "Add the original file to verify this Proof Card attests to that specific content."),
+      e("div", {style:{border:"2px dashed "+(contentFile?go:bd),borderRadius:8,padding:"16px",textAlign:"center",cursor:"pointer",background:contentFile?"rgba(212,160,84,0.04)":"transparent"}, onClick:function(){contentRef.current&&contentRef.current.click()}},
+        e("input", {ref:contentRef, type:"file", style:{display:"none"}, onChange:loadContentFile}),
+        contentFile
+          ? e("span", {style:{color:"#4ade80",fontFamily:mo,fontSize:12}}, "✓ " + contentFileName + " loaded")
+          : e("span", {style:{color:t2,fontSize:13}}, "Drop the original content file here")
+      ),
+      contentFile && e("button", {style:Object.assign({},btnSm,{marginTop:6,fontSize:10}), onClick:function(){setContentFile(null);setContentFileName(null);setContentFileHash(null);contentRef.current&&(contentRef.current.value="")}}, "Clear content file")
+    ),
     e("button", {style:canVerify?btnG:btnDis, disabled:!canVerify||run, onClick:verify}, run?"Verifying…":"Verify"),
     res && e("div", {style:{display:"flex",flexDirection:"column",gap:6,marginTop:14}},
       res.map(function(r,i) {
+        if(r.section) {
+          return e("div", {key:i, style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,textTransform:"uppercase",color:go,padding:"10px 0 4px",marginTop:i>0?8:0,borderTop:i>0?"1px solid "+bd:"none"}}, r.l,
+            e("div",{style:{fontFamily:sans,fontSize:12,color:t2,letterSpacing:0,textTransform:"none",fontWeight:400,marginTop:2}},r.d));
+        }
         var color = r.p===true?"#4ade80":r.p===false?"#f87171":"#facc15";
         var icon = r.p===true?"✓":r.p===false?"✗":"?";
         return e("div", {key:i, style:{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 14px",background:dkc,borderRadius:6,borderLeft:"3px solid "+color}},
@@ -694,16 +806,35 @@ function VerifyWizard() {
           )
         );
       }),
-      // Summary
-      res.length > 1 && e("div", {style:{padding:"12px 16px",borderRadius:6,marginTop:4,fontFamily:mo,fontSize:12,lineHeight:1.5,
-        background: res.every(function(r){return r.p===true}) ? "rgba(74,222,128,0.06)" : res.some(function(r){return r.p===false}) ? "rgba(248,113,113,0.06)" : "rgba(250,204,21,0.06)",
-        border: "1px solid " + (res.every(function(r){return r.p===true}) ? "rgba(74,222,128,0.2)" : res.some(function(r){return r.p===false}) ? "rgba(248,113,113,0.2)" : "rgba(250,204,21,0.2)"),
-        color: res.every(function(r){return r.p===true}) ? "#4ade80" : res.some(function(r){return r.p===false}) ? "#f87171" : "#facc15"
-      }},
-        res.every(function(r){return r.p===true}) ? "All checks passed. This attestation is cryptographically valid."
-          : res.some(function(r){return r.p===false}) ? "One or more checks failed. This attestation may be invalid or tampered with."
-          : "Some checks are indeterminate. Provide the public key (via Proofcard) for full verification."
-      )
+      // Summary — compute separately for Part 1 and Part 2
+      (function() {
+        var p1 = res.filter(function(r){return !r.section && r.l!=="Content file matches Proof Card" && r.l!=="Filename note"});
+        var p2 = res.filter(function(r){return r.l==="Content file matches Proof Card"});
+        var cryptoOk = p1.every(function(r){return r.p===true});
+        var cryptoFail = p1.some(function(r){return r.p===false});
+        var contentOk = p2.length>0 && p2[0].p===true;
+        var contentFail = p2.length>0 && p2[0].p===false;
+        var noContent = p2.length===0;
+        var summaryParts = [];
+        if(cryptoOk && contentOk) {
+          return e("div",{style:{padding:"14px 16px",borderRadius:6,marginTop:8,fontFamily:mo,fontSize:12,lineHeight:1.6,background:"rgba(74,222,128,0.06)",border:"1px solid rgba(74,222,128,0.2)",color:"#4ade80"}},
+            "✓ Full verification passed. This Proof Card is cryptographically valid AND matches the provided content.");
+        }
+        if(cryptoOk && noContent) {
+          return e("div",{style:{padding:"14px 16px",borderRadius:6,marginTop:8,fontFamily:mo,fontSize:12,lineHeight:1.6,background:"rgba(250,204,21,0.06)",border:"1px solid rgba(250,204,21,0.2)",color:"#facc15"}},
+            "✓ Crypto checks passed. Add the original content file above for full verification.");
+        }
+        if(cryptoOk && contentFail) {
+          return e("div",{style:{padding:"14px 16px",borderRadius:6,marginTop:8,fontFamily:mo,fontSize:12,lineHeight:1.6,background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",color:"#f87171"}},
+            "⚠ Crypto is valid, but this file does NOT match the Proof Card. The Proof Card attests to different content.");
+        }
+        if(cryptoFail) {
+          return e("div",{style:{padding:"14px 16px",borderRadius:6,marginTop:8,fontFamily:mo,fontSize:12,lineHeight:1.6,background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",color:"#f87171"}},
+            "✗ Cryptographic verification failed. This attestation may be invalid or tampered with.");
+        }
+        return e("div",{style:{padding:"14px 16px",borderRadius:6,marginTop:8,fontFamily:mo,fontSize:12,lineHeight:1.6,background:"rgba(250,204,21,0.06)",border:"1px solid rgba(250,204,21,0.2)",color:"#facc15"}},
+          "Some checks are indeterminate. Provide the public key (via Proofcard) for full verification.");
+      })()
     )
   );
 }
