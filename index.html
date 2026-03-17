@@ -64,6 +64,7 @@ em{font-style:italic}
 <div id="root"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
 <script>
 // ============================================================
 // HIP — HUMAN INTEGRITY PROTOCOL · Landing + Tools
@@ -106,6 +107,69 @@ var canonJSON = function(o) {
   if(Array.isArray(o)) return "["+o.map(function(v){return canonJSON(v)}).join(",")+"]";
   return "{"+Object.keys(o).sort().filter(function(k){return o[k]!==undefined}).map(function(k){return JSON.stringify(k)+":"+canonJSON(o[k])}).join(",")+"}"
 };
+
+// ── EXIF / HIP Metadata helpers ──
+var HIP_EXIF_MARKER = "HIP-Protocol:attested";
+var HAS_PIEXIF = typeof piexif !== "undefined";
+
+function isJpeg(fname) {
+  if(!fname) return false;
+  var ext = fname.toLowerCase().split(".").pop();
+  return ext === "jpg" || ext === "jpeg";
+}
+
+function fileToDataURL(file) {
+  return new Promise(function(resolve, reject) {
+    var r = new FileReader();
+    r.onload = function() { resolve(r.result); };
+    r.onerror = function() { reject(new Error("Failed to read file")); };
+    r.readAsDataURL(file);
+  });
+}
+
+function dataURLtoBytes(dataURL) {
+  var parts = dataURL.split(",");
+  var raw = atob(parts[1]);
+  var arr = new Uint8Array(raw.length);
+  for(var i=0;i<raw.length;i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+function readHipExif(dataURL) {
+  if(!HAS_PIEXIF) return null;
+  try {
+    var exifObj = piexif.load(dataURL);
+    var uc = exifObj.Exif && exifObj.Exif[piexif.ExifIFD.UserComment];
+    if(uc) {
+      var str = typeof uc === "string" ? uc : new TextDecoder().decode(new Uint8Array(uc));
+      str = str.replace(/^ASCII\x00\x00\x00/, "");
+      if(str.indexOf(HIP_EXIF_MARKER) !== -1) {
+        try { return JSON.parse(str.substring(str.indexOf("{"))); }
+        catch(ex) { return {raw:str}; }
+      }
+    }
+    return null;
+  } catch(ex) { return null; }
+}
+
+function embedHipExif(dataURL, hipMeta) {
+  if(!HAS_PIEXIF) throw new Error("EXIF library not available");
+  try {
+    var exifObj;
+    try { exifObj = piexif.load(dataURL); }
+    catch(ex) { exifObj = {"0th":{},"Exif":{},"GPS":{},"1st":{}}; }
+    if(!exifObj.Exif) exifObj.Exif = {};
+    if(!exifObj["0th"]) exifObj["0th"] = {};
+    var metaStr = JSON.stringify(hipMeta);
+    exifObj.Exif[piexif.ExifIFD.UserComment] = metaStr;
+    exifObj["0th"][piexif.ImageIFD.ImageDescription] = "HIP Attested — hipprotocol.org — ProofCard: " + hipMeta.proofCardFilename;
+    exifObj["0th"][piexif.ImageIFD.Software] = "HIP Protocol (hipprotocol.org)";
+    var exifStr = piexif.dump(exifObj);
+    return piexif.insert(exifStr, dataURL);
+  } catch(ex) {
+    throw new Error("Failed to embed EXIF: " + ex.message);
+  }
+}
 
 // ── Scroll fade ──
 function useVis(th) {
@@ -334,14 +398,6 @@ var wrapSetCred = function(c) {
 };
 
 var doT2=async function(){
-  // S21: Check for existing credential and warn
-  var existing = loadCredFromStorage();
-  if(existing && !window._hipDupWarned) {
-    window._hipDupWarned = true;
-    if(!confirm("You already have a saved credential ("+existing.credentialId.substring(0,12)+"…). Creating a new one will replace it. Continue?")) {
-      setBusy(false); return;
-    }
-  }
   setBusy(true);setErr(null);setWaStep(1);
 try{var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
@@ -376,21 +432,65 @@ bioConfirmed&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.
 e("div",{style:{fontSize:22,marginBottom:6}},"✓"),
 e("div",{style:{fontFamily:mo,fontSize:13,fontWeight:600,color:"#4ade80",marginBottom:4}},"Biometric Verified"),
 e("div",{style:{fontSize:12,color:t2,lineHeight:1.5}},"Your device confirmed your identity via "+(navigator.userAgent.match(/iPhone|iPad/i)?"Face ID / Touch ID":navigator.userAgent.match(/Mac/i)?"Touch ID":"Windows Hello / biometric")+". This verification is cryptographically bound to your credential.")),
+// S21b: Explicit auto-save confirmation (shows after new credential creation)
+bioConfirmed&&ToolAlert("success",e("span",null,"Your credential has been ",e("strong",null,"saved in this browser automatically"),". It will be here next time you visit. Download a backup copy below in case you clear your browser data or switch devices.")),
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:6}},tn),
-e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},autoLoaded?"✓ Credential restored automatically":"✓ Credential loaded")),
+e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
 e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
 autoLoaded&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
 e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e("code",{style:wizRV},cred.credentialId),
 e("div",{style:wizRL},"Public Key"),e("code",{style:wizRV},cred.publicKey),
-e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—")),
-e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Save Credential File"),
-ToolAlert("warn",e("span",null,e("strong",null,"Keep this file safe.")," Your credential is also saved in this browser, but downloading a backup ensures you never lose access.")))}
+e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—"),
+e("div",{style:wizRL},"Saved"),e("code",{style:wizRV},"This browser ("+window.location.hostname+")")),
+e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy"),
+ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")))}
+
+// S21b: Retirement confirmation state
+var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
 
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you're a verified human. Choose how to verify, or load an existing credential."),
 err&&ToolAlert("danger",err),
-!mode&&e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+
+// S21b: If a saved credential exists in localStorage but isn't loaded yet, show gate
+!mode&&!cred&&(function(){
+  var saved = loadCredFromStorage();
+  if(saved && saved.version === "hip-credential-v1" && !retireMode) {
+    var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Biometric":saved.tier===3?"Tier 3 — Peer Vouch":"Credential";
+    return e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+      e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(212,160,84,0.25)",borderRadius:8}},
+        e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}},"EXISTING CREDENTIAL FOUND"),
+        e("div",{style:{fontSize:14,fontWeight:600,color:t1,marginBottom:4}},sTn),
+        e("div",{style:{fontFamily:mo,fontSize:11,color:t2,wordBreak:"break-all",marginBottom:4}},"ID: "+saved.credentialId.substring(0,24)+"…"),
+        saved.created&&e("div",{style:{fontFamily:mo,fontSize:11,color:t2}},"Created: "+new Date(saved.created).toLocaleDateString())),
+      ToolAlert("info",e("span",null,"You already have a credential saved in this browser. HIP follows a ",e("strong",null,"one credential per human")," principle. Use your existing credential or retire it to create a new one.")),
+      e("button",{style:Object.assign({},btnG,{width:"100%"}),onClick:function(){
+        // Load the saved credential
+        (async function(){
+          try{
+            saved._priv=await crypto.subtle.importKey("pkcs8",b64d(saved.privateKey),"Ed25519",false,["sign"]);
+            saved._pub=await crypto.subtle.importKey("raw",unhex(saved.publicKey),"Ed25519",true,["verify"]);
+            wrapSetCred(saved);setAutoLoaded(true);setErr(null);
+          }catch(ex){setErr("Failed to load saved credential: "+ex.message)}
+        })()
+      }},"Use My Existing Credential"),
+      e("button",{style:Object.assign({},btnSm,{width:"100%",marginTop:2}),onClick:function(){setRetireMode(true)}},"Retire and create a new credential"));
+  }
+  return null;
+})(),
+
+// S21b: Retirement confirmation screen
+!mode&&retireMode&&e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+  ToolAlert("danger",e("span",null,e("strong",null,"Retiring a credential is permanent.")," Your old credential will be removed from this browser. Any Proof Cards signed with it remain valid, but you won't be able to create new attestations with it. Make sure you've saved a backup of your old credential file if you need it.")),
+  e("div",{style:{display:"flex",gap:8}},
+    e("button",{style:Object.assign({},btnSm,{flex:1}),onClick:function(){setRetireMode(false)}},"← Cancel"),
+    e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"12px 24px",background:"#dc2626",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){
+      clearCredStorage();setRetireMode(false);window._hipDupWarned=false;
+    }},"Retire Credential — I understand"))),
+
+// Normal tier selection (only shows when no saved credential exists, or after retirement)
+!mode&&!retireMode&&!(function(){var s=loadCredFromStorage();return s&&s.version==="hip-credential-v1"}())&&e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
 e("button",{onClick:function(){setMode("t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:go,border:"1px solid rgba(212,160,84,0.3)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700}},"Tier 1 — Government ID"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Highest assurance — coming soon"))),
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
@@ -522,22 +622,60 @@ var ss=useState(0);var step=ss[0];var setStep=ss[1];
 var ls=useState("idle");var lv=ls[0];var setLv=ls[1];
 var sts=useState(false);var showTech=sts[0];var setShowTech=sts[1];
 var fref=useRef(null);
+// S21b: EXIF state
+var jps=useState(false);var isJpg=jps[0];var setIsJpg=jps[1];
+var exs=useState(null);var existingHip=exs[0];var setExistingHip=exs[1];
+var drs=useState(null);var rawDataURL=drs[0];var setRawDataURL=drs[1];
+var eds=useState(null);var embeddedDataURL=eds[0];var setEmbeddedDataURL=eds[1];
 
 if(!cred)return e("p",{style:{fontSize:14,color:t2}},"Get your credential first (Credential tab), then come here to attest.");
 
 var pickFile=async function(ev){var f=ev.target.files&&ev.target.files[0];if(!f)return;
-setFname(f.name);setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1)};
+setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);
+var jpeg=isJpeg(f.name)&&HAS_PIEXIF;setIsJpg(jpeg);
+if(jpeg){
+  // Read as DataURL for EXIF inspection
+  var du=await fileToDataURL(f);
+  setRawDataURL(du);
+  var existing=readHipExif(du);
+  if(existing){setExistingHip(existing);setStep(-1);return}
+  // No existing HIP metadata — proceed normally but don't hash yet (hash after embed)
+  // Compute preliminary hash of the raw file for display
+  setHash(await sha256(new Uint8Array(await f.arrayBuffer())));
+  setStep(1);
+} else {
+  setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1);
+}};
 
 var buildIt=async function(){setBuilding(true);
 var now=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
 var ld="unverified";
 if(cred.tier===2&&cred.webauthn&&cred.webauthn.credentialId){setLv("prompting");
 try{await waLiveness(cred.webauthn.credentialId);ld="device-attested";setLv("done")}catch(ex){setLv("failed")}}
+
+// S21b: For JPEG files, embed HIP metadata before hashing
+var finalHash=hash;
+var pcFilename="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";
+if(isJpg&&rawDataURL){
+  try{
+    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
+    var embedded=embedHipExif(rawDataURL,hipMeta);
+    setEmbeddedDataURL(embedded);
+    // Hash the embedded version — this is the canonical hash
+    var embeddedBytes=dataURLtoBytes(embedded);
+    finalHash=await sha256(embeddedBytes);
+    setHash(finalHash);
+  }catch(ex){
+    // EXIF embed failed — fall back to raw file hash
+    setEmbeddedDataURL(null);
+  }
+}
+
 var content={
 "@context":["https://www.w3.org/2018/credentials/v1","https://hip.protocol/contexts/v1"],
 attestation:{attestationChain:null,editorialStatement:editorial,priorVersion:null,type:"OriginalAttestation"},
 bundleMetadata:{processingNode:"local-poc",schemaExtensions:[]},
-credentialSubject:{classification:cls,contentHash:hash,contentType:"application/octet-stream",hashAlgorithm:"sha-256",id:"urn:hip:content:"+hash,
+credentialSubject:{classification:cls,contentHash:finalHash,contentType:"application/octet-stream",hashAlgorithm:"sha-256",id:"urn:hip:content:"+finalHash,
 originalFilename:fname||null,
 credentialTier:cred.tier,credentialPathway:cred.pathway,livenessDesignation:ld},
 issuanceDate:now,
@@ -550,10 +688,25 @@ var sigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encod
 var full=Object.assign({},content,{id:"urn:hip:bundle:"+ch,
 proof:{created:now,proofPurpose:"assertionMethod",proofValue:b64e(sigBuf),type:"Ed25519Signature2020",verificationMethod:cred.credentialId},
 signalAnnotations:[]});
-var anch={anchorLink:"hip://"+ch.substring(0,8)+"/"+ch,bundleHash:ch,classification:cls,contentHash:hash,credentialId:cred.credentialId,timestamp:now,type:"HIPProofAnchor",version:"WF-v1.0"};
+var anch={anchorLink:"hip://"+ch.substring(0,8)+"/"+ch,bundleHash:ch,classification:cls,contentHash:finalHash,credentialId:cred.credentialId,timestamp:now,type:"HIPProofAnchor",version:"WF-v1.0"};
 setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);setStep(4)};
 
+var dlEmbeddedJpeg=function(){
+  if(!embeddedDataURL)return;
+  var bytes=dataURLtoBytes(embeddedDataURL);
+  var blob=new Blob([bytes],{type:"image/jpeg"});
+  var u=URL.createObjectURL(blob);
+  var a=document.createElement("a");a.href=u;a.download=fname||"attested.jpg";a.click();URL.revokeObjectURL(u);
+};
+
 var cats=[["CompleteHumanOrigin","CHO","Complete Human Origin — I made this entirely myself"],["HumanOriginAssisted","HOA","Human Origin Assisted — I used some AI help"],["HumanDirectedCollaborative","HDC","Human-Directed Collaborative — I directed AI to make this"]];
+
+// S21b: Existing HIP attestation detected
+if(step===-1&&existingHip){
+return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+ToolAlert("warn",e("span",null,e("strong",null,"This file already has a HIP attestation.")," It was attested",existingHip.timestamp?" on "+existingHip.timestamp.split("T")[0]:""," with credential ",existingHip.credentialId?existingHip.credentialId+"…":"",(existingHip.proofCardFilename?". Proof Card: "+existingHip.proofCardFilename:""),".")),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},"You can verify this attestation in the Verify tab. If you want to re-attest this file, you'll need to use the original version without HIP metadata."),
+e("button",{style:btnSm,onClick:function(){setStep(0);setHash(null);setFname(null);setExistingHip(null);setRawDataURL(null)}},"← Choose a different file"))}
 
 if(step===4&&proofcard){
 var clsN={"CompleteHumanOrigin":"Complete Human Origin","HumanOriginAssisted":"Human Origin Assisted","HumanDirectedCollaborative":"Human-Directed Collaborative"}[proofcard.proofBundle.credentialSubject.classification]||cls;
@@ -575,23 +728,30 @@ showTech&&e("div",{style:{padding:14,background:dkc,borderRadius:6,border:"1px s
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e("code",{style:Object.assign({},wizRV,{color:go})},bHash)),
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{style:wizRV},proofcard.proofBundle.id)),
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
+// S21b: Download section — attested JPEG + Proof Card
+embeddedDataURL&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
+ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's EXIF.")),
+e("button",{style:Object.assign({},btnG,{width:"100%",marginBottom:8}),onClick:dlEmbeddedJpeg},"↓ Save Attested "+fname),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(212,160,84,0.2)"}},
-e("button",{style:Object.assign({},btnG,{width:"100%"})  ,onClick:function(){var pcName="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_")+"_":"")+bHash.substring(0,8)+".json";dl(proofcard,pcName)}},"↓ Save Proof Card")),
+e("button",{style:Object.assign({},embeddedDataURL?btnDl:btnG,{width:"100%"}),onClick:function(){var pcName="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";dl(proofcard,pcName)}},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
 e("button",{style:btnDl,onClick:function(){dl(proofcard.proofBundle,"HIP_Bundle.json")}},"↓ Bundle"),
 e("button",{style:btnDl,onClick:function(){dl(proofcard.proofAnchor,"HIP_Anchor.json")}},"↓ Anchor")),
-e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false)}},"Attest Another"))}
+e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null)}},"Attest Another"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===2&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
 e("p",{style:{fontSize:14,color:t2}},"Select a file. Its fingerprint is computed locally — nothing leaves your device."),
 e("div",{style:{border:"2px dashed "+bd,borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer"},onClick:function(){fref.current&&fref.current.click()}},
 e("input",{ref:fref,type:"file",style:{display:"none"},onChange:pickFile}),
-e("span",{style:{color:t2}},"Click to select a file")));
+e("span",{style:{color:t2}},"Click to select a file")),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG images get HIP metadata embedded in EXIF — the attestation travels with the file."));
 
 if(step===1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname),
-e("div",{style:wizRL},"Content Fingerprint"),e("code",{style:Object.assign({},wizRV,{color:go})},hash)),
+e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,isJpg&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},"EXIF embed")),
+e("div",{style:wizRL},"Content Fingerprint"),e("code",{style:Object.assign({},wizRV,{color:go})},hash),
+isJpg&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Final hash will be computed after HIP metadata is embedded.")),
 e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
 cats.map(function(c){return e("button",{key:c[0],style:{display:"block",width:"100%",textAlign:"left",padding:"12px 16px",border:"1px solid "+(cls===c[0]?go:bd),borderRadius:6,background:cls===c[0]?gg:"transparent",color:t1,fontSize:13,fontFamily:sans,cursor:"pointer",marginBottom:4},onClick:function(){setCls(c[0])}},
 e("span",{style:{fontFamily:mo,color:go,fontWeight:600,marginRight:8}},c[1])," ",c[2])}),
