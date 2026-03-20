@@ -373,7 +373,7 @@ var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "err
     // base64url → base64
     var base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
     while (base64.length % 4 !== 0) base64 += "=";
-    var json = decodeURIComponent(escape(atob(base64)));
+    var json = new TextDecoder().decode(Uint8Array.from(atob(base64), function(c){ return c.charCodeAt(0) }));
     var cred = JSON.parse(json);
     // Validate
     if (!cred || cred.version !== "hip-credential-v1" || !cred.credentialId || !cred.publicKey || !cred.privateKey || !cred.tier) {
@@ -413,8 +413,6 @@ var ws=useState(null);var waEnv=ws[0];var setWaEnv=ws[1];
 var ms=useState(null);var mode=ms[0];var setMode=ms[1];
 var was=useState(0);var waStep=was[0];var setWaStep=was[1];
 var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
-// S24: Cross-domain import result
-var irs=useState(HIP_IMPORT_RESULT);var importResult=irs[0];
 // S21: biometric confirmation state
 var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
 
@@ -490,10 +488,10 @@ e("div",{style:{fontSize:12,color:t2,lineHeight:1.5}},"Your device confirmed you
 bioConfirmed&&ToolAlert("success",e("span",null,"Your credential has been ",e("strong",null,"saved in this browser automatically"),". It will be here next time you visit. Download a backup copy below in case you clear your browser data or switch devices.")),
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:6}},tn),
-e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},importResult==="imported"?"✓ Credential imported from hipverify.org":autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
+e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},HIP_IMPORT_RESULT==="imported"?"✓ Credential imported from hipverify.org":autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
 e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
-importResult==="imported"&&ToolAlert("success",e("span",null,"Your Tier 1 credential was ",e("strong",null,"transferred from hipverify.org")," and saved in this browser. You can start attesting right away.")),
-autoLoaded&&!importResult&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
+HIP_IMPORT_RESULT==="imported"&&ToolAlert("success",e("span",null,"Your Tier 1 credential was ",e("strong",null,"transferred from hipverify.org")," and saved in this browser. You can start attesting right away.")),
+autoLoaded&&!HIP_IMPORT_RESULT&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
 e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e("code",{style:wizRV},cred.credentialId),
 e("div",{style:wizRL},"Public Key"),e("code",{style:wizRV},cred.publicKey),
 e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—"),
@@ -507,9 +505,9 @@ var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you're a verified human. Choose how to verify, or load an existing credential."),
 err&&ToolAlert("danger",err),
-importResult==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer from hipverify.org was detected, but you ",e("strong",null,"already have a different credential")," in this browser. Retire your existing credential first if you want to import the new one.")),
-importResult==="invalid"&&ToolAlert("danger","A credential transfer link was detected but the data was invalid or corrupted."),
-importResult==="error"&&ToolAlert("danger","Something went wrong processing the credential transfer link. Try downloading a backup from hipverify.org and importing it manually."),
+HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer from hipverify.org was detected, but you ",e("strong",null,"already have a different credential")," in this browser. Retire your existing credential first if you want to import the new one.")),
+HIP_IMPORT_RESULT==="invalid"&&ToolAlert("danger","A credential transfer link was detected but the data was invalid or corrupted."),
+HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing the credential transfer link. Try downloading a backup from hipverify.org and importing it manually."),
 
 // S21b: If a saved credential exists in localStorage but isn't loaded yet, show gate
 !mode&&!cred&&(function(){
@@ -1512,7 +1510,17 @@ function App() {
   );
 }
 
-ReactDOM.render(React.createElement(App), document.getElementById("root"));
+try {
+  ReactDOM.render(React.createElement(App), document.getElementById("root"));
+} catch(ex) {
+  document.getElementById("root").innerHTML = '<div style="max-width:560px;margin:80px auto;padding:24px;font-family:sans-serif;color:#e8e0d4;text-align:center">'
+    + '<h2 style="color:#d4a054;margin-bottom:16px">HIP — Human Integrity Protocol</h2>'
+    + '<p style="margin-bottom:16px;line-height:1.6">This page could not load in your current browser. This is usually caused by strict privacy protections that block cryptographic APIs needed for credential operations.</p>'
+    + '<p style="margin-bottom:16px;line-height:1.6"><strong>To fix this:</strong> Tap the shield or lock icon in your address bar and disable protections for this site, then reload. Alternatively, open this page in Safari, Chrome, or Firefox.</p>'
+    + '<p style="margin-bottom:24px;line-height:1.6;font-size:13px;opacity:0.6">Error: ' + (ex.message || 'Unknown') + '</p>'
+    + '<a href="https://hipprotocol.org" style="color:#d4a054" onclick="location.reload();return false">Reload Page</a>'
+    + '</div>';
+}
 </script>
 </body>
 </html>
