@@ -363,6 +363,35 @@ function clearCredStorage() {
 // validates the credential, saves to localStorage, clears URL.
 // Runs before React mounts so auto-load picks it up.
 // ============================================================
+// ============================================================
+// S25: CRYPTO CAPABILITY DETECTION
+// Detects whether Ed25519 via crypto.subtle actually works.
+// DDG browser and older WebKit may have crypto.subtle but lack
+// Ed25519 support, causing throws that crash the render tree.
+// ============================================================
+var HIP_CRYPTO_OK = null; // null = untested, true = works, false = broken
+var HIP_CRYPTO_ERR = "";
+(function detectCryptoCapability() {
+  try {
+    if (typeof crypto === "undefined" || !crypto.subtle) {
+      HIP_CRYPTO_OK = false;
+      HIP_CRYPTO_ERR = "crypto.subtle is not available in this browser.";
+      return;
+    }
+    // Async test — result stored for later. We test generateKey since
+    // it's the most common failure point for Ed25519 support.
+    crypto.subtle.generateKey("Ed25519", false, ["sign", "verify"])
+      .then(function() { HIP_CRYPTO_OK = true; })
+      .catch(function(ex) {
+        HIP_CRYPTO_OK = false;
+        HIP_CRYPTO_ERR = "Ed25519 not supported: " + (ex.message || ex.name || "unknown error");
+      });
+  } catch(ex) {
+    HIP_CRYPTO_OK = false;
+    HIP_CRYPTO_ERR = "Crypto detection failed: " + (ex.message || "unknown");
+  }
+})();
+
 var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "error"
 (function checkHipImport() {
   try {
@@ -416,30 +445,44 @@ var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
 // S21: biometric confirmation state
 var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
 
-useEffect(function(){detectWA().then(setWaEnv)},[]);
+useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
 // S21: Auto-load credential from localStorage on mount
 // S24: DDG browser fix — surface crypto.subtle errors instead of silent fail
+// S25: Check HIP_CRYPTO_OK before attempting any Ed25519 operations
 useEffect(function(){
   if(cred) return; // already have one
   var saved = loadCredFromStorage();
   if(saved && saved.version === "hip-credential-v1") {
-    (async function(){
-      try {
-        var computed = await sha256(unhex(saved.publicKey));
-        if(computed !== saved.credentialId) return;
-        saved._priv = await crypto.subtle.importKey("pkcs8", b64d(saved.privateKey), "Ed25519", false, ["sign"]);
-        saved._pub = await crypto.subtle.importKey("raw", unhex(saved.publicKey), "Ed25519", true, ["verify"]);
-        setCred(saved);
-        setAutoLoaded(true);
-      } catch(ex) {
-        // crypto.subtle may be unavailable in DDG browser or restrictive environments
-        if (ex.name === "NotSupportedError" || (ex.message && ex.message.indexOf("subtle") !== -1) || typeof crypto === "undefined" || !crypto.subtle) {
-          setErr("Your browser's privacy protections are blocking credential operations. Try tapping the shield/lock icon in the address bar and disabling protections for this site, then reload.");
-        }
-        // else: silent fail for genuinely corrupted storage
+    // Wait briefly for async crypto detection to complete, then attempt load
+    var attempt = function() {
+      if (HIP_CRYPTO_OK === false) {
+        setErr("Your browser doesn't support the cryptographic operations HIP needs (Ed25519). " +
+          (HIP_CRYPTO_ERR ? HIP_CRYPTO_ERR + " " : "") +
+          "Try opening this page in Chrome, Firefox, Safari 17+, or Edge. " +
+          "If you're using DuckDuckGo browser, tap the shield icon in the address bar and disable protections for this site, then reload.");
+        return;
       }
-    })();
+      if (HIP_CRYPTO_OK === null) {
+        // Detection still running — retry shortly
+        setTimeout(attempt, 50);
+        return;
+      }
+      (async function(){
+        try {
+          var computed = await sha256(unhex(saved.publicKey));
+          if(computed !== saved.credentialId) return;
+          saved._priv = await crypto.subtle.importKey("pkcs8", b64d(saved.privateKey), "Ed25519", false, ["sign"]);
+          saved._pub = await crypto.subtle.importKey("raw", unhex(saved.publicKey), "Ed25519", true, ["verify"]);
+          setCred(saved);
+          setAutoLoaded(true);
+        } catch(ex) {
+          setErr("Your browser's privacy protections are blocking credential operations (Ed25519). Try tapping the shield/lock icon in the address bar and disabling protections for this site, then reload. If that doesn't work, try Chrome, Firefox, or Safari 17+.");
+        }
+      })();
+    };
+    // Small delay to let the async crypto detection finish
+    setTimeout(attempt, 30);
   }
 }, []);
 
@@ -450,6 +493,11 @@ var wrapSetCred = function(c) {
 };
 
 var doT2=async function(){
+  // S25: Check crypto capability before attempting Ed25519 operations
+  if (HIP_CRYPTO_OK === false) {
+    setErr("Your browser doesn't support Ed25519 cryptography needed for credential creation. Try Chrome, Firefox, Safari 17+, or Edge. If using DuckDuckGo browser, tap the shield icon and disable protections for this site.");
+    return;
+  }
   setBusy(true);setErr(null);setWaStep(1);
 try{var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
@@ -470,6 +518,8 @@ setErr(ex.name==="NotAllowedError"?"Biometric cancelled or timed out. Try again.
 
 var doImport=async function(d,er){if(er){setErr(er);return}
 if(!d||d.version!=="hip-credential-v1"){setErr("Not a valid HIP credential file.");return}
+// S25: Check crypto capability
+if (HIP_CRYPTO_OK === false) {setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");return}
 try{var computed=await sha256(unhex(d.publicKey));
 if(computed!==d.credentialId){setErr("Credential integrity check failed.");return}
 d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);
@@ -505,6 +555,8 @@ var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you're a verified human. Choose how to verify, or load an existing credential."),
 err&&ToolAlert("danger",err),
+// S25: Persistent crypto-unavailable warning
+HIP_CRYPTO_OK===false&&!err&&ToolAlert("danger",e("span",null,e("strong",null,"Crypto not available: "),"Your browser doesn't support Ed25519 cryptography needed for HIP credentials. ",e("br"),e("br"),"If you're using DuckDuckGo browser, tap the ",e("strong",null,"shield icon")," in the address bar and disable protections for this site, then reload. Otherwise, try Chrome, Firefox, Safari 17+, or Edge.")),
 HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer from hipverify.org was detected, but you ",e("strong",null,"already have a different credential")," in this browser. Retire your existing credential first if you want to import the new one.")),
 HIP_IMPORT_RESULT==="invalid"&&ToolAlert("danger","A credential transfer link was detected but the data was invalid or corrupted."),
 HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing the credential transfer link. Try downloading a backup from hipverify.org and importing it manually."),
@@ -522,13 +574,18 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
         saved.created&&e("div",{style:{fontFamily:mo,fontSize:11,color:t2}},"Created: "+new Date(saved.created).toLocaleDateString())),
       ToolAlert("info",e("span",null,"You already have a credential saved in this browser. HIP follows a ",e("strong",null,"one credential per human")," principle. Use your existing credential or retire it to create a new one.")),
       e("button",{style:Object.assign({},btnG,{width:"100%"}),onClick:function(){
+        // S25: Check crypto capability before attempting Ed25519 operations
+        if (HIP_CRYPTO_OK === false) {
+          setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge. If using DuckDuckGo browser, tap the shield icon and disable protections for this site.");
+          return;
+        }
         // Load the saved credential
         (async function(){
           try{
             saved._priv=await crypto.subtle.importKey("pkcs8",b64d(saved.privateKey),"Ed25519",false,["sign"]);
             saved._pub=await crypto.subtle.importKey("raw",unhex(saved.publicKey),"Ed25519",true,["verify"]);
             wrapSetCred(saved);setAutoLoaded(true);setErr(null);
-          }catch(ex){setErr("Failed to load saved credential: "+ex.message)}
+          }catch(ex){setErr("Failed to load saved credential: "+ex.message+". Try Chrome, Firefox, or Safari 17+.")}
         })()
       }},"Use My Existing Credential"),
       e("button",{style:Object.assign({},btnSm,{width:"100%",marginTop:2}),onClick:function(){setRetireMode(true)}},"Retire and create a new credential"));
@@ -599,7 +656,9 @@ var ts=useState(null);var token=ts[0];var setToken=ts[1];
 var ks=useState(null);var rKeys=ks[0];var setRKeys=ks[1];
 var tts=useState("");var tText=tts[0];var setTText=tts[1];
 
-var signV=async function(){setBusy(true);try{var pk=rPub.trim();
+var signV=async function(){setBusy(true);try{
+if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");setBusy(false);return}
+var pk=rPub.trim();
 if(!pk||pk.length!==64){props.setErr("Enter the recipient's 64-character public key.");setBusy(false);return}
 var privKey=vCred._priv;
 var t={version:"hip-vouch-token-v1",nonce:mkNonce(),timestamp:new Date().toISOString().replace(/\.\d{3}Z$/,"Z"),
@@ -608,6 +667,7 @@ var canon=canonJSON(t);var sigBuf=await crypto.subtle.sign("Ed25519",privKey,new
 setToken(Object.assign({},t,{signature:b64e(sigBuf)}));setStep(3);setBusy(false)}catch(ex){props.setErr("Error: "+ex.message);setBusy(false)}};
 
 var genK=async function(){setBusy(true);try{
+if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");setBusy(false);return}
 var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
 var cid=await sha256(unhex(pub));var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
@@ -706,7 +766,9 @@ if(jpeg){
   setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1);
 }};
 
-var buildIt=async function(){setBuilding(true);
+var buildIt=async function(){
+if(HIP_CRYPTO_OK===false){setErr&&setErr("Your browser doesn't support Ed25519 cryptography needed for signing.");return}
+setBuilding(true);
 var now=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
 var ld="unverified";
 if(cred.tier===2&&cred.webauthn&&cred.webauthn.credentialId){setLv("prompting");
