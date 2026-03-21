@@ -444,6 +444,8 @@ var was=useState(0);var waStep=was[0];var setWaStep=was[1];
 var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
 // S21: biometric confirmation state
 var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
+// S21b: Retirement confirmation state (MUST be here with other hooks, not after conditional return)
+var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
 
 useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
@@ -549,8 +551,7 @@ e("div",{style:wizRL},"Saved"),e("code",{style:wizRV},"This browser ("+window.lo
 e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy"),
 ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")))}
 
-// S21b: Retirement confirmation state
-var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
+// S25: retireMode useState moved to top of CredPanel (hook ordering fix)
 
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you're a verified human. Choose how to verify, or load an existing credential."),
