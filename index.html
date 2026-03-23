@@ -444,22 +444,18 @@ function QrTransferPanel(props) {
   var onImport = props.onImport;
   var setErr = props.setErr;
 
-  // Generate transfer code + key on mount
   useEffect(function() {
-    if (qrState) return; // already initialized
-    // Generate random transfer code (16 hex chars) and AES-256 key (32 bytes)
+    if (qrState) return;
     var codeBytes = new Uint8Array(8);
     crypto.getRandomValues(codeBytes);
     var code = Array.from(codeBytes).map(function(b){return b.toString(16).padStart(2,"0")}).join("");
     var keyBytes = new Uint8Array(32);
     crypto.getRandomValues(keyBytes);
-    // base64url encode the key
     var keyB64 = btoa(String.fromCharCode.apply(null, keyBytes))
       .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     setQrState({ code: code, key: keyB64, keyBytes: keyBytes, status: "waiting", pollCount: 0 });
   }, []);
 
-  // Render QR code when state is ready
   useEffect(function() {
     if (!qrState || qrState.status !== "waiting") return;
     var el = qrRef.current;
@@ -480,7 +476,6 @@ function QrTransferPanel(props) {
     }
   }, [qrState && qrState.status]);
 
-  // Poll for transfer
   useEffect(function() {
     if (!qrState || qrState.status !== "waiting") return;
     var cancelled = false;
@@ -490,7 +485,6 @@ function QrTransferPanel(props) {
         var resp = await fetch(HIP_WORKER_URL + "/transfer/" + qrState.code);
         var data = await resp.json();
         if (data.status === "ready" && data.encrypted) {
-          // Decrypt
           try {
             var raw = atob(data.encrypted);
             var packed = new Uint8Array(raw.length);
@@ -502,14 +496,13 @@ function QrTransferPanel(props) {
             var json = new TextDecoder().decode(plainBuf);
             var credObj = JSON.parse(json);
             setQrState(Object.assign({}, qrState, { status: "received" }));
-            // Import the credential using the existing import handler
             onImport(credObj, null);
           } catch (ex) {
             setQrState(Object.assign({}, qrState, { status: "error", error: "Decryption failed: " + ex.message }));
           }
           return;
         }
-      } catch (ex) { /* network error, keep polling */ }
+      } catch (ex) {}
       if (!cancelled && qrState.pollCount < 120) {
         qrState.pollCount++;
         setTimeout(poll, 2000);
@@ -544,7 +537,6 @@ function QrTransferPanel(props) {
       e("button", {style: btnSm, onClick: function() { setQrState(null); }}, "Generate New QR Code"));
   }
 
-  // Waiting state — show QR
   return e("div", {style:{display:"flex",flexDirection:"column",alignItems:"center",gap:16}},
     e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,textTransform:"uppercase",color:go,marginBottom:4}}, "SCAN WITH YOUR PHONE"),
     e("div", {ref: qrRef, style:{padding:16,background:"#0a0e18",borderRadius:12,border:"1px solid "+bd}}),
