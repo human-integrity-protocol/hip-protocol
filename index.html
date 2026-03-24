@@ -285,7 +285,7 @@ var dl = function(obj, name) {
 // ============================================================
 
 // ============================================================
-// S20 TOOL — Tier 2 WebAuthn, Tier 3 Peer Vouch, Tier 1 info
+// S20 TOOL — Tier 3 WebAuthn (S29: was Tier 2), Tier 2 Peer Vouch (S29: was Tier 3), Tier 1 info
 // Replaces old AttestWizard/VerifyWizard with tabbed tool
 // ============================================================
 
@@ -350,7 +350,21 @@ function loadCredFromStorage() {
   try {
     var raw = localStorage.getItem(HIP_CRED_KEY);
     if(!raw) return null;
-    return JSON.parse(raw);
+    var cred = JSON.parse(raw);
+    // S29: Tier migration — Tier 2 biometric → Tier 3, Tier 3 vouch → Tier 2
+    if(cred && cred.version === "hip-credential-v1" && !cred._tierMigrated) {
+      var changed = false;
+      if(cred.tier === 2 && cred.pathway === "device-biometric-webauthn-v1") {
+        cred.tier = 3; changed = true;
+      } else if(cred.tier === 3 && cred.pathway === "peer-vouch-bound-token-v1") {
+        cred.tier = 2; changed = true;
+      }
+      if(changed) {
+        cred._tierMigrated = "s29";
+        localStorage.setItem(HIP_CRED_KEY, JSON.stringify(cred));
+      }
+    }
+    return cred;
   } catch(ex) { return null; }
 }
 
@@ -425,6 +439,8 @@ var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "err
     // Save
     localStorage.setItem(HIP_CRED_KEY, JSON.stringify(cred));
     HIP_IMPORT_RESULT = "imported";
+    // S29: Initialize trust record for imported credential
+    try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,tier:cred.tier})})}catch(te){}
     window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
   } catch (ex) {
     HIP_IMPORT_RESULT = "error";
@@ -614,24 +630,54 @@ var wrapSetCred = function(c) {
   if(c) { saveCredToStorage(c); } else { clearCredStorage(); }
 };
 
-var doT2=async function(){
+var doT3Bio=async function(){
   // S25: Check crypto capability before attempting Ed25519 operations
   if (HIP_CRYPTO_OK === false) {
     setErr("Your browser doesn't support Ed25519 cryptography needed for credential creation. Try Chrome, Firefox, Safari 17+, or Edge. If using DuckDuckGo browser, tap the shield icon and disable protections for this site.");
     return;
   }
   setBusy(true);setErr(null);setWaStep(1);
-try{var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
+try{
+// S29: Server-side registration — request challenge from worker
+var challengeResp=await fetch(HIP_WORKER_URL+"/tier3/challenge",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+if(!challengeResp.ok){var cErr=await challengeResp.json().catch(function(){return{message:"Server error"}});setErr(challengeResp.status===429?cErr.message||"Rate limit exceeded. Try again later.":"Server error: "+(cErr.error||cErr.message));setBusy(false);setWaStep(0);return}
+var challengeData=await challengeResp.json();
+var serverChallenge=Uint8Array.from(atob(challengeData.challenge),function(c){return c.charCodeAt(0)});
+
+var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
 var cid=await sha256(unhex(pub));
-var wa=await createWACred(cid.slice(0,32));
+
+// S29: Use server challenge for WebAuthn
+var waOpts={publicKey:{rp:{name:"HIP Protocol",id:location.hostname},
+user:{id:new TextEncoder().encode(challengeData.session_id),name:"HIP Creator",displayName:"HIP Creator"},
+challenge:serverChallenge,
+pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
+authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
+timeout:120000,attestation:"direct"}};
+var waResult=await navigator.credentials.create(waOpts);
+var waCredId=b64e(waResult.rawId);
+var waAttObj=b64e(waResult.response.attestationObject);
+var waCdj=b64e(waResult.response.clientDataJSON);
+var waTs=new Date().toISOString();
+
+// S29: Send attestation to worker for validation
+var regResp=await fetch(HIP_WORKER_URL+"/tier3/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+session_id:challengeData.session_id,credential_id:waCredId,attestation_object:waAttObj,client_data_json:waCdj,public_key:pub})});
+if(!regResp.ok){var rErr=await regResp.json().catch(function(){return{message:"Registration failed"}});setErr(regResp.status===429?rErr.message||"Rate limit exceeded.":"Registration failed: "+(rErr.error||rErr.message));setBusy(false);setWaStep(0);return}
+var regData=await regResp.json();
+
 var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
 var newCred={version:"hip-credential-v1",credentialId:cid,publicKey:pub,privateKey:b64e(privBytes),
-tier:2,pathway:"device-biometric-webauthn-v1",
-webauthn:{credentialId:wa.credId,attestationObject:wa.attObj,clientDataJSON:wa.cdj},
-issuanceProof:{type:"webauthn-platform-biometric",timestamp:wa.ts,userVerification:"required"},
+tier:3,pathway:"device-biometric-webauthn-v1",
+webauthn:{credentialId:waCredId,attestationObject:waAttObj,clientDataJSON:waCdj},
+issuanceProof:{type:"server-validated-webauthn-v1",sessionId:challengeData.session_id,issuanceToken:regData.issuance_token,timestamp:regData.timestamp,attestationFormat:regData.attestation_format||"unknown",userVerification:"required"},
 created:new Date().toISOString(),warning:"This file contains your private key. Store it securely.",
 _priv:kp.privateKey,_pub:kp.publicKey};
+
+// S29: Initialize trust record
+try{await fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cid,tier:3})})}catch(te){}
+
 wrapSetCred(newCred);
 // S21: Show biometric confirmation before advancing
 setBioConfirmed(true);
@@ -649,7 +695,7 @@ d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["v
 wrapSetCred(d);setErr(null)}catch(ex){setErr("Failed to load: "+ex.message)}};
 
 if(cred){
-var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — BIOMETRIC":cred.tier===3?"TIER 3 — PEER VOUCH":"CREDENTIAL";
+var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 // S21: Biometric confirmation banner (shows immediately after biometric creation)
 bioConfirmed&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.06)",border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,marginBottom:4,textAlign:"center"}},
@@ -686,7 +732,7 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
 !mode&&!cred&&(function(){
   var saved = loadCredFromStorage();
   if(saved && saved.version === "hip-credential-v1" && !retireMode) {
-    var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Biometric":saved.tier===3?"Tier 3 — Peer Vouch":"Credential";
+    var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Peer Vouch":saved.tier===3?"Tier 3 — Device Biometric":"Credential";
     return e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
       e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(212,160,84,0.25)",borderRadius:8}},
         e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}},"EXISTING CREDENTIAL FOUND"),
@@ -728,9 +774,9 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
 e("button",{onClick:function(){setMode("t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 1 — Government ID"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Highest assurance — via hipverify.org · small fee"))),
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — free, instant"))),
+e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — free"))),
 e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px solid "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A credentialed human vouches for you — free"))),
+e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — free, instant, low starting trust"))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
 e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
@@ -752,9 +798,9 @@ ToolAlert("warn",e("span",null,e("strong",null,"About cost:")," The verification
 e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:12})},"Go to hipverify.org →"),
 e("div",{style:{marginTop:12,padding:"12px 16px",border:"1px solid "+bd,borderRadius:6,background:"rgba(255,255,255,0.02)",fontSize:12,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Institutional operators:")," Organizations that perform their own government ID verification (universities, employers, government agencies) can issue Tier 1 credentials directly through the ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," institutional API. ",e("a",{href:"https://hipverify.org/docs",target:"_blank",rel:"noopener",style:{color:go}},"Learn more →")))),
 
-mode==="t2"&&e("div",null,
+mode==="t3"&&e("div",null,
 e("button",{onClick:function(){setMode(null);setWaStep(0);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
-waEnv&&waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"Biometric can't run here.")," Browsers block biometric in embedded frames. Open this tool directly at ",e("strong",{style:{color:go}},"hipprotocol.org")," for Tier 2.")),
+waEnv&&waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"Biometric can't run here.")," Browsers block biometric in embedded frames. Open this tool directly at ",e("strong",{style:{color:go}},"hipprotocol.org")," for Tier 3.")),
 waEnv&&!waEnv.ok&&!waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"No biometric detected.")," Try a smartphone or laptop with Face ID, Touch ID, or Windows Hello.")),
 e(StepDot,{n:1,title:"Generate Cryptographic Identity",active:waStep===0,done:waStep>0},
 e("p",{style:{color:t2,fontSize:13,margin:0}},"A unique key pair is created in your browser.")),
@@ -763,17 +809,18 @@ e("p",{style:{color:t2,fontSize:13,margin:0}},"Your device prompts for face, fin
 waStep===1&&ToolAlert("info",e("span",null,e("strong",null,"Waiting for your device...")," Complete the biometric check now.")),
 waStep>=2&&ToolAlert("success",e("span",null,"✓ ",e("strong",null,"Your biometric was verified.")," Your device confirmed a live human is present. This proof is bound to your credential."))),
 e(StepDot,{n:3,title:"Credential Ready",active:false,done:waStep>=2},
-e("p",{style:{color:t2,fontSize:13,margin:0}},"Your Tier 2 credential is issued and saved in this browser. ",e("strong",null,"Download a backup copy now.")),
+e("p",{style:{color:t2,fontSize:13,margin:0}},"Your Tier 3 credential is issued and saved in this browser. ",e("strong",null,"Download a backup copy now.")),
 waStep>=2&&e("div",{style:{marginTop:8,padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd,fontSize:12,color:t2,lineHeight:1.6}},
 "Your device may have also offered to save a \"passkey\" — that's your operating system storing the WebAuthn credential for you. This is normal and expected.")),
-waStep===0&&e("button",{style:waEnv&&waEnv.ok?btnG:btnDis,onClick:doT2,disabled:busy||!(waEnv&&waEnv.ok)},busy?"Starting...":waEnv&&waEnv.ok?"Begin Biometric Verification →":"Biometric not available")),
+waStep===0&&e("button",{style:waEnv&&waEnv.ok?btnG:btnDis,onClick:doT3Bio,disabled:busy||!(waEnv&&waEnv.ok)},busy?"Starting...":waEnv&&waEnv.ok?"Begin Biometric Verification →":"Biometric not available")),
 
-mode==="t3"&&e(T3Flow,{onDone:wrapSetCred,onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+mode==="t2"&&e(T2VouchFlow,{onDone:wrapSetCred,onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 
 // ============================================================
-// TIER 3 — PEER VOUCH
+// TIER 2 — PEER VOUCH (S29: swapped from Tier 3)
+// Vouching restricted to Tier 1 credential holders only
 // ============================================================
-function T3Flow(props){
+function T2VouchFlow(props){
 var rs=useState(null);var role=rs[0];var setRole=rs[1];
 var ss=useState(0);var step=ss[0];var setStep=ss[1];
 var bus=useState(false);var busy=bus[0];var setBusy=bus[1];
@@ -810,9 +857,11 @@ var valid=await crypto.subtle.verify("Ed25519",vPub,b64d(sig),new TextEncoder().
 if(!valid){props.setErr("Signature failed.");setBusy(false);return}
 if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("Vouch expired (>24h).");setBusy(false);return}
 props.onDone({version:"hip-credential-v1",credentialId:rKeys.credentialId,publicKey:rKeys.publicKey,privateKey:rKeys.privateKey,
-tier:3,pathway:"peer-vouch-bound-token-v1",
+tier:2,pathway:"peer-vouch-bound-token-v1",
 vouchRecord:{voucherCredentialId:t.voucherCredentialId,voucherPublicKey:t.voucherPublicKey,voucherTier:t.voucherTier,nonce:t.nonce,timestamp:t.timestamp,signature:sig},
 created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub});
+// S29: Initialize trust record for new Tier 2 vouch credential
+try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2})})}catch(te){}
 setStep(4);setBusy(false)}catch(ex){props.setErr("Error: "+ex.message);setBusy(false)}};
 
 return e("div",null,
@@ -823,7 +872,7 @@ e("button",{onClick:function(){setRole("v");setStep(1)},style:Object.assign({},b
 e("button",{onClick:function(){setRole("r");setStep(1)},style:Object.assign({},btnO,{width:"100%",textAlign:"left"})},e("div",null,e("div",{style:{fontWeight:700}},"I'm the Recipient"),e("div",{style:{fontSize:11,fontWeight:400,opacity:0.8,marginTop:2}},"Someone is vouching for me")))),
 role==="v"&&e("div",null,
 e(StepDot,{n:1,title:"Load Your Credential",active:step===1,done:step>1},
-step===1&&e(ToolDropZone,{onLoad:function(d,er){if(er){props.setErr(er);return}if(!d||d.version!=="hip-credential-v1"){props.setErr("Not a valid credential.");return}if(!d.tier||d.tier<2){props.setErr("Only Tier 2+ can vouch.");return}
+step===1&&e(ToolDropZone,{onLoad:function(d,er){if(er){props.setErr(er);return}if(!d||d.version!=="hip-credential-v1"){props.setErr("Not a valid credential.");return}if(d.tier!==1){props.setErr("Only Tier 1 (Government ID) credentials can vouch. The voucher must have a Tier 1 credential.");return}
 (async function(){try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);setVCred(d);setStep(2);props.setErr(null)}catch(ex){props.setErr("Failed: "+ex.message)}})()},label:"Drop your credential file here"}),
 step>1&&vCred&&e("div",{style:{fontSize:12,color:"#4ade80",fontFamily:mo}},"✓ Loaded: "+vCred.credentialId.slice(0,16)+"…")),
 e(StepDot,{n:2,title:"Enter Recipient's Public Key",active:step===2,done:step>2},
@@ -850,7 +899,7 @@ ToolAlert("info",e("span",null,e("strong",null,"Step B:")," Paste the vouch toke
 e("textarea",{style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:80}),placeholder:"Paste the vouch token here",value:tText,onChange:function(ev){setTText(ev.target.value)}}),
 e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:acceptV,disabled:busy},busy?"Verifying...":"Accept Vouch →"))),
 e(StepDot,{n:3,title:"You're Credentialed",active:step>=4,done:step>=4},
-step>=4&&ToolAlert("success",e("span",null,e("strong",null,"Tier 3 credential issued.")," Save your credential file now.")))))}
+step>=4&&ToolAlert("success",e("span",null,e("strong",null,"Tier 2 credential issued.")," Save your credential file now.")))))}
 
 // ============================================================
 // ATTESTATION PANEL
@@ -873,6 +922,9 @@ var jps=useState(false);var isJpg=jps[0];var setIsJpg=jps[1];
 var exs=useState(null);var existingHip=exs[0];var setExistingHip=exs[1];
 var drs=useState(null);var rawDataURL=drs[0];var setRawDataURL=drs[1];
 var eds=useState(null);var embeddedDataURL=eds[0];var setEmbeddedDataURL=eds[1];
+// S29: Trust Score state
+var tss=useState(null);var trustScore=tss[0];var setTrustScore=tss[1];
+var tbs=useState(null);var trustBreakdown=tbs[0];var setTrustBreakdown=tbs[1];
 
 if(!cred)return e("p",{style:{fontSize:14,color:t2}},"Get your credential first (Credential tab), then come here to attest.");
 
@@ -898,7 +950,7 @@ if(HIP_CRYPTO_OK===false){setErr&&setErr("Your browser doesn't support Ed25519 c
 setBuilding(true);
 var now=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
 var ld="unverified";
-if(cred.tier===2&&cred.webauthn&&cred.webauthn.credentialId){setLv("prompting");
+if(cred.tier===3&&cred.webauthn&&cred.webauthn.credentialId){setLv("prompting");
 try{await waLiveness(cred.webauthn.credentialId);ld="device-attested";setLv("done")}catch(ex){setLv("failed")}}
 
 // S21b: For JPEG files, embed HIP metadata before hashing
@@ -927,9 +979,9 @@ credentialSubject:{classification:cls,contentHash:finalHash,contentType:"applica
 originalFilename:fname||null,
 credentialTier:cred.tier,credentialPathway:cred.pathway,livenessDesignation:ld},
 issuanceDate:now,
-issuer:{id:cred.credentialId,issuanceTier:cred.tier||2,pathwayVersion:cred.pathway||"unknown",type:"HIPCredential"},
-liveness:{method:cred.tier===2?"DeviceAttestation":"None",timestamp:now},
-pathway:{class:cred.tier===2?"DeviceBiometric":cred.tier===3?"PeerVouch":"Unknown",tier:cred.tier||0,versionId:cred.pathway||"unknown"},
+issuer:{id:cred.credentialId,issuanceTier:cred.tier||3,pathwayVersion:cred.pathway||"unknown",type:"HIPCredential"},
+liveness:{method:cred.tier===3?"DeviceAttestation":"None",timestamp:now},
+pathway:{class:cred.tier===3?"DeviceBiometric":cred.tier===2?"PeerVouch":"Unknown",tier:cred.tier||0,versionId:cred.pathway||"unknown"},
 type:["VerifiableCredential","HIPAttestationBundle"],version:"WF-v1.0"};
 var canon=canonJSON(content);var ch=await sha256(canon);setBHash(ch);
 var sigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encode(canon));
@@ -937,7 +989,11 @@ var full=Object.assign({},content,{id:"urn:hip:bundle:"+ch,
 proof:{created:now,proofPurpose:"assertionMethod",proofValue:b64e(sigBuf),type:"Ed25519Signature2020",verificationMethod:cred.credentialId},
 signalAnnotations:[]});
 var anch={anchorLink:"hip://"+ch.substring(0,8)+"/"+ch,bundleHash:ch,classification:cls,contentHash:finalHash,credentialId:cred.credentialId,timestamp:now,type:"HIPProofAnchor",version:"WF-v1.0"};
-setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);setStep(4)};
+setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);setStep(4);
+
+// S29: Register attestation with Trust Score system
+try{var arResp=await fetch(HIP_WORKER_URL+"/attest-register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,bundle_hash:ch,liveness_designation:ld,timestamp:now})});
+if(arResp.ok){var arData=await arResp.json();setTrustScore(arData.trust_score);setTrustBreakdown(arData.score_breakdown||null)}}catch(te){}};
 
 var dlEmbeddedJpeg=function(){
   if(!embeddedDataURL)return;
@@ -965,9 +1021,10 @@ e("div",{style:{display:"flex",alignItems:"center",gap:8}},e(Ico,{name:"chart",s
 e("div",{style:{fontSize:11,fontFamily:mo,padding:"3px 10px",background:"rgba(74,222,128,0.08)",color:"#4ade80",borderRadius:20,border:"1px solid rgba(74,222,128,0.2)",fontWeight:600,textTransform:"uppercase"}},"VERIFIED")),
 e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Classification"),e("div",{style:{fontFamily:serif,fontSize:18,fontWeight:400,color:t1}},clsN)),
 fname&&e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Attested Content"),e("div",{style:{fontSize:13,color:t1,fontWeight:500}},fname)),
-e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Credential Tier"),e("div",{style:{fontSize:13,color:go,fontWeight:600}},"Tier "+(cred.tier||"?"))),
-e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Liveness"),e("div",{style:{fontSize:13,color:lv==="done"?"#4ade80":t2,fontWeight:600}},lv==="done"?"Confirmed":"Not verified"))),
+e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Liveness"),e("div",{style:{fontSize:13,color:lv==="done"?"#4ade80":t2,fontWeight:600}},lv==="done"?"Confirmed":"Not verified")),
+e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Trust Score"),e("div",{style:{fontSize:13,color:trustScore!==null?(trustScore>=75?"#4ade80":trustScore>=50?go:trustScore>=25?"#facc15":"#ef4444"):t2,fontWeight:600}},trustScore!==null?trustScore+"/100":"—"))),
 e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Content Fingerprint"),e("code",{style:{fontSize:10,fontFamily:mo,color:t2,wordBreak:"break-all"}},hash)),
 editorial&&e("div",{style:{padding:"10px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd}},
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Creator's Statement"),e("div",{style:{fontSize:13,color:t1,lineHeight:1.6,fontStyle:"italic"}},editorial))),
@@ -989,7 +1046,7 @@ e("button",{style:btnDl,onClick:function(){dl(proofcard.proofAnchor,"HIP_Anchor.
 e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null)}},"Attest Another"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-cred.tier===2&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
+cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
 e("p",{style:{fontSize:14,color:t2}},"Select a file. Its fingerprint is computed locally — nothing leaves your device."),
 e("div",{style:{border:"2px dashed "+bd,borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer"},onClick:function(){fref.current&&fref.current.click()}},
 e("input",{ref:fref,type:"file",style:{display:"none"},onChange:pickFile}),
@@ -1149,6 +1206,24 @@ function VerifyWizard() {
         }
       } else {
         r.push({l:"PART 2 — CONTENT MATCHING", p:null, d:"No content file provided. Add the original file above to verify this Proof Card belongs to specific content.", section:true});
+      }
+
+      // ── PART 3: Trust Score ──
+      var credIdForTrust = a.credentialId || (b.issuer && b.issuer.id);
+      if(credIdForTrust) {
+        r.push({l:"PART 3 — TRUST SCORE", p:null, d:"Public confidence score for this credential.", section:true});
+        try {
+          var tsResp = await fetch(HIP_WORKER_URL+"/trust/"+credIdForTrust);
+          if(tsResp.ok) {
+            var tsData = await tsResp.json();
+            var sc = tsData.trust_score;
+            r.push({l:"Trust Score", p:sc>=25?true:null, d:sc+"/100 — Tier "+tsData.tier+", "+tsData.attestation_count+" attestations, "+tsData.credential_age_days+" days old"+(tsData.score_breakdown?" (base:"+tsData.score_breakdown.tier_base+" age:"+tsData.score_breakdown.age_bonus+" vol:"+tsData.score_breakdown.volume_bonus+" cons:"+tsData.score_breakdown.consistency_bonus+" live:"+tsData.score_breakdown.liveness_bonus+")":"")});
+          } else {
+            r.push({l:"Trust Score", p:null, d:"No trust record found for this credential. It may predate the Trust Score system."});
+          }
+        } catch(tsErr) {
+          r.push({l:"Trust Score", p:null, d:"Could not reach trust server."});
+        }
       }
 
       setRes(r);
@@ -1323,7 +1398,7 @@ function App() {
             e(Ico, {name:"x", size:16, color:t2})
           )
         ),
-        toolCred && e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:go,textTransform:"uppercase"}},(toolCred.tier===1?"Tier 1":toolCred.tier===2?"Tier 2 — Biometric":toolCred.tier===3?"Tier 3 — Peer Vouch":"")+" Active")),
+        toolCred && e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:go,textTransform:"uppercase"}},(toolCred.tier===1?"Tier 1":toolCred.tier===2?"Tier 2 — Peer Vouch":toolCred.tier===3?"Tier 3 — Biometric":"")+" Active")),
         e("div", {style:{display:"flex",gap:6,marginBottom:16}},
           ["credential","attest","verify"].map(function(tab) {
             var active = toolTab === tab;
@@ -1404,8 +1479,8 @@ function App() {
         ),
         e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
           [{badge:"Tier 1",name:"Government ID / Institutional",text:"Verification against an authoritative external record — a government-issued ID or recognized institutional affiliation. The highest initial assurance level. Your identity is confirmed by the pathway provider but never recorded on the public ledger.",detail:"Pseudonymous. Your name is never on-chain.",weight:"Starting strength: highest"},
-           {badge:"Tier 2",name:"Device Biometric",text:"Your phone or computer's hardware security confirms a live human was present — using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored.",detail:"No new apps. No new behaviors. Your existing device.",weight:"Starting strength: moderate"},
-           {badge:"Tier 3",name:"Peer Vouching",text:"An existing credentialed human vouches that you're a real person. The most globally accessible path — works without special hardware or documents. The voucher stakes their reputation: if your credential is later found fraudulent, their standing is affected.",detail:"Accessible everywhere. Accountability built in.",weight:"Starting strength: accessible"}
+           {badge:"Tier 2",name:"Peer Vouching",text:"A Tier 1 credential holder vouches that you're a real person. Every Tier 2 credential traces back to a government-verified human. The voucher stakes their reputation: if your credential is later found fraudulent, their standing is affected.",detail:"Accountability chain. Every vouch traces to a verified identity.",weight:"Starting strength: moderate"},
+           {badge:"Tier 3",name:"Device Biometric",text:"Your phone or computer's hardware security confirms a live human was present — using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored. No identity link. Trust builds through consistent use.",detail:"Free, instant, anonymous. Your existing device.",weight:"Starting strength: low — builds with use"}
           ].map(function(tier,i) {
             return e(Fade, {key:i, delay:i*0.08},
               e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:"rgba(212,160,84,0.02)"}},
@@ -1420,11 +1495,11 @@ function App() {
         ),
         e(Fade, {delay:0.28}, e("div", {style:{marginTop:20,padding:"26px 26px",border:"1px solid rgba(212,160,84,0.18)",borderRadius:8,background:gg}},
           e("h3", {style:{fontFamily:serif,fontSize:20,fontWeight:400,color:t1,marginBottom:12}}, "Where you start is not where you're stuck."),
-          e("p", {style:{fontSize:15,fontWeight:400,lineHeight:1.75,color:t2,marginBottom:18}}, "Every credential earns a ", e("strong",null,"Trust Index"), " — a measure of the protocol's confidence in the credential, built through consistent, honest use. A Tier 3 credential used honestly for two years can reach the same maximum standing as any Tier 1 credential. The tier is a head start, not a ceiling."),
+          e("p", {style:{fontSize:15,fontWeight:400,lineHeight:1.75,color:t2,marginBottom:18}}, "Every credential earns a ", e("strong",null,"Trust Score"), " — a public number (0–100) measuring the protocol's confidence in the credential, built through consistent, honest use. A Tier 3 credential used honestly for two years can build significant standing. The tier is a head start, not a ceiling."),
           e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
             [{l:"Earn through use",d:"Every honest attestation adds to your credential's history. Device-verified attestations earn the most. The protocol rewards consistency, not volume."},
-             {l:"Upgrade anytime",d:"A Tier 3 creator can re-verify through Tier 2 (device biometric) or Tier 1 (government ID) at any time. Your behavioral history carries forward — nothing is lost."},
-             {l:"Same ceiling for everyone",d:"The maximum Trust Index is the same regardless of starting tier. HIP does not permanently discount the human who started without institutional backing."}
+             {l:"Upgrade anytime",d:"A Tier 3 creator can upgrade to Tier 2 (peer vouch from a Tier 1 holder) or Tier 1 (government ID) at any time. Your behavioral history carries forward — nothing is lost."},
+             {l:"Same ceiling for everyone",d:"The maximum Trust Score is the same regardless of starting tier. HIP does not permanently discount the human who started without institutional backing."}
             ].map(function(p,i) {
               return e("div", {key:i, style:{padding:"16px 18px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd}},
                 e("div", {style:{fontFamily:mo,fontSize:12,fontWeight:500,color:go,marginBottom:5,letterSpacing:0.5}}, p.l),
