@@ -65,6 +65,7 @@ em{font-style:italic}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 // ============================================================
 // HIP — HUMAN INTEGRITY PROTOCOL · Landing + Tools
@@ -432,6 +433,122 @@ var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "err
 })();
 
 // ============================================================
+// S27: QR TRANSFER — Desktop shows QR, phone sends credential
+// ============================================================
+var HIP_WORKER_URL = "https://hip-tier1-worker.hipprotocol.workers.dev";
+
+function QrTransferPanel(props) {
+  var qrState = props.qrState;
+  var setQrState = props.setQrState;
+  var qrRef = props.qrRef;
+  var onImport = props.onImport;
+  var setErr = props.setErr;
+
+  useEffect(function() {
+    if (qrState) return;
+    var codeBytes = new Uint8Array(8);
+    crypto.getRandomValues(codeBytes);
+    var code = Array.from(codeBytes).map(function(b){return b.toString(16).padStart(2,"0")}).join("");
+    var keyBytes = new Uint8Array(32);
+    crypto.getRandomValues(keyBytes);
+    var keyB64 = btoa(String.fromCharCode.apply(null, keyBytes))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    setQrState({ code: code, key: keyB64, keyBytes: keyBytes, status: "waiting", pollCount: 0 });
+  }, []);
+
+  useEffect(function() {
+    if (!qrState || qrState.status !== "waiting") return;
+    var el = qrRef.current;
+    if (!el) return;
+    el.innerHTML = "";
+    var url = "https://hipverify.org#transfer=" + qrState.code + "&key=" + qrState.key;
+    try {
+      new QRCode(el, {
+        text: url,
+        width: 220,
+        height: 220,
+        colorDark: "#d4a054",
+        colorLight: "#0a0e18",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    } catch(ex) {
+      el.innerHTML = "<div style='color:#f87171;font-size:12px'>QR generation failed: " + ex.message + "</div>";
+    }
+  }, [qrState && qrState.status]);
+
+  useEffect(function() {
+    if (!qrState || qrState.status !== "waiting") return;
+    var cancelled = false;
+    var poll = async function() {
+      if (cancelled) return;
+      try {
+        var resp = await fetch(HIP_WORKER_URL + "/transfer/" + qrState.code);
+        var data = await resp.json();
+        if (data.status === "ready" && data.encrypted) {
+          try {
+            var raw = atob(data.encrypted);
+            var packed = new Uint8Array(raw.length);
+            for (var i = 0; i < raw.length; i++) packed[i] = raw.charCodeAt(i);
+            var iv = packed.slice(0, 12);
+            var ciphertext = packed.slice(12);
+            var aesKey = await crypto.subtle.importKey("raw", qrState.keyBytes, "AES-GCM", false, ["decrypt"]);
+            var plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, aesKey, ciphertext);
+            var json = new TextDecoder().decode(plainBuf);
+            var credObj = JSON.parse(json);
+            setQrState(Object.assign({}, qrState, { status: "received" }));
+            onImport(credObj, null);
+          } catch (ex) {
+            setQrState(Object.assign({}, qrState, { status: "error", error: "Decryption failed: " + ex.message }));
+          }
+          return;
+        }
+      } catch (ex) {}
+      if (!cancelled && qrState.pollCount < 120) {
+        qrState.pollCount++;
+        setTimeout(poll, 2000);
+      } else if (!cancelled) {
+        setQrState(Object.assign({}, qrState, { status: "expired" }));
+      }
+    };
+    var timer = setTimeout(poll, 1500);
+    return function() { cancelled = true; clearTimeout(timer); };
+  }, [qrState && qrState.status]);
+
+  if (!qrState) {
+    return e("div", {style:{textAlign:"center",padding:"24px 0"}},
+      e("div", {style:{display:"inline-block",width:24,height:24,border:"2px solid "+bd,borderTopColor:go,borderRadius:"50%",animation:"hipspin 0.7s linear infinite"}}),
+      e("style", null, "@keyframes hipspin{to{transform:rotate(360deg)}}"));
+  }
+
+  if (qrState.status === "received") {
+    return e("div", {style:{textAlign:"center",padding:"20px 0"}},
+      ToolAlert("success", e("span", null, e("strong", null, "Credential received!"), " Your credential has been securely transferred and imported.")));
+  }
+
+  if (qrState.status === "error") {
+    return e("div", null,
+      ToolAlert("danger", qrState.error || "Transfer failed."),
+      e("button", {style: btnSm, onClick: function() { setQrState(null); }}, "Try Again"));
+  }
+
+  if (qrState.status === "expired") {
+    return e("div", null,
+      ToolAlert("warn", "Transfer timed out. The QR code has expired."),
+      e("button", {style: btnSm, onClick: function() { setQrState(null); }}, "Generate New QR Code"));
+  }
+
+  return e("div", {style:{display:"flex",flexDirection:"column",alignItems:"center",gap:16}},
+    e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,textTransform:"uppercase",color:go,marginBottom:4}}, "SCAN WITH YOUR PHONE"),
+    e("div", {ref: qrRef, style:{padding:16,background:"#0a0e18",borderRadius:12,border:"1px solid "+bd}}),
+    e("div", {style:{display:"flex",alignItems:"center",gap:8,color:t2,fontSize:13}},
+      e("div", {style:{display:"inline-block",width:12,height:12,border:"2px solid "+bd,borderTopColor:go,borderRadius:"50%",animation:"hipspin 0.7s linear infinite"}}),
+      "Waiting for credential…"),
+    e("div", {style:{maxWidth:340,textAlign:"center"}},
+      e("p", {style:{fontSize:12,color:t2,lineHeight:1.6,marginBottom:8}}, "Open your phone camera and scan this QR code. Your credential will be encrypted on your phone and sent securely to this screen."),
+      e("p", {style:{fontSize:11,color:t2,opacity:0.6,fontFamily:mo}}, "Code expires in 5 minutes. The relay server never sees your credential — only encrypted data.")));
+}
+
+// ============================================================
 // CREDENTIAL PANEL
 // ============================================================
 function CredPanel(props){
@@ -446,6 +563,9 @@ var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
 var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
 // S21b: Retirement confirmation state (MUST be here with other hooks, not after conditional return)
 var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
+// S27: QR transfer state
+var qrs=useState(null);var qrState=qrs[0];var setQrState=qrs[1];
+var qrRef=useRef(null);
 
 useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
@@ -613,7 +733,13 @@ e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"lef
 e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A credentialed human vouches for you — free"))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
-e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"})),
+e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
+e("button",{onClick:function(){setMode("qr")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px dashed "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans,marginTop:8}},
+e("span",{style:{fontSize:20,flexShrink:0}},"📱"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Import via QR Code"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Scan a code on this screen with your phone to transfer")))),
+
+mode==="qr"&&e("div",null,
+e("button",{onClick:function(){setMode(null);setQrState(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e(QrTransferPanel,{qrState:qrState,setQrState:setQrState,qrRef:qrRef,onImport:doImport,setErr:setErr})),
 
 mode==="t1"&&e("div",null,
 e("button",{onClick:function(){setMode(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
@@ -622,7 +748,7 @@ e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Tier 1 is the highest credential level. It verifies your identity against a government-issued document through an independent pathway operator. Your personal data is processed by the verification provider and never stored by HIP — only a one-way deduplication hash."),
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},e("strong",null,"How it works:")," You'll be directed to ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," — an independent verification service that issues HIP-compatible Tier 1 credentials. Scan your government ID and complete a liveness check. Once approved, your credential is created and saved in this browser automatically."),
 e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(96,165,250,0.06)",border:"1px solid rgba(96,165,250,0.15)",color:"#60a5fa",fontSize:13,lineHeight:1.6,marginBottom:12}},e("strong",null,"Why a separate site?")," HIP is a protocol, not a business. It has no treasury and collects no money (Charter DP-7). Tier 1 verification requires a paid identity check, so it's provided by an independent pathway operator under DP-5 — just as any organization can build HIP-compatible tools without permission."),
-ToolAlert("warn",e("span",null,e("strong",null,"About cost:")," The verification service charges a small fee (approximately $0.50) to cover identity verification and processing. This fee is paid to the pathway operator, not to HIP. ",e("strong",null,"HIP does not collect money."))),
+ToolAlert("warn",e("span",null,e("strong",null,"About cost:")," The verification service charges a small fee (approximately $1.00) to cover identity verification and processing. This fee is paid to the pathway operator, not to HIP. ",e("strong",null,"HIP does not collect money."))),
 e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:12})},"Go to hipverify.org →"),
 e("div",{style:{marginTop:12,padding:"12px 16px",border:"1px solid "+bd,borderRadius:6,background:"rgba(255,255,255,0.02)",fontSize:12,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Institutional operators:")," Organizations that perform their own government ID verification (universities, employers, government agencies) can issue Tier 1 credentials directly through the ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," institutional API. ",e("a",{href:"https://hipverify.org/docs",target:"_blank",rel:"noopener",style:{color:go}},"Learn more →")))),
 
