@@ -20,13 +20,30 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{background:#0A0A0A;font-family:'Space Grotesk',sans-serif;color:#E8E8E0}
-a{color:#E05A00;text-decoration:none}
-a:hover{text-decoration:underline}
+a{color:#E05A00;text-decoration:none;transition:color 0.15s,opacity 0.15s}
+a:hover{text-decoration:underline;opacity:0.85}
 ::selection{background:rgba(224,90,0,0.3);color:#fff}
 strong{font-weight:600;color:#E8E8E0}
 em{font-style:italic}
 #root{min-height:100vh}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+/* ── Interactive hover states ── */
+.hip-nav-link{color:#666!important;transition:color 0.15s!important}
+.hip-nav-link:hover{color:#E8E8E0!important;text-decoration:none!important}
+.hip-cta-btn{transition:filter 0.15s,box-shadow 0.15s!important}
+.hip-cta-btn:hover{filter:brightness(1.15)!important;box-shadow:0 0 16px rgba(224,90,0,0.3)!important}
+.hip-verify-card{transition:border-color 0.15s,background 0.15s!important}
+.hip-verify-card:hover{border-color:#E05A00!important;background:rgba(224,90,0,0.04)!important}
+.hip-footer-link{transition:color 0.15s!important}
+.hip-footer-link:hover{color:#E8E8E0!important;text-decoration:none!important}
+.hip-tab-btn{transition:background 0.15s,color 0.15s,border-color 0.15s!important}
+.hip-tab-btn:hover{background:rgba(224,90,0,0.06)!important;color:#E05A00!important;border-color:#E05A00!important}
+.hip-tier-card{transition:border-color 0.15s,box-shadow 0.15s!important}
+.hip-tier-card:hover{border-color:#E05A00!important;box-shadow:0 0 12px rgba(224,90,0,0.15)!important}
+.hip-storage-card{transition:border-color 0.15s,background 0.15s!important}
+.hip-storage-card:hover{border-color:#E05A00!important;background:rgba(224,90,0,0.04)!important}
+.hip-logo-btn{transition:color 0.15s!important}
+.hip-logo-btn:hover span{color:#E05A00!important}
 /* Responsive overrides */
 @media(max-width:768px){
   .hip-nav-links{display:none!important}
@@ -769,7 +786,7 @@ e("button",{onClick:function(){setMode("t1")},style:{width:"100%",textAlign:"lef
 e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 1 — Government ID"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Highest assurance — via hipverify.org · small fee"))),
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — free"))),
-e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px solid "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — free, instant, low starting trust"))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
@@ -1378,6 +1395,7 @@ function App() {
   function CtaBtn(props) {
     return e(props.href?"a":"button",{
       href:props.href||undefined,
+      className:"hip-cta-btn",
       style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,
         padding:"14px 20px",cursor:"pointer",textAlign:"center",textDecoration:"none",
         border:"none",background:go,color:"#fff"},
@@ -1401,6 +1419,7 @@ function App() {
       e("div", {className:"hip-nav-links",style:{display:"flex",gap:20,alignItems:"center"}},
         navLinks.map(function(n,i) {
           return e("a",{key:i,href:n[0],target:n[2]?"_blank":undefined,rel:n[2]?"noopener":undefined,
+            className:"hip-nav-link",
             style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,textDecoration:"none",fontWeight:500}},n[1]);
         }),
         e(NavBtn,{onClick:function(){setToolOpen(toolOpen==="attest"?null:"attest");setToolTab("attest")}},"ATTEST"),
@@ -1417,6 +1436,7 @@ function App() {
       background:"rgba(10,10,10,0.98)",borderBottom:"1px solid "+rule,padding:"16px 20px",display:"flex",flexDirection:"column",gap:12}},
       navLinks.map(function(n,i) {
         return e("a",{key:i,href:n[0],onClick:function(){setMobileOpen(false)},
+          className:"hip-nav-link",
           style:{fontFamily:mo,fontSize:12,letterSpacing:1,color:dimLabel,textDecoration:"none",padding:"8px 0",borderBottom:"1px solid "+rule}},n[1]);
       }),
       e("div",{style:{display:"flex",gap:8,marginTop:4}},
@@ -1438,7 +1458,7 @@ function App() {
         e("div", {style:{display:"flex",gap:6,marginBottom:16}},
           ["credential","attest","verify"].map(function(tab) {
             var active = toolTab === tab;
-            return e("button", {key:tab, style:{flex:1,fontFamily:mo,fontSize:11,letterSpacing:0.5,padding:"9px 12px",
+            return e("button", {key:tab, className:active?"":"hip-tab-btn", style:{flex:1,fontFamily:mo,fontSize:11,letterSpacing:0.5,padding:"9px 12px",
               background:active?gg:"transparent",color:active?go:t2,border:"1px solid "+(active?go:rule),
               cursor:"pointer",fontWeight:active?600:400,textTransform:"capitalize"}, onClick:function(){setToolTab(tab)}}, tab);
           })
@@ -1472,7 +1492,7 @@ function App() {
           e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
             e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,marginBottom:4}},"ACTIONS"),
             e(CtaBtn,{href:"#how"},"HOW IT WORKS"),
-            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST NOW")
+            e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST NOW")
           )
         )
       )
@@ -1595,7 +1615,7 @@ function App() {
         // Get credential CTA
         e(Fade, {delay:0.3},
           e("div",{style:{marginTop:18}},
-            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+            e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
               onClick:function(){setToolOpen("credential");setToolTab("credential")}},"GET YOUR CREDENTIAL")
           )
         )
@@ -1624,7 +1644,7 @@ function App() {
       // ATTEST HERE CTA
       e(Fade, {delay:0.15},
         e("div",{style:{marginTop:16}},
-          e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+          e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
             onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST HERE")
         )
       )
@@ -1755,6 +1775,7 @@ function App() {
              ["\uD83D\uDCC4","Arweave Payload","https://arweave.net/"+G.arweavePayload]
             ].map(function(row,i) {
               return e("a",{key:i,href:row[2],target:"_blank",rel:"noopener",
+                className:"hip-verify-card",
                 style:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",border:"1px solid "+rule,fontFamily:mo,fontSize:11,color:t1,textDecoration:"none",background:dk}},
                 e("span",{style:{fontSize:15}},row[0]),e("span",null,row[1])
               );
@@ -1762,7 +1783,7 @@ function App() {
             {gap:8,bgColor:"transparent"}
           ),
           e("div",{style:{marginTop:12}},
-            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+            e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
               onClick:function(){setToolOpen("verify");setToolTab("verify")}},"OPEN VERIFICATION TOOL")
           )
         )
@@ -1831,7 +1852,7 @@ function App() {
               {gap:1,bgColor:rule}
             ),
             e("div",{style:{marginTop:16}},
-              e("a",{href:G.github,target:"_blank",rel:"noopener",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",textAlign:"center",textDecoration:"none",border:"none",background:go,color:"#fff"}},"VIEW ON GITHUB \u2192")
+              e("a",{href:G.github,target:"_blank",rel:"noopener",className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",textAlign:"center",textDecoration:"none",border:"none",background:go,color:"#fff"}},"VIEW ON GITHUB \u2192")
             )
           )
         )
@@ -1870,7 +1891,7 @@ function App() {
                ["Arweave \u2014 Payload",G.arweavePayload,"https://arweave.net/"+G.arweavePayload],
                ["Arweave \u2014 Charter",G.arweaveCharter,"https://arweave.net/"+G.arweaveCharter]
               ].map(function(row,i) {
-                return e("a",{key:i,href:row[2],target:"_blank",rel:"noopener",style:{display:"block",padding:"12px 14px",background:surface,textDecoration:"none"}},
+                return e("a",{key:i,href:row[2],target:"_blank",rel:"noopener",className:"hip-storage-card",style:{display:"block",padding:"12px 14px",background:surface,textDecoration:"none"}},
                   e("div",{style:{fontFamily:mo,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:dimLabel,marginBottom:3}},row[0]),
                   e("div",{style:{fontFamily:mo,fontSize:10,color:go,wordBreak:"break-all",lineHeight:1.5,marginBottom:3}},row[1]),
                   e("div",{style:{fontFamily:mo,fontSize:10,color:t1,opacity:0.5}},"Open \u2192")
@@ -1903,7 +1924,7 @@ function App() {
           [["Verify on-chain",G.explorer],["GitHub",G.github],["IPFS","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["Arweave","https://arweave.net/"+G.arweavePayload],["Blockstream","https://blockstream.info/tx/"+G.txid]].map(function(row,i) {
             return e("span",{key:i},
               i>0 && e("span",{style:{color:dimLabel,margin:"0 6px"}},"\u00B7"),
-              e("a",{href:row[1],target:"_blank",rel:"noopener",style:{fontFamily:mo,fontSize:10,color:go}},row[0])
+              e("a",{href:row[1],target:"_blank",rel:"noopener",className:"hip-footer-link",style:{fontFamily:mo,fontSize:10,color:go}},row[0])
             );
           })
         ),
