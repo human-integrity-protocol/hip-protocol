@@ -15,44 +15,35 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600&family=Azeret+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
-body{background:#06080f;font-family:'DM Sans','Helvetica Neue',sans-serif;color:#e8e0d4}
-a{color:#d4a054;text-decoration:none}
+body{background:#0A0A0A;font-family:'Space Grotesk',sans-serif;color:#E8E8E0}
+a{color:#E05A00;text-decoration:none}
 a:hover{text-decoration:underline}
-::selection{background:rgba(212,160,84,0.3);color:#fff}
-strong{font-weight:600;color:#e8e0d4}
+::selection{background:rgba(224,90,0,0.3);color:#fff}
+strong{font-weight:600;color:#E8E8E0}
 em{font-style:italic}
 #root{min-height:100vh}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 /* Responsive overrides */
 @media(max-width:768px){
   .hip-nav-links{display:none!important}
   .hip-nav-tools{display:none!important}
   .hip-mobile-toggle{display:flex!important}
-  .hip-grid-2x2{grid-template-columns:1fr!important}
-  .hip-grid-2x2sm{grid-template-columns:1fr!important}
-  .hip-grid-2{grid-template-columns:1fr!important}
+  .hip-grid-4{grid-template-columns:1fr 1fr!important}
   .hip-grid-3{grid-template-columns:1fr!important}
-  .hip-nav-inner{padding:12px 20px!important}
-  .hip-wrapper{padding:0 20px!important}
-  .hip-hero{padding:100px 20px 60px!important;min-height:auto!important}
-  .hip-section{padding:64px 0!important}
-  .hip-dk-section{padding:64px 0!important}
-  .hip-manifesto{padding:48px 20px!important}
-  .hip-covenant{padding:64px 20px!important}
+  .hip-grid-2{grid-template-columns:1fr!important}
+  .hip-hero-split{grid-template-columns:1fr!important}
+  .hip-hero-title{font-size:clamp(40px,12vw,110px)!important}
+  .hip-nav-inner{padding:10px 20px!important}
+  .hip-wrap{padding:0 20px!important}
+  .hip-section{padding:48px 0!important}
   .hip-drawer-inner{padding:20px 16px!important;margin:0 8px!important}
-  .hip-pledge{padding:28px 20px!important}
-  .hip-hero-title{font-size:clamp(32px,10vw,80px)!important}
-  .hip-section-title{font-size:clamp(24px,5vw,44px)!important}
-  .hip-hero-sub{font-size:15px!important}
-  .hip-hero-btns{flex-direction:column!important;align-items:center!important}
 }
 @media(max-width:480px){
-  .hip-btech-grid{grid-template-columns:1fr!important}
-  .hip-vtool-grid{grid-template-columns:1fr!important}
-  .hip-storage-grid{grid-template-columns:1fr!important}
+  .hip-grid-4{grid-template-columns:1fr!important}
 }
 @media(min-width:769px){
   .hip-mobile-toggle{display:none!important}
@@ -68,7 +59,7 @@ em{font-style:italic}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 // ============================================================
-// HIP — HUMAN INTEGRITY PROTOCOL · Landing + Tools
+// HIP — HUMAN INTEGRITY PROTOCOL · C-Dark v2
 // Static build for GitHub Pages — no Babel, plain createElement
 // ============================================================
 var e = React.createElement;
@@ -195,10 +186,13 @@ function Fade(props) {
     transition: "opacity .7s ease "+delay+"s, transform .7s ease "+delay+"s"
   })}, props.children);
 }
-
-// ── Design tokens ──
-var go="#d4a054", gg="rgba(212,160,84,0.05)", dk="#06080f", dkc="#0a0e18", bd="rgba(212,160,84,0.1)", t1="#e8e0d4", t2="#8a8174";
-var serif="'Cormorant Garamond','Georgia',serif", sans="'DM Sans','Helvetica Neue',sans-serif", mo="'DM Mono','SF Mono',monospace";
+// ── Design tokens — C-Dark v2 ──
+var go="#E05A00", gg="rgba(224,90,0,0.04)", dk="#0A0A0A", dkc="#111111", bd="#2A2A2A", t1="#E8E8E0", t2="#8A8A80";
+var serif="'Space Grotesk',sans-serif", sans="'Outfit','Helvetica Neue',sans-serif", mo="'Azeret Mono',monospace";
+var dimLabel="#666";
+var surface="#111111";
+var hi="#E05A00";
+var rule="#2A2A2A";
 
 // ── SVG Icons ──
 function Ico(props) {
@@ -483,8 +477,8 @@ function QrTransferPanel(props) {
         text: url,
         width: 220,
         height: 220,
-        colorDark: "#d4a054",
-        colorLight: "#0a0e18",
+        colorDark: "#E05A00",
+        colorLight: "#0A0A0A",
         correctLevel: QRCode.CorrectLevel.M
       });
     } catch(ex) {
@@ -555,7 +549,7 @@ function QrTransferPanel(props) {
 
   return e("div", {style:{display:"flex",flexDirection:"column",alignItems:"center",gap:16}},
     e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,textTransform:"uppercase",color:go,marginBottom:4}}, "SCAN WITH YOUR PHONE"),
-    e("div", {ref: qrRef, style:{padding:16,background:"#0a0e18",borderRadius:12,border:"1px solid "+bd}}),
+    e("div", {ref: qrRef, style:{padding:16,background:"#0A0A0A",borderRadius:12,border:"1px solid "+bd}}),
     e("div", {style:{display:"flex",alignItems:"center",gap:8,color:t2,fontSize:13}},
       e("div", {style:{display:"inline-block",width:12,height:12,border:"2px solid "+bd,borderTopColor:go,borderRadius:"50%",animation:"hipspin 0.7s linear infinite"}}),
       "Waiting for credential…"),
@@ -734,7 +728,7 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
   if(saved && saved.version === "hip-credential-v1" && !retireMode) {
     var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Peer Vouch":saved.tier===3?"Tier 3 — Device Biometric":"Credential";
     return e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-      e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(212,160,84,0.25)",borderRadius:8}},
+      e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(224,90,0,0.25)",borderRadius:8}},
         e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}},"EXISTING CREDENTIAL FOUND"),
         e("div",{style:{fontSize:14,fontWeight:600,color:t1,marginBottom:4}},sTn),
         e("div",{style:{fontFamily:mo,fontSize:11,color:t2,wordBreak:"break-all",marginBottom:4}},"ID: "+saved.credentialId.substring(0,24)+"…"),
@@ -789,7 +783,7 @@ e(QrTransferPanel,{qrState:qrState,setQrState:setQrState,qrRef:qrRef,onImport:do
 
 mode==="t1"&&e("div",null,
 e("button",{onClick:function(){setMode(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
-e("div",{style:{padding:18,border:"1px solid rgba(212,160,84,0.2)",borderRadius:8,background:gg}},
+e("div",{style:{padding:18,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,background:gg}},
 e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}},"TIER 1 — GOVERNMENT ID"),
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Tier 1 is the highest credential level. It verifies your identity against a government-issued document through an independent pathway operator. Your personal data is processed by the verification provider and never stored by HIP — only a one-way deduplication hash."),
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},e("strong",null,"How it works:")," You'll be directed to ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," — an independent verification service that issues HIP-compatible Tier 1 credentials. Scan your government ID and complete a liveness check. Once approved, your credential is created and saved in this browser automatically."),
@@ -1015,7 +1009,7 @@ e("button",{style:btnSm,onClick:function(){setStep(0);setHash(null);setFname(nul
 if(step===4&&proofcard){
 var clsN={"CompleteHumanOrigin":"Complete Human Origin","HumanOriginAssisted":"Human Origin Assisted","HumanDirectedCollaborative":"Human-Directed Collaborative"}[proofcard.proofBundle.credentialSubject.classification]||cls;
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("div",{style:{padding:18,background:gg,borderRadius:8,border:"1px solid rgba(212,160,84,0.2)"}},
+e("div",{style:{padding:18,background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}},
 e("div",{style:{display:"flex",alignItems:"center",gap:8}},e(Ico,{name:"chart",size:18,color:go}),e("span",{style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:go}},"HIP Proof Card")),
 e("div",{style:{fontSize:11,fontFamily:mo,padding:"3px 10px",background:"rgba(74,222,128,0.08)",color:"#4ade80",borderRadius:20,border:"1px solid rgba(74,222,128,0.2)",fontWeight:600,textTransform:"uppercase"}},"VERIFIED")),
@@ -1038,7 +1032,7 @@ embeddedDataURL&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128
 ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's EXIF.")),
 e("button",{style:Object.assign({},btnG,{width:"100%",marginBottom:8}),onClick:dlEmbeddedJpeg},"↓ Save Attested "+fname),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
-e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(212,160,84,0.2)"}},
+e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
 e("button",{style:Object.assign({},embeddedDataURL?btnDl:btnG,{width:"100%"}),onClick:function(){var pcName="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";dl(proofcard,pcName)}},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
 e("button",{style:btnDl,onClick:function(){dl(proofcard.proofBundle,"HIP_Bundle.json")}},"↓ Bundle"),
@@ -1264,7 +1258,7 @@ function VerifyWizard() {
     e("div", {style:{borderTop:"1px solid "+bd,paddingTop:12,marginTop:4}},
       e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}}, "Content Matching (optional)"),
       e("p", {style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:8}}, "Add the original file to verify this Proof Card attests to that specific content."),
-      e("div", {style:{border:"2px dashed "+(contentFile?go:bd),borderRadius:8,padding:"16px",textAlign:"center",cursor:"pointer",background:contentFile?"rgba(212,160,84,0.04)":"transparent"}, onClick:function(){contentRef.current&&contentRef.current.click()}},
+      e("div", {style:{border:"2px dashed "+(contentFile?go:bd),borderRadius:8,padding:"16px",textAlign:"center",cursor:"pointer",background:contentFile?"rgba(224,90,0,0.04)":"transparent"}, onClick:function(){contentRef.current&&contentRef.current.click()}},
         e("input", {ref:contentRef, type:"file", style:{display:"none"}, onChange:loadContentFile}),
         contentFile
           ? e("span", {style:{color:"#4ade80",fontFamily:mo,fontSize:12}}, "✓ " + contentFileName + " loaded")
@@ -1321,19 +1315,19 @@ function VerifyWizard() {
     )
   );
 }
-// ── Shared button/widget styles ──
-var btnG = {display:"inline-block",fontFamily:mo,fontSize:12,letterSpacing:0.5,padding:"12px 24px",background:go,color:dk,borderRadius:6,fontWeight:600,textDecoration:"none",border:"none",cursor:"pointer"};
-var btnO = {display:"inline-block",fontFamily:mo,fontSize:12,letterSpacing:0.5,padding:"11px 24px",background:"transparent",color:go,border:"1px solid "+go,borderRadius:6,fontWeight:500,textDecoration:"none"};
-var btnSm = {fontFamily:mo,fontSize:11,padding:"8px 16px",background:"none",border:"1px solid "+bd,color:t2,borderRadius:5,cursor:"pointer"};
-var btnDl = {fontFamily:mo,fontSize:11,padding:"9px 16px",background:"rgba(212,160,84,0.08)",color:go,border:"1px solid rgba(212,160,84,0.2)",borderRadius:5,cursor:"pointer",fontWeight:600};
-var btnDis = {fontFamily:mo,fontSize:12,padding:"12px 24px",background:"#1e293b",color:"#475569",borderRadius:6,border:"none",cursor:"not-allowed"};
-var wizResult = {padding:"14px 16px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd,display:"flex",flexDirection:"column",gap:8};
+// ── Shared button/widget styles — C-Dark v2 ──
+var btnG = {display:"inline-block",fontFamily:mo,fontSize:12,letterSpacing:0.5,padding:"12px 24px",background:go,color:"#fff",border:"none",cursor:"pointer",fontWeight:600,textDecoration:"none",textAlign:"center"};
+var btnO = {display:"inline-block",fontFamily:mo,fontSize:12,letterSpacing:0.5,padding:"11px 24px",background:"transparent",color:t1,border:"1px solid "+bd,fontWeight:500,textDecoration:"none",textAlign:"center"};
+var btnSm = {fontFamily:mo,fontSize:11,padding:"8px 16px",background:"none",border:"1px solid "+bd,color:t2,cursor:"pointer"};
+var btnDl = {fontFamily:mo,fontSize:11,padding:"9px 16px",background:"rgba(224,90,0,0.08)",color:go,border:"1px solid rgba(224,90,0,0.2)",cursor:"pointer",fontWeight:600};
+var btnDis = {fontFamily:mo,fontSize:12,padding:"12px 24px",background:"#1a1a1a",color:"#555",border:"none",cursor:"not-allowed"};
+var wizResult = {padding:"14px 16px",background:"rgba(255,255,255,0.02)",border:"1px solid "+bd,display:"flex",flexDirection:"column",gap:8};
 var wizRL = {fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2};
 var wizRV = {fontFamily:mo,fontSize:11,color:t1,wordBreak:"break-all",lineHeight:1.5};
-var wizTxt = {width:"100%",background:"rgba(255,255,255,0.02)",border:"1px solid "+bd,borderRadius:6,padding:"10px 14px",color:t1,fontSize:13,fontFamily:sans,resize:"vertical",lineHeight:1.6};
+var wizTxt = {width:"100%",background:"rgba(255,255,255,0.02)",border:"1px solid "+bd,padding:"10px 14px",color:t1,fontSize:13,fontFamily:sans,resize:"vertical",lineHeight:1.6};
 
 // ============================================================
-// MAIN APP
+// MAIN APP — C-Dark v2
 // ============================================================
 function App() {
   var s1=useState(false); var ns=s1[0]; var setNs=s1[1];
@@ -1341,70 +1335,112 @@ function App() {
   var s3=useState(false); var mobileOpen=s3[0]; var setMobileOpen=s3[1];
   var s4=useState(null); var toolCred=s4[0]; var setToolCred=s4[1];
   var s5=useState("credential"); var toolTab=s5[0]; var setToolTab=s5[1];
+  var s6=useState(new Date()); var time=s6[0]; var setTime=s6[1];
 
   useEffect(function() {
-    var h = function() { setNs(window.scrollY>50) };
-    window.addEventListener("scroll",h);
-    return function() { window.removeEventListener("scroll",h) };
+    var h = function() { setNs(window.scrollY>40) };
+    window.addEventListener("scroll",h,{passive:true});
+    var t = setInterval(function(){setTime(new Date())},1000);
+    return function() { window.removeEventListener("scroll",h); clearInterval(t) };
   }, []);
 
-  // Close mobile menu on nav click
   var navClick = function(href) {
     setMobileOpen(false);
     if(href) window.location.hash = href;
   };
 
-  var navLinks = [["#how","How It Works"],["#trust","Trust"],["#bundles","Proof Bundles"],["#genesis","Genesis"],["#verify","Verify"],["#build","Build"],[G.github,"GitHub",true]];
+  var navLinks = [["#how","SPEC"],["#trust","TRUST"],["#genesis","GENESIS"],["#verify","VERIFY"],["#build","BUILD"],[G.github,"GITHUB",true]];
 
-  return e("div", {style:{background:dk,color:t1,fontFamily:sans,minHeight:"100vh",overflowX:"hidden"}},
+  // ── Section label helper ──
+  function SL(text) { return e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:2,color:dimLabel,marginBottom:24,textTransform:"uppercase"}},text) }
+  function ST(text,mw) { return e("h2",{style:{fontFamily:serif,fontSize:"clamp(24px,4vw,36px)",fontWeight:600,lineHeight:1.15,marginBottom:16,maxWidth:mw||"none"}},text) }
+  function P(text,xs) { return e("p",{style:Object.assign({fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75},xs||{})},text) }
+
+  // ── EqGrid helper (1px gap grid) ──
+  function EqGrid(cols,cls,children,opts) {
+    opts=opts||{};
+    return e("div",{className:cls,style:{display:"grid",gridTemplateColumns:"repeat("+cols+",1fr)",gap:opts.gap!==undefined?opts.gap:1,background:opts.bgColor||rule,alignItems:"stretch"}},children)
+  }
+
+  // ── Nav button with hover ──
+  function NavBtn(props) {
+    var hov=useState(false); var isHov=hov[0]; var setHov=hov[1];
+    return e("button",{
+      style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"10px 22px",cursor:"pointer",textAlign:"center",
+        border:"1px solid "+go,background:isHov?go:dk,color:isHov?"#fff":t1,
+        transition:"background 0.15s, color 0.15s"},
+      onMouseEnter:function(){setHov(true)},onMouseLeave:function(){setHov(false)},
+      onClick:props.onClick
+    },props.children)
+  }
+
+  // ── Full-width CTA button ──
+  function CtaBtn(props) {
+    return e(props.href?"a":"button",{
+      href:props.href||undefined,
+      style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,
+        padding:"14px 20px",cursor:"pointer",textAlign:"center",textDecoration:"none",
+        border:"none",background:go,color:"#fff"},
+      onClick:props.onClick
+    },props.children)
+  }
+
+  return e("div", {style:{background:dk,color:t1,fontFamily:serif,minHeight:"100vh",overflowX:"hidden"}},
 
     // ═══ NAV ═══
-    e("nav", {style:{position:"fixed",top:0,left:0,right:0,zIndex:100,borderBottom:"1px solid",transition:"all .3s",backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)",background:ns?"rgba(6,8,15,0.96)":"transparent",borderBottomColor:ns?bd:"transparent"}},
-      e("div", {className:"hip-nav-inner",style:{maxWidth:1080,margin:"0 auto",padding:"12px 32px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16}},
-        e("div", {style:{fontFamily:mo,fontSize:18,fontWeight:500,letterSpacing:6,color:go,cursor:"pointer"},onClick:function(){window.scrollTo({top:0,behavior:"smooth"})}}, "HIP"),
-        e("div", {className:"hip-nav-links",style:{display:"flex",gap:18,flexWrap:"wrap",alignItems:"center"}},
-          navLinks.map(function(n,i) {
-            return e("a", {key:i, href:n[0], target:n[2]?"_blank":undefined, rel:n[2]?"noopener":undefined, style:{fontFamily:mo,fontSize:11,letterSpacing:1,color:t2,textDecoration:"none"}}, n[1]);
-          })
-        ),
-        e("div", {className:"hip-nav-tools",style:{display:"flex",gap:8}},
-          e("button", {style:{fontFamily:mo,fontSize:11,padding:"7px 14px",background:go,color:dk,border:"none",borderRadius:5,cursor:"pointer",fontWeight:600,letterSpacing:0.5}, onClick:function(){setToolOpen(toolOpen==="attest"?null:"attest");setToolTab("attest")}}, "Try Attestation"),
-          e("button", {style:{fontFamily:mo,fontSize:11,padding:"7px 14px",background:"transparent",color:go,border:"1px solid "+go,borderRadius:5,cursor:"pointer",fontWeight:600,letterSpacing:0.5}, onClick:function(){setToolOpen(toolOpen==="verify"?null:"verify");setToolTab("verify")}}, "Verify")
-        ),
-        // Mobile hamburger
-        e("button", {className:"hip-mobile-toggle",style:{display:"none",alignItems:"center",justifyContent:"center",background:"none",border:"none",cursor:"pointer",padding:8,color:t2}, onClick:function(){setMobileOpen(!mobileOpen)}},
-          e(Ico, {name:mobileOpen?"x":"menu", size:24, color:t1})
-        )
+    e("nav", {style:{position:"fixed",top:0,left:0,right:0,zIndex:100,
+      background:ns?"rgba(10,10,10,0.95)":"transparent",
+      backdropFilter:ns?"blur(8px)":"none",
+      borderBottom:"1px solid "+(ns?rule:"transparent"),
+      transition:"all 0.2s",padding:"10px 32px",
+      display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      e("div", {style:{fontFamily:mo,fontSize:13,fontWeight:600,letterSpacing:2,cursor:"pointer"},
+        onClick:function(){window.scrollTo({top:0,behavior:"smooth"})}},
+        "HIP", e("span",{style:{color:go}},"://")
       ),
-      // Mobile menu
-      mobileOpen && e("div", {className:"hip-mobile-menu",style:{background:"rgba(6,8,15,0.98)",borderTop:"1px solid "+bd,padding:"16px 20px",display:"flex",flexDirection:"column",gap:12}},
+      e("div", {className:"hip-nav-links",style:{display:"flex",gap:20,alignItems:"center"}},
         navLinks.map(function(n,i) {
-          return e("a", {key:i, href:n[0], target:n[2]?"_blank":undefined, rel:n[2]?"noopener":undefined, style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:t2,textDecoration:"none",padding:"8px 0",borderBottom:"1px solid rgba(212,160,84,0.06)"}, onClick:function(){setMobileOpen(false)}}, n[1]);
+          return e("a",{key:i,href:n[0],target:n[2]?"_blank":undefined,rel:n[2]?"noopener":undefined,
+            style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,textDecoration:"none",fontWeight:500}},n[1]);
         }),
-        e("div", {style:{display:"flex",gap:8,marginTop:4}},
-          e("button", {style:{flex:1,fontFamily:mo,fontSize:12,padding:"10px 14px",background:go,color:dk,border:"none",borderRadius:5,cursor:"pointer",fontWeight:600}, onClick:function(){setMobileOpen(false);setToolOpen("attest");setToolTab("attest")}}, "Try Attestation"),
-          e("button", {style:{flex:1,fontFamily:mo,fontSize:12,padding:"10px 14px",background:"transparent",color:go,border:"1px solid "+go,borderRadius:5,cursor:"pointer",fontWeight:600}, onClick:function(){setMobileOpen(false);setToolOpen("verify");setToolTab("verify")}}, "Verify")
-        )
+        e(NavBtn,{onClick:function(){setToolOpen(toolOpen==="attest"?null:"attest");setToolTab("attest")}},"ATTEST"),
+        e(NavBtn,{onClick:function(){setToolOpen(toolOpen==="verify"?null:"verify");setToolTab("verify")}},"VERIFY")
+      ),
+      // Mobile hamburger
+      e("button", {className:"hip-mobile-toggle",style:{display:"none",alignItems:"center",justifyContent:"center",background:"none",border:"none",cursor:"pointer",padding:8,color:t1,fontSize:20},
+        onClick:function(){setMobileOpen(!mobileOpen)}},
+        mobileOpen?"\u2715":"\u2630"
+      )
+    ),
+    // Mobile menu
+    mobileOpen && e("div", {className:"hip-mobile-menu",style:{position:"fixed",top:44,left:0,right:0,zIndex:99,
+      background:"rgba(10,10,10,0.98)",borderBottom:"1px solid "+rule,padding:"16px 20px",display:"flex",flexDirection:"column",gap:12}},
+      navLinks.map(function(n,i) {
+        return e("a",{key:i,href:n[0],onClick:function(){setMobileOpen(false)},
+          style:{fontFamily:mo,fontSize:12,letterSpacing:1,color:dimLabel,textDecoration:"none",padding:"8px 0",borderBottom:"1px solid "+rule}},n[1]);
+      }),
+      e("div",{style:{display:"flex",gap:8,marginTop:4}},
+        e("button",{style:Object.assign({},btnG,{flex:1,display:"block",textAlign:"center"}),onClick:function(){setMobileOpen(false);setToolOpen("attest");setToolTab("attest")}},"ATTEST"),
+        e("button",{style:Object.assign({},btnO,{flex:1,display:"block",textAlign:"center",cursor:"pointer"}),onClick:function(){setMobileOpen(false);setToolOpen("verify");setToolTab("verify")}},"VERIFY")
       )
     ),
 
-
-    // ═══ TOOL DRAWER (S20 — tabbed: Credential / Attest / Verify) ═══
+    // ═══ TOOL DRAWER ═══
     toolOpen && e("div", {style:{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",display:"flex",justifyContent:"center",alignItems:"flex-start",padding:"60px 20px 20px",overflowY:"auto"}, onClick:function(ev){if(ev.target===ev.currentTarget)setToolOpen(null)}},
-      e("div", {className:"hip-drawer-inner",style:{width:"100%",maxWidth:640,background:"#0c1020",border:"1px solid rgba(212,160,84,0.2)",borderRadius:12,padding:"24px 28px",maxHeight:"calc(100vh - 80px)",overflowY:"auto"}},
+      e("div", {className:"hip-drawer-inner",style:{width:"100%",maxWidth:640,background:surface,border:"1px solid "+rule,padding:"24px 28px",maxHeight:"calc(100vh - 80px)",overflowY:"auto"}},
         e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
           e("span", {style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:go}}, "HIP Attestation Tool"),
-          e("button", {style:{background:"none",border:"1px solid "+bd,borderRadius:6,color:t2,fontSize:14,cursor:"pointer",fontFamily:mo,padding:"6px 10px",lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}, onClick:function(){setToolOpen(null)}},
+          e("button", {style:{background:"none",border:"1px solid "+rule,color:t2,fontSize:14,cursor:"pointer",fontFamily:mo,padding:"6px 10px",lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}, onClick:function(){setToolOpen(null)}},
             e(Ico, {name:"x", size:16, color:t2})
           )
         ),
-        toolCred && e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:go,textTransform:"uppercase"}},(toolCred.tier===1?"Tier 1":toolCred.tier===2?"Tier 2 — Peer Vouch":toolCred.tier===3?"Tier 3 — Biometric":"")+" Active")),
+        toolCred && e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:go,textTransform:"uppercase"}},(toolCred.tier===1?"Tier 1":toolCred.tier===2?"Tier 2 \u2014 Peer Vouch":toolCred.tier===3?"Tier 3 \u2014 Biometric":"")+" Active")),
         e("div", {style:{display:"flex",gap:6,marginBottom:16}},
           ["credential","attest","verify"].map(function(tab) {
             var active = toolTab === tab;
             return e("button", {key:tab, style:{flex:1,fontFamily:mo,fontSize:11,letterSpacing:0.5,padding:"9px 12px",
-              background:active?gg:"transparent",color:active?go:t2,border:"1px solid "+(active?go:bd),
-              borderRadius:5,cursor:"pointer",fontWeight:active?600:400,textTransform:"capitalize"}, onClick:function(){setToolTab(tab)}}, tab);
+              background:active?gg:"transparent",color:active?go:t2,border:"1px solid "+(active?go:rule),
+              cursor:"pointer",fontWeight:active?600:400,textTransform:"capitalize"}, onClick:function(){setToolTab(tab)}}, tab);
           })
         ),
         toolTab==="credential" && e(CredPanel, {cred:toolCred, setCred:setToolCred}),
@@ -1414,360 +1450,466 @@ function App() {
     ),
 
     // ═══ HERO ═══
-    e("header", {className:"hip-hero",style:{position:"relative",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:"120px 32px 80px"}},
-      e("div", {style:{position:"absolute",top:"20%",left:"50%",transform:"translate(-50%,-50%)",width:600,height:600,borderRadius:"50%",background:"radial-gradient(circle,rgba(212,160,84,0.06) 0%,transparent 70%)",pointerEvents:"none"}}),
-      e("div", {style:{position:"relative",maxWidth:720,textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:24}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:0}}, "A Protocol for Human Signal Integrity")),
-        e(Fade, {delay:0.1}, e("h1", {className:"hip-hero-title",style:{fontFamily:serif,fontSize:"clamp(42px,8vw,80px)",fontWeight:300,lineHeight:1.05,color:t1}}, "Human Integrity Protocol")),
-        e(Fade, {delay:0.2}, e("p", {className:"hip-hero-sub",style:{fontSize:17,fontWeight:400,lineHeight:1.7,color:t2,maxWidth:520}}, "A cryptographic attestation system that lets human creators prove — verifiably, permanently, and without any institution's permission — that their work is human-made.")),
-        e(Fade, {delay:0.3}, e("div", {className:"hip-hero-btns",style:{display:"flex",gap:12,flexWrap:"wrap",justifyContent:"center"}},
-          e("a", {href:"#how",style:btnG}, "How It Works"),
-          e("button", {style:btnG, onClick:function(){setToolOpen("attest");setToolTab("attest")}}, "Try Attestation"),
-          e("a", {href:"#genesis",style:btnO}, "Genesis Inscription")
-        ))
-      ),
-      e("div", {style:{position:"absolute",bottom:0,left:0,right:0,height:120,background:"linear-gradient(transparent,"+dk+")",pointerEvents:"none"}})
-    ),
-
-    // ═══ MANIFESTO ═══
-    e("section", {className:"hip-manifesto",style:{padding:"80px 32px",borderBottom:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("blockquote", {style:{fontFamily:serif,fontSize:"clamp(22px,3.5vw,36px)",fontWeight:300,fontStyle:"italic",color:go,lineHeight:1.4,maxWidth:680,margin:"0 auto 32px",textAlign:"center"}}, "\u201CHere we begin the ledger of human signal integrity.\u201D")),
-        e(Fade, {delay:0.1}, e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.8,color:t2,maxWidth:640,margin:"0 auto 18px",textAlign:"center"}}, "In an era of pervasive synthetic media, the question is no longer whether AI can produce convincing content. It can. The question is whether a human creator can prove their work is theirs — and prove it in a way that doesn't depend on any company, platform, or government staying honest, staying online, or staying interested.")),
-        e(Fade, {delay:0.18}, e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.8,color:t2,maxWidth:640,margin:"0 auto 18px",textAlign:"center"}}, "HIP is the answer. Not a service. Not an app. A protocol — open, permanent, and verifiable by anyone with a computer and an internet connection. Its authority comes from mathematics, not institutions. Its permanence comes from the Bitcoin blockchain, not a corporate database. Its value comes from the truth it records: a living human being made this."))
-      )
-    ),
-
-    // ═══ HOW IT WORKS ═══
-    e("section", {className:"hip-section",id:"how",style:{padding:"100px 0"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "How It Works"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Four steps. No accounts. No uploads.")),
-        e("div", {className:"hip-grid-2x2",style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14,marginBottom:28}},
-          [{n:"01",t:"Prove you're human",d:"Before you can attest, HIP confirms a living human is at the keyboard. You obtain a HUMAN-PROOF credential through one of several verification methods. This credential is yours. It doesn't expose your identity. It proves you're a real person."},
-           {n:"02",t:"Select your content",d:"Choose the file you want to attest. HIP computes a SHA-256 cryptographic fingerprint of the exact bytes — on your device, locally. Your file is never uploaded, transmitted, or stored. The fingerprint is all the protocol needs."},
-           {n:"03",t:"Choose your classification",d:"Honestly describe how you made it. Three categories, each equally valid:",bullets:["CHO — Complete Human Origin: no AI generation tools involved","HOA — Human Origin Assisted: AI helped at the margins","HDC — Human-Directed Collaborative: human-directed, AI co-created"]},
-           {n:"04",t:"Attest and anchor",d:"Your credential signature, the content fingerprint, your classification, and a liveness verification are packaged into a Proof Bundle and anchored on the Bitcoin blockchain. Permanent. Immutable. Verifiable by anyone, forever."}
-          ].map(function(s,i) {
-            return e(Fade, {key:i, delay:i*0.07},
-              e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:gg}},
-                e("div", {style:{fontFamily:mo,fontSize:24,fontWeight:300,color:go,opacity:0.45,marginBottom:8}}, s.n),
-                e("h3", {style:{fontSize:18,fontWeight:600,color:t1,marginBottom:8}}, s.t),
-                e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, s.d),
-                s.bullets && e("ul", {style:{listStyle:"none",marginTop:10,display:"flex",flexDirection:"column",gap:6}},
-                  s.bullets.map(function(b,j) { return e("li", {key:j, style:{fontSize:13,fontWeight:400,lineHeight:1.5,color:t1,paddingLeft:14,borderLeft:"2px solid rgba(212,160,84,0.3)"}}, b) })
-                )
-              )
-            );
-          })
-        ),
-        e(Fade, {delay:0.3}, e("div", {className:"hip-pledge",style:{maxWidth:700,margin:"0 auto",padding:"36px 32px",border:"2px solid rgba(212,160,84,0.2)",borderRadius:12,background:gg,textAlign:"center"}},
-          e("h3", {style:{fontFamily:serif,fontSize:24,fontWeight:400,color:t1,marginBottom:16}}, "Your content is yours. Always."),
-          e("p", {style:{fontSize:15,fontWeight:400,lineHeight:1.8,color:t2,marginBottom:12,textAlign:"left"}}, "HIP ", e("strong",null,"never"), " stores your creative work — not the photo, not the article, not the video, not a single byte. Your work lives wherever ", e("em",null,"you"), " put it. What HIP stores is a mathematical fingerprint — a short string of characters computed from your file. This fingerprint is a one-way function: it cannot be reversed to reconstruct, view, or access your original work."),
-          e("p", {style:{fontSize:15,fontWeight:400,lineHeight:1.8,color:t2,marginBottom:12,textAlign:"left"}}, "Your content never touches the blockchain. Your content never touches any server. Your content never leaves your device during attestation. The only thing that enters the protocol is the fingerprint. From that fingerprint, no one can recreate your work. Ever."),
-          e("div", {style:{fontFamily:mo,fontSize:12,letterSpacing:0.5,color:go,marginTop:12,padding:"10px 18px",background:"rgba(212,160,84,0.06)",borderRadius:6,border:"1px solid rgba(212,160,84,0.15)"}}, "Nothing uploaded. Nothing stored. Nothing shared. The math proves without revealing.")
-        ))
-      )
-    ),
-
-    // ═══ PROVING YOU'RE HUMAN ═══
-    e("section", {className:"hip-dk-section",id:"human",style:{padding:"100px 0",background:dkc,borderTop:"1px solid "+bd,borderBottom:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null,
-          e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Proving You're Human"),
-          e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Multiple paths. One standard. No identity exposed."),
-          e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "HIP uses a tiered credential system called HUMAN-PROOF. There are currently three verification paths, each balancing accessibility with assurance. More will be added as the landscape evolves. Every path confirms a living human holds the credential — without ever recording who that human is on the public ledger.")
-        ),
-        e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
-          [{badge:"Tier 1",name:"Government ID / Institutional",text:"Verification against an authoritative external record — a government-issued ID or recognized institutional affiliation. The highest initial assurance level. Your identity is confirmed by the pathway provider but never recorded on the public ledger.",detail:"Pseudonymous. Your name is never on-chain.",weight:"Starting strength: highest"},
-           {badge:"Tier 2",name:"Peer Vouching",text:"A Tier 1 credential holder vouches that you're a real person. Every Tier 2 credential traces back to a government-verified human. The voucher stakes their reputation: if your credential is later found fraudulent, their standing is affected.",detail:"Accountability chain. Every vouch traces to a verified identity.",weight:"Starting strength: moderate"},
-           {badge:"Tier 3",name:"Device Biometric",text:"Your phone or computer's hardware security confirms a live human was present — using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored. No identity link. Trust builds through consistent use.",detail:"Free, instant, anonymous. Your existing device.",weight:"Starting strength: low — builds with use"}
-          ].map(function(tier,i) {
-            return e(Fade, {key:i, delay:i*0.08},
-              e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:"rgba(212,160,84,0.02)"}},
-                e("div", {style:{fontFamily:mo,fontSize:11,fontWeight:500,letterSpacing:3,color:go,marginBottom:8,textTransform:"uppercase"}}, tier.badge),
-                e("div", {style:{fontSize:17,fontWeight:600,color:t1,marginBottom:8}}, tier.name),
-                e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2,marginBottom:8}}, tier.text),
-                e("div", {style:{fontFamily:mo,fontSize:11,color:go,opacity:0.7,lineHeight:1.5,marginBottom:4}}, tier.detail),
-                e("div", {style:{fontFamily:mo,fontSize:10,color:t2,opacity:0.6,letterSpacing:1,textTransform:"uppercase"}}, tier.weight)
-              )
-            );
-          })
-        ),
-        e(Fade, {delay:0.28}, e("div", {style:{marginTop:20,padding:"26px 26px",border:"1px solid rgba(212,160,84,0.18)",borderRadius:8,background:gg}},
-          e("h3", {style:{fontFamily:serif,fontSize:20,fontWeight:400,color:t1,marginBottom:12}}, "Where you start is not where you're stuck."),
-          e("p", {style:{fontSize:15,fontWeight:400,lineHeight:1.75,color:t2,marginBottom:18}}, "Every credential earns a ", e("strong",null,"Trust Score"), " — a public number (0–100) measuring the protocol's confidence in the credential, built through consistent, honest use. A Tier 3 credential used honestly for two years can build significant standing. The tier is a head start, not a ceiling."),
-          e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
-            [{l:"Earn through use",d:"Every honest attestation adds to your credential's history. Device-verified attestations earn the most. The protocol rewards consistency, not volume."},
-             {l:"Upgrade anytime",d:"A Tier 3 creator can upgrade to Tier 2 (peer vouch from a Tier 1 holder) or Tier 1 (government ID) at any time. Your behavioral history carries forward — nothing is lost."},
-             {l:"Same ceiling for everyone",d:"The maximum Trust Score is the same regardless of starting tier. HIP does not permanently discount the human who started without institutional backing."}
-            ].map(function(p,i) {
-              return e("div", {key:i, style:{padding:"16px 18px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd}},
-                e("div", {style:{fontFamily:mo,fontSize:12,fontWeight:500,color:go,marginBottom:5,letterSpacing:0.5}}, p.l),
-                e("div", {style:{fontSize:13,fontWeight:400,lineHeight:1.65,color:t2}}, p.d)
-              );
-            })
+    e("header", {style:{padding:"100px 32px 60px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null,
+        e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:1,color:dimLabel,
+          display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:20,
+          borderBottom:"1px solid "+rule,paddingBottom:10}},
+          e("span",null,
+            e("span",{style:{display:"inline-block",width:6,height:6,borderRadius:"50%",background:"#22C55E",marginRight:6,verticalAlign:"middle"}}),
+            "STATUS: LIVE"
+          ),
+          e("span",null,"GENESIS: BLOCK "+G.block),
+          e("span",null,"UTC: "+time.toISOString().replace("T"," ").substring(0,19),
+            e("span",{style:{animation:"blink 1s step-end infinite",marginLeft:1}},"_")
           )
-        )),
-        e(Fade, {delay:0.35}, e("div", {style:{marginTop:16,padding:"16px 20px",border:"1px solid "+bd,borderRadius:8,background:gg,fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}},
-          "Every attestation also requires a ", e("strong",null,"point-of-use liveness check"), " — confirming a living human is present at the moment of each attestation, not just at credential issuance. Liveness status is recorded honestly in every Proof Bundle: device-verified, behavioral fallback, or unverified. Nothing is hidden."
-        )),
-        e(Fade, {delay:0.4}, e("div", {style:{marginTop:18}},
-          e("button", {style:{fontFamily:mo,fontSize:12,padding:"10px 20px",background:go,color:dk,border:"none",borderRadius:5,cursor:"pointer",fontWeight:600,letterSpacing:0.5}, onClick:function(){setToolOpen("credential");setToolTab("credential")}}, "Get Your Credential")
-        ))
-      )
-    ),
-
-    // ═══ WHAT HIP IS / IS NOT ═══
-    e("section", {className:"hip-section",style:{padding:"100px 0"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "What HIP Is Not"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Not an NFT. Not a watermark. Not a detector.")),
-        e("div", {className:"hip-grid-2",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}},
-          e(Fade, {delay:0.06}, e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:dkc}},
-            e("div", {style:{fontFamily:mo,fontSize:12,letterSpacing:2,textTransform:"uppercase",color:t2,marginBottom:16}}, "HIP does not"),
-            e("div", {style:{display:"flex",flexDirection:"column",gap:10}},
-              ["Store, upload, or transmit your content — ever","Create tokens, NFTs, or represent ownership","Require any platform's permission or cooperation","Cost anything to verify","Depend on any company staying in business","Try to detect or flag AI content","Expose your identity on the public ledger"].map(function(t,i) {
-                return e("div", {key:i, style:{fontSize:14,fontWeight:400,lineHeight:1.5,color:t1,display:"flex",gap:10,alignItems:"flex-start"}},
-                  e("span", {style:{fontFamily:mo,fontSize:14,color:"#c0756b",flexShrink:0,width:18}}, "✗"), t
-                );
-              })
-            )
-          )),
-          e(Fade, {delay:0.12}, e("div", {style:{padding:"24px 22px",border:"1px solid rgba(212,160,84,0.25)",borderRadius:8,background:dkc}},
-            e("div", {style:{fontFamily:mo,fontSize:12,letterSpacing:2,textTransform:"uppercase",color:t2,marginBottom:16}}, "HIP does"),
-            e("div", {style:{display:"flex",flexDirection:"column",gap:10}},
-              ["Store only a mathematical fingerprint of your content","Create a permanent, signed attestation record","Work with any platform, permissionlessly","Let anyone verify, for free, forever","Derive its authority from math, not institutions","Let humans prove what's theirs","Keep you pseudonymous — credential, not identity"].map(function(t,i) {
-                return e("div", {key:i, style:{fontSize:14,fontWeight:400,lineHeight:1.5,color:t1,display:"flex",gap:10,alignItems:"flex-start"}},
-                  e("span", {style:{fontFamily:mo,fontSize:14,color:go,flexShrink:0,width:18}}, "✓"), t
-                );
-              })
-            )
-          ))
+        ),
+        e("h1", {className:"hip-hero-title",style:{fontFamily:serif,fontSize:"clamp(52px,9vw,110px)",fontWeight:700,lineHeight:0.92,letterSpacing:-3,marginBottom:28,textTransform:"uppercase"}},
+          "Human",e("br"),"Integrity",e("br"),"Protocol"
+        ),
+        e("div", {className:"hip-hero-split",style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:40,borderTop:"2px solid "+rule,paddingTop:24}},
+          e("p",{style:{fontFamily:sans,fontSize:17,color:t2,lineHeight:1.75}},"A cryptographic attestation system that lets human creators prove \u2014 verifiably, permanently, and without any institution\u2019s permission \u2014 that their work is human-made."),
+          e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+            e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,marginBottom:4}},"ACTIONS"),
+            e(CtaBtn,{href:"#how"},"HOW IT WORKS"),
+            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST NOW")
+          )
         )
       )
     ),
 
-    // ═══ TRUST MODEL ═══
-    e("section", {className:"hip-dk-section",id:"trust",style:{padding:"100px 0",background:dkc,borderTop:"1px solid "+bd,borderBottom:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
+    // ═══ MANIFESTO ═══
+    e("section", {style:{borderTop:"2px solid "+rule,padding:"60px 32px"}},
+      e("div", {className:"hip-wrap",style:{maxWidth:700,margin:"0 auto"}},
         e(Fade, null,
-          e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Trust Model"),
-          e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "What happens when someone lies."),
-          e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "HIP is an attestation system — creators make claims about their work, and those claims are recorded permanently. Yes, someone could lie. Here's why the protocol is designed to catch them, and what happens when it does.")
-        ),
-        e("div", {className:"hip-grid-2",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}},
-          [{ico:"chart",t:"Behavioral Monitoring",d:"Every credential accumulates a Trust Index through consistent, honest use. The protocol's Propagation Fingerprint system continuously analyzes attestation patterns against content signals. Anomalies trigger automated review. The math watches even when nobody else does."},
-           {ico:"search",t:"Three Kinds of Compromise",d:"Stolen credential — pre-theft attestations protected. Fraudulent credential — every attestation flagged, voucher takes a hit. Systematic false attestation — credential permanently invalidated. Each type has defined consequences."},
-           {ico:"chain",t:"Permanent Public Record",d:"Confirmed compromise collapses Trust Index to zero. The credential is permanently invalidated. But nothing is deleted. Every attestation stays on the ledger — now flagged. Dishonesty is inscribed permanently, right next to honest attestations."},
-           {ico:"scale",t:"Accountability, Not Trust",d:"HIP doesn't ask you to trust anyone. Vouchers stake their standing. Credentials build value through behavior that's costly to fake. Every piece of evidence lives on a public ledger no one controls. Integrity from structure, not intentions."}
-          ].map(function(c,i) {
-            return e(Fade, {key:i, delay:i*0.06},
-              e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:gg}},
-                e("div", {style:{marginBottom:10,color:go}}, e(Ico, {name:c.ico, size:22, color:go, strokeWidth:1.5})),
-                e("h3", {style:{fontSize:16,fontWeight:600,color:t1,marginBottom:8}}, c.t),
-                e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, c.d)
-              )
+          e("div",{style:{fontFamily:serif,fontSize:"clamp(20px,3vw,28px)",fontWeight:500,fontStyle:"italic",color:go,lineHeight:1.4,textAlign:"center",marginBottom:28}},
+            "\u201CHere we begin the ledger of human signal integrity.\u201D"
+          ),
+          P("In an era of pervasive synthetic media, the question is no longer whether AI can produce convincing content. It can. The question is whether a human creator can prove their work is theirs \u2014 and prove it in a way that doesn\u2019t depend on any company, platform, or government staying honest, staying online, or staying interested.",{textAlign:"center",marginBottom:14}),
+          P("HIP is the answer. Not a service. Not an app. A protocol \u2014 open, permanent, and verifiable by anyone with a computer and an internet connection. Its authority comes from mathematics, not institutions. Its permanence comes from the Bitcoin blockchain, not a corporate database. Its value comes from the truth it records: a living human being made this.",{textAlign:"center"})
+        )
+      )
+    ),
+
+    // ═══ HOW IT WORKS ═══
+    e("section", {id:"how",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null, SL("PROTOCOL / HOW IT WORKS"), ST("Four steps. No accounts. No uploads.")),
+      e(Fade, {delay:0.1},
+        EqGrid(4,"hip-grid-4",
+          [{n:"01",t:"CREDENTIAL",d:"Before you can attest, HIP confirms a living human is at the keyboard. You obtain a HUMAN-PROOF credential through one of several verification methods. This credential is yours. It doesn\u2019t expose your identity. It proves you\u2019re a real person."},
+           {n:"02",t:"FINGERPRINT",d:"Choose the file you want to attest. HIP computes a SHA-256 cryptographic fingerprint of the exact bytes \u2014 on your device, locally. Your file is never uploaded, transmitted, or stored. The fingerprint is all the protocol needs."},
+           {n:"03",t:"CLASSIFY",d:"Honestly describe how you made it. Three categories, each equally valid: CHO \u2014 Complete Human Origin. HOA \u2014 Human Origin Assisted. HDC \u2014 Human-Directed Collaborative."},
+           {n:"04",t:"INSCRIBE",d:"Your credential signature, the content fingerprint, your classification, and a liveness verification are packaged into a Proof Bundle and anchored on the Bitcoin blockchain. Permanent. Immutable. Verifiable by anyone, forever."}
+          ].map(function(s,i) {
+            return e("div",{key:i,style:{padding:"24px 20px",background:i%2===0?"rgba(255,255,255,0.015)":dk}},
+              e("div",{style:{fontFamily:mo,fontSize:28,fontWeight:300,color:go,marginBottom:12}},s.n),
+              e("div",{style:{fontFamily:mo,fontSize:11,fontWeight:600,letterSpacing:1,marginBottom:8}},s.t),
+              P(s.d)
             );
           })
+        )
+      ),
+
+      // File uniqueness explainer
+      e(Fade, {delay:0.15},
+        e("div",{style:{marginTop:16,padding:"22px 24px",border:"1px solid rgba(224,90,0,0.2)",background:surface}},
+          e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1,fontWeight:600,color:go,marginBottom:10}},"ONE FILE, ONE FINGERPRINT"),
+          P("HIP attests exact files, not visual content. A JPEG and a PNG of the same photograph are different files with different fingerprints \u2014 each needs its own attestation. Even small changes \u2014 a crop, a resize, a format conversion, a single edited pixel \u2014 produce a new file with a new fingerprint.",{marginBottom:10}),
+          P("This is by design. It\u2019s what makes attestations tamper-proof: if even one byte changes, the fingerprint won\u2019t match. But it also means creators who work with multiple versions of the same content will need to attest each version they want protected.",{marginBottom:10}),
+          e("p",{style:{fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75}},
+            e("strong",{style:{color:t1}},"Our recommendation: attest your master file first."),
+            " That\u2019s your canonical version \u2014 the full-resolution original. Then attest each derivative you publish. Your credential ties them together: anyone verifying can see the same human attested the master and every export."
+          )
+        )
+      ),
+
+      // Your content is yours
+      e(Fade, {delay:0.2},
+        e("div",{style:{marginTop:12,padding:"28px 24px",border:"2px solid "+rule,background:surface}},
+          e("h3",{style:{fontFamily:serif,fontSize:18,fontWeight:600,marginBottom:12}},"Your content is yours. Always."),
+          e("p",{style:{fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75,marginBottom:10}},
+            "HIP ",e("strong",{style:{color:t1}},"never")," stores your creative work \u2014 not the photo, not the article, not the video, not a single byte. Your work lives wherever ",e("em",null,"you")," put it. What HIP stores is a mathematical fingerprint \u2014 a short string of characters computed from your file. This fingerprint is a one-way function: it cannot be reversed to reconstruct, view, or access your original work."
+          ),
+          P("Your content never touches the blockchain. Your content never touches any server. Your content never leaves your device during attestation. The only thing that enters the protocol is the fingerprint.",{marginBottom:10}),
+          e("div",{style:{fontFamily:mo,fontSize:12,letterSpacing:0.5,color:go,marginTop:14,padding:"10px 18px",background:"rgba(224,90,0,0.06)",border:"1px solid rgba(224,90,0,0.15)"}},
+            "Nothing uploaded. Nothing stored. Nothing shared. The math proves without revealing."
+          )
+        )
+      )
+    ),
+
+    // ═══ PROVING YOU'RE HUMAN ═══
+    e("section", {id:"human",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",background:surface}},
+      e("div", {className:"hip-wrap",style:{maxWidth:1000,margin:"0 auto"}},
+        e(Fade, null, SL("CREDENTIAL / TIERS"), ST("Multiple paths. One standard. No identity exposed.",500),
+          P("HIP uses a tiered credential system called HUMAN-PROOF. There are currently three verification paths, each balancing accessibility with assurance. Every path confirms a living human holds the credential \u2014 without ever recording who that human is on the public ledger.",{maxWidth:640,marginBottom:32})
+        ),
+        e(Fade, {delay:0.1},
+          EqGrid(3,"hip-grid-3",
+            [{tier:"T1",name:"Government ID",desc:"Verification against an authoritative external record \u2014 a government-issued ID or recognized institutional affiliation. The highest initial assurance level. Your identity is confirmed by the pathway provider but never recorded on the public ledger.",strength:"HIGHEST",color:go},
+             {tier:"T2",name:"Peer Vouching",desc:"A Tier 1 credential holder vouches that you\u2019re a real person. Every Tier 2 credential traces back to a government-verified human. The voucher stakes their reputation: if your credential is later found fraudulent, their standing is affected.",strength:"MODERATE",color:"#3B82F6"},
+             {tier:"T3",name:"Device Biometric",desc:"Your phone or computer\u2019s hardware security confirms a live human was present \u2014 using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored.",strength:"ACCESSIBLE",color:"#22C55E"}
+            ].map(function(t,i) {
+              return e("div",{key:i,style:{padding:"28px 24px",background:dk,borderLeft:"3px solid "+t.color}},
+                e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}},
+                  e("span",{style:{fontFamily:mo,fontSize:24,fontWeight:700,color:t.color}},t.tier),
+                  e("span",{style:{fontFamily:mo,fontSize:9,letterSpacing:1,color:dimLabel}},t.strength)
+                ),
+                e("div",{style:{fontFamily:serif,fontSize:17,fontWeight:600,marginBottom:8}},t.name),
+                P(t.desc)
+              );
+            })
+          )
+        ),
+
+        // "Where you start" box
+        e(Fade, {delay:0.2},
+          e("div",{style:{marginTop:24,padding:"28px 24px",border:"1px solid "+rule,background:dk}},
+            e("h3",{style:{fontFamily:serif,fontSize:18,fontWeight:600,marginBottom:12}},"Where you start is not where you\u2019re stuck."),
+            e("p",{style:{fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75,marginBottom:18}},
+              "Every credential earns a ",e("strong",{style:{color:t1}},"Trust Score")," \u2014 a public number (0\u2013100) measuring the protocol\u2019s confidence in the credential, built through consistent, honest use. A Tier 3 credential used honestly for two years can build significant standing. The tier is a head start, not a ceiling."
+            ),
+            EqGrid(3,"hip-grid-3",
+              [{l:"Earn through use",d:"Every honest attestation adds to your credential\u2019s history. Device-verified attestations earn the most. The protocol rewards consistency, not volume."},
+               {l:"Upgrade anytime",d:"A Tier 3 creator can upgrade to Tier 2 (peer vouch from a Tier 1 holder) or Tier 1 (government ID) at any time. Your behavioral history carries forward \u2014 nothing is lost."},
+               {l:"Same ceiling for everyone",d:"The maximum Trust Score is the same regardless of starting tier. HIP does not permanently discount the human who started without institutional backing."}
+              ].map(function(p,i) {
+                return e("div",{key:i,style:{padding:"16px 18px",background:"rgba(255,255,255,0.02)",borderLeft:"1px solid "+rule}},
+                  e("div",{style:{fontFamily:mo,fontSize:12,fontWeight:500,color:go,marginBottom:6,letterSpacing:0.5}},p.l),
+                  P(p.d,{fontSize:13})
+                );
+              }),
+              {gap:0,bgColor:"transparent"}
+            )
+          )
+        ),
+
+        // Liveness callout
+        e(Fade, {delay:0.25},
+          e("p",{style:{marginTop:16,padding:"14px 18px",border:"1px solid "+rule,background:dk,fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75}},
+            "Every attestation also requires a ",e("strong",{style:{color:t1}},"point-of-use liveness check"),
+            " \u2014 confirming a living human is present at the moment of each attestation, not just at credential issuance. Liveness status is recorded honestly in every Proof Bundle: device-verified, behavioral fallback, or unverified. Nothing is hidden."
+          )
+        ),
+
+        // Get credential CTA
+        e(Fade, {delay:0.3},
+          e("div",{style:{marginTop:18}},
+            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+              onClick:function(){setToolOpen("credential");setToolTab("credential")}},"GET YOUR CREDENTIAL")
+          )
         )
       )
     ),
 
     // ═══ CATEGORIES ═══
-    e("section", {className:"hip-section",style:{padding:"100px 0"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Three Categories"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Honest about process, not judgmental about tools."), e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "HIP records the truth about how something was made. All three categories are valid attestations by real humans about real creative work.")),
-        e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
+    e("section", {className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null, SL("PROTOCOL / CATEGORIES"), ST("Honest about process, not judgmental about tools."),
+        P("HIP records the truth about how something was made. All three categories are valid attestations by real humans about real creative work.",{maxWidth:640,marginBottom:32})
+      ),
+      e(Fade, {delay:0.1},
+        EqGrid(3,"hip-grid-3",
           [{b:"CHO",n:"Complete Human Origin",d:"The entire creative work was produced by the attesting human without AI generation tools. The photo you shot. The article you wrote. The song you composed."},
-           {b:"HOA",n:"Human Origin Assisted",d:"Human-created work where AI tools assisted — editing, suggestions, refinement, spell-checking, color grading. The core creative work is human."},
+           {b:"HOA",n:"Human Origin Assisted",d:"Human-created work where AI tools assisted \u2014 editing, suggestions, refinement, spell-checking, color grading. The core creative work is human."},
            {b:"HDC",n:"Human-Directed Collaborative",d:"Work produced through human-directed collaboration with AI generation tools. The human provided vision, direction, and editorial judgment."}
           ].map(function(c,i) {
-            return e(Fade, {key:i, delay:i*0.07}, e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:gg,textAlign:"center"}},
-              e("div", {style:{fontFamily:mo,fontSize:14,fontWeight:500,letterSpacing:4,color:go,marginBottom:6}}, c.b),
-              e("div", {style:{fontSize:17,fontWeight:600,color:t1,marginBottom:6}}, c.n),
-              e("div", {style:{fontSize:14,fontWeight:400,lineHeight:1.65,color:t2}}, c.d)
-            ));
+            return e("div",{key:i,style:{padding:"28px 24px",background:surface,textAlign:"center"}},
+              e("div",{style:{fontFamily:mo,fontSize:14,fontWeight:500,letterSpacing:4,color:go,marginBottom:6}},c.b),
+              e("div",{style:{fontFamily:serif,fontSize:17,fontWeight:600,marginBottom:8}},c.n),
+              P(c.d)
+            );
+          })
+        )
+      ),
+      // ATTEST HERE CTA
+      e(Fade, {delay:0.15},
+        e("div",{style:{marginTop:16}},
+          e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+            onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST HERE")
+        )
+      )
+    ),
+
+    // ═══ WHAT HIP IS / IS NOT ═══
+    e("section", {className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",background:surface}},
+      e("div", {className:"hip-wrap",style:{maxWidth:1000,margin:"0 auto"}},
+        e(Fade, null, SL("PROTOCOL / BOUNDARIES"), ST("Not an NFT. Not a watermark. Not a detector.")),
+        e(Fade, {delay:0.1},
+          EqGrid(2,"hip-grid-2",[
+            e("div",{key:0,style:{padding:"28px 24px",background:dk}},
+              e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:dimLabel,marginBottom:16}},"HIP DOES NOT"),
+              ["Store, upload, or transmit your content \u2014 ever","Create tokens, NFTs, or represent ownership","Require any platform\u2019s permission or cooperation","Cost anything to verify","Depend on any company staying in business","Try to detect or flag AI content","Expose your identity on the public ledger"].map(function(txt,i) {
+                return e("div",{key:i,style:{fontFamily:sans,fontSize:14,fontWeight:400,lineHeight:1.5,color:t2,display:"flex",gap:10,alignItems:"flex-start",marginBottom:6}},
+                  e("span",{style:{fontFamily:mo,fontSize:12,color:"#EF4444",flexShrink:0,width:16}},"\u2717"),txt
+                );
+              })
+            ),
+            e("div",{key:1,style:{padding:"28px 24px",background:dk}},
+              e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:dimLabel,marginBottom:16}},"HIP DOES"),
+              ["Store only a mathematical fingerprint of your content","Create a permanent, signed attestation record","Work with any platform, permissionlessly","Let anyone verify, for free, forever","Derive its authority from math, not institutions","Let humans prove what\u2019s theirs","Keep you pseudonymous \u2014 credential, not identity"].map(function(txt,i) {
+                return e("div",{key:i,style:{fontFamily:sans,fontSize:14,fontWeight:400,lineHeight:1.5,color:"#BBB",display:"flex",gap:10,alignItems:"flex-start",marginBottom:6}},
+                  e("span",{style:{fontFamily:mo,fontSize:12,color:go,flexShrink:0,width:16}},"\u2713"),txt
+                );
+              })
+            )
+          ])
+        )
+      )
+    ),
+
+    // ═══ TRUST MODEL ═══
+    e("section", {id:"trust",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null, SL("PROTOCOL / TRUST MODEL"), ST("What happens when someone lies.",500),
+        P("HIP is an attestation system \u2014 creators make claims about their work, and those claims are recorded permanently. Yes, someone could lie. Here\u2019s why the protocol is designed to catch them, and what happens when it does.",{maxWidth:640,marginBottom:32})
+      ),
+      e(Fade, {delay:0.1},
+        EqGrid(2,"hip-grid-2",
+          [{t:"Behavioral Monitoring",d:"Every credential accumulates a Trust Score through consistent, honest use. The protocol\u2019s Propagation Fingerprint system continuously analyzes attestation patterns against content signals. Anomalies trigger automated review. The math watches even when nobody else does."},
+           {t:"Three Kinds of Compromise",d:"Stolen credential \u2014 pre-theft attestations protected. Fraudulent credential \u2014 every attestation flagged, voucher takes a hit. Systematic false attestation \u2014 credential permanently invalidated. Each type has defined consequences."},
+           {t:"Permanent Public Record",d:"Confirmed compromise collapses Trust Score to zero. The credential is permanently invalidated. But nothing is deleted. Every attestation stays on the ledger \u2014 now flagged. Dishonesty is inscribed permanently, right next to honest attestations."},
+           {t:"Accountability, Not Trust",d:"HIP doesn\u2019t ask you to trust anyone. Vouchers stake their standing. Credentials build value through behavior that\u2019s costly to fake. Every piece of evidence lives on a public ledger no one controls. Integrity from structure, not intentions."}
+          ].map(function(c,i) {
+            return e("div",{key:i,style:{padding:"28px 24px",background:surface}},
+              e("div",{style:{fontFamily:serif,fontSize:15,fontWeight:600,marginBottom:8}},c.t),
+              P(c.d)
+            );
           })
         )
       )
     ),
 
     // ═══ PROOF BUNDLES ═══
-    e("section", {className:"hip-dk-section",id:"bundles",style:{padding:"100px 0",background:dkc,borderTop:"1px solid "+bd,borderBottom:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Inside a Proof Bundle"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "What the attestation actually contains."), e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "When you attest, HIP creates two artifacts: a ", e("strong",null,"Proof Bundle"), " (the complete off-chain record, ~2-3 KB) and a ", e("strong",null,"Proof Anchor"), " (a minimal on-chain summary, ~250 bytes, inscribed on Bitcoin). Here's what's inside — and what's not.")),
-        e(Fade, {delay:0.1}, e("div", {style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:1,background:bd,borderRadius:8,overflow:"hidden",marginBottom:18}},
-          [{f:"Content Fingerprint",w:"SHA-256 hash of your file",y:"References your content without storing it. One-way — cannot reconstruct your work."},
-           {f:"Classification",w:"CHO, HOA, or HDC",y:"Your honest claim about how the content was created."},
-           {f:"Credential Signature",w:"Ed25519 digital signature",y:"Cryptographic proof that your verified credential signed this attestation."},
-           {f:"Liveness Verification",w:"Device attestation or behavioral score",y:"Proof a living human was present at the moment of attestation."},
-           {f:"Timestamp",w:"ISO 8601 UTC datetime",y:"When the attestation was made — assigned by the processing node, not self-reported."},
-           {f:"Editorial Statement",w:"Optional free text (≤2000 chars)",y:"Your own words about the work. Recorded but not evaluated."},
-           {f:"Credential Reference",w:"Pseudonymous credential ID",y:"Links to your credential without revealing your identity."},
-           {f:"Pathway Reference",w:"Verification method + tier",y:"Which method verified your humanity and its current standing."}
-          ].map(function(f,i) {
-            return e("div", {key:i, style:{padding:"16px 18px",background:dkc}},
-              e("div", {style:{fontFamily:mo,fontSize:11,fontWeight:500,letterSpacing:0.5,color:go,marginBottom:3}}, f.f),
-              e("div", {style:{fontSize:14,fontWeight:500,color:t1,marginBottom:3}}, f.w),
-              e("div", {style:{fontSize:13,fontWeight:400,lineHeight:1.6,color:t2}}, f.y)
-            );
-          })
-        )),
-        e(Fade, {delay:0.18}, e("div", {style:{padding:"22px 24px",border:"2px solid rgba(212,160,84,0.2)",borderRadius:8,background:gg,marginBottom:18}},
-          e("h3", {style:{fontFamily:serif,fontSize:18,fontWeight:400,color:t1,marginBottom:8}}, "What is NOT in a Proof Bundle"),
-          e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, "Your content. Your name. Your biometric data. Your location. Your device identity. Nothing that could identify you, access your work, or reconstruct your creative output. The Proof Bundle is a signed mathematical claim — nothing more, nothing less.")
-        )),
-        e(Fade, {delay:0.24}, e("div", {style:{padding:"22px 24px",border:"1px solid "+bd,borderRadius:8,background:"rgba(255,255,255,0.015)",marginBottom:18}},
-          e("h3", {style:{fontFamily:mo,fontSize:13,letterSpacing:0.5,color:t1,marginBottom:8}}, "The Proof Anchor (on-chain)"),
-          e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, "The Proof Anchor is a minimal summary inscribed on Bitcoin — about 250 bytes. It contains the content fingerprint, credential ID, classification, timestamp, Bundle hash, and a retrieval link. This is what makes the attestation permanent. The Bundle and Anchor are linked by a cryptographic hash — tamper with one and the other won't match. The blockchain is the ground truth.")
-        )),
-        e(Fade, {delay:0.3}, e("div", {style:{padding:"18px 22px",border:"1px solid "+bd,borderRadius:8,background:dkc}},
-          e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,textTransform:"uppercase",color:t2,marginBottom:10}}, "Technical Details"),
-          e("div", {className:"hip-btech-grid",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:4}},
-            [["Format","JSON-LD (W3C Verifiable Credentials)"],["Serialization","RFC 8785 Canonical JSON"],["Hash","SHA-256 (FIPS 180-4)"],["Signature","Ed25519 (RFC 8032)"],["Bundle Size","1.8 – 2.7 KB typical"],["Anchor Size","~250 bytes"],["Schema","WF-v1.0"],["Spec","WF-SPEC-v1 + CRYPTO-SPEC-v1"]].map(function(kv,i) {
-              return e("div", {key:i, style:{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid rgba(255,255,255,0.03)"}},
-                e("span", {style:{fontFamily:mo,fontSize:11,color:t2}}, kv[0]),
-                e("span", {style:{fontFamily:mo,fontSize:11,color:t1}}, kv[1])
+    e("section", {id:"bundles",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",background:surface}},
+      e("div", {className:"hip-wrap",style:{maxWidth:1000,margin:"0 auto"}},
+        e(Fade, null, SL("PROTOCOL / PROOF BUNDLES"), ST("What the attestation actually contains."),
+          e("p",{style:{fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75,maxWidth:640,marginBottom:32}},
+            "When you attest, HIP creates two artifacts: a ",e("strong",{style:{color:t1}},"Proof Bundle")," (the complete off-chain record, ~2-3 KB) and a ",e("strong",{style:{color:t1}},"Proof Anchor")," (a minimal on-chain summary, ~250 bytes, inscribed on Bitcoin). Here\u2019s what\u2019s inside \u2014 and what\u2019s not."
+          )
+        ),
+        e(Fade, {delay:0.1},
+          EqGrid(4,"hip-grid-4",
+            [{f:"Content Fingerprint",w:"SHA-256 hash of your file",y:"References your content without storing it. One-way \u2014 cannot reconstruct your work."},
+             {f:"Classification",w:"CHO, HOA, or HDC",y:"Your honest claim about how the content was created."},
+             {f:"Credential Signature",w:"Ed25519 digital signature",y:"Cryptographic proof that your verified credential signed this attestation."},
+             {f:"Liveness Verification",w:"Device attestation or behavioral score",y:"Proof a living human was present at the moment of attestation."},
+             {f:"Timestamp",w:"ISO 8601 UTC datetime",y:"When the attestation was made \u2014 assigned by the processing node, not self-reported."},
+             {f:"Editorial Statement",w:"Optional free text (\u22642000 chars)",y:"Your own words about the work. Recorded but not evaluated."},
+             {f:"Credential Reference",w:"Pseudonymous credential ID",y:"Links to your credential without revealing your identity."},
+             {f:"Pathway Reference",w:"Verification method + tier",y:"Which method verified your humanity and its current standing."}
+            ].map(function(f,i) {
+              return e("div",{key:i,style:{padding:"16px 18px",background:surface}},
+                e("div",{style:{fontFamily:mo,fontSize:11,fontWeight:500,letterSpacing:0.5,color:go,marginBottom:4}},f.f),
+                e("div",{style:{fontFamily:serif,fontSize:13,fontWeight:600,color:t1,marginBottom:4}},f.w),
+                P(f.y,{fontSize:13})
               );
             })
           )
-        ))
-      )
-    ),
+        ),
 
-    // ═══ GENESIS ═══
-    e("section", {className:"hip-section",id:"genesis",style:{padding:"100px 0"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Genesis Inscription"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Born on Bitcoin. Block "+G.block+"."), e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "On March 13, 2026, the HIP Genesis Covenant Charter was permanently inscribed on the Bitcoin blockchain. Every subsequent HIP attestation traces its lineage to this root.")),
-        e(Fade, {delay:0.1}, e("div", {style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:1,background:bd,borderRadius:8,overflow:"hidden",margin:"20px 0"}},
-          [["Genesis Transaction",G.txid,G.explorer],["OP_RETURN Data",G.opReturn],["Block Height",G.block,null,1],["Confirmed",G.timestamp,null,1],["Genesis Hash (SHA-256)",G.genesisHash],["Charter Hash",G.charterHash],["Firewall Hash",G.firewallHash],["Guardian Key (Ed25519)",G.guardianKey]].map(function(row,i) {
-            var label=row[0],val=row[1],link=row[2],plain=row[3];
-            return e("div", {key:i, style:{padding:"14px 18px",background:dkc}},
-              e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:2,textTransform:"uppercase",color:t2,marginBottom:4}}, label),
-              link ? e("a", {href:link,target:"_blank",rel:"noopener",style:{fontFamily:mo,fontSize:11,color:go,wordBreak:"break-all",lineHeight:1.5,display:"block"}}, val)
-                : e("code", {style:Object.assign({fontFamily:mo,fontSize:11,color:t1,wordBreak:"break-all",lineHeight:1.5,display:"block"},plain?{}:{})}, val)
-            );
-          })
-        )),
-        e(Fade, {delay:0.18},
-          e("div", {style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:t1,marginBottom:14,marginTop:32}}, "Content-Addressed Storage"),
-          e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:14}}, "The full payload and charter are on two independent, permanent networks. Click to retrieve directly."),
-          e("div", {className:"hip-storage-grid",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:10}},
-            [["IPFS — Payload",G.ipfsPayload,"https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["IPFS — Charter",G.ipfsCharter,"https://gateway.pinata.cloud/ipfs/"+G.ipfsCharter],["Arweave — Payload",G.arweavePayload,"https://arweave.net/"+G.arweavePayload],["Arweave — Charter",G.arweaveCharter,"https://arweave.net/"+G.arweaveCharter]].map(function(row,i) {
-              return e("a", {key:i, href:row[2],target:"_blank",rel:"noopener",style:{display:"block",padding:"14px 18px",border:"1px solid "+bd,borderRadius:6,background:gg,textDecoration:"none"}},
-                e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:2,textTransform:"uppercase",color:t2,marginBottom:4}}, row[0]),
-                e("code", {style:{fontFamily:mo,fontSize:10,color:go,wordBreak:"break-all",lineHeight:1.5,display:"block",marginBottom:4}}, row[1]),
-                e("div", {style:{fontFamily:mo,fontSize:11,color:t1,opacity:0.6}}, "Open →")
-              );
-            })
+        // What is NOT in a Proof Bundle
+        e(Fade, {delay:0.15},
+          e("div",{style:{marginTop:16,padding:"22px 24px",border:"2px solid "+rule,background:dk}},
+            e("h3",{style:{fontFamily:serif,fontSize:16,fontWeight:600,marginBottom:8}},"What is NOT in a Proof Bundle"),
+            P("Your content. Your name. Your biometric data. Your location. Your device identity. Nothing that could identify you, access your work, or reconstruct your creative output. The Proof Bundle is a signed mathematical claim \u2014 nothing more, nothing less.")
+          )
+        ),
+
+        // Proof Anchor
+        e(Fade, {delay:0.2},
+          e("div",{style:{marginTop:12,padding:"22px 24px",border:"1px solid "+rule,background:dk}},
+            e("div",{style:{fontFamily:mo,fontSize:12,letterSpacing:0.5,fontWeight:600,marginBottom:8}},"The Proof Anchor (on-chain)"),
+            P("The Proof Anchor is a minimal summary inscribed on Bitcoin \u2014 about 250 bytes. It contains the content fingerprint, credential ID, classification, timestamp, Bundle hash, and a retrieval link. This is what makes the attestation permanent. The Bundle and Anchor are linked by a cryptographic hash \u2014 tamper with one and the other won\u2019t match. The blockchain is the ground truth.")
+          )
+        ),
+
+        // Technical details
+        e(Fade, {delay:0.25},
+          e("div",{style:{marginTop:12,padding:"18px 22px",border:"1px solid "+rule,background:dk}},
+            e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,textTransform:"uppercase",color:dimLabel,marginBottom:12}},"TECHNICAL DETAILS"),
+            EqGrid(4,"hip-grid-4",
+              [["Format","JSON-LD (W3C VC)"],["Serialization","RFC 8785 Canonical JSON"],["Hash","SHA-256 (FIPS 180-4)"],["Signature","Ed25519 (RFC 8032)"],["Bundle Size","1.8 \u2013 2.7 KB"],["Anchor Size","~250 bytes"],["Schema","WF-v1.0"],["Spec","WF-SPEC-v1 + CRYPTO-SPEC-v1"]].map(function(kv,i) {
+                return e("div",{key:i,style:{display:"flex",justifyContent:"space-between",padding:"5px 8px",borderBottom:"1px solid rgba(255,255,255,0.03)",background:dk}},
+                  e("span",{style:{fontFamily:mo,fontSize:10,color:dimLabel}},kv[0]),
+                  e("span",{style:{fontFamily:mo,fontSize:10,color:t1}},kv[1])
+                );
+              }),
+              {gap:0,bgColor:"transparent"}
+            )
           )
         )
       )
     ),
 
     // ═══ VERIFY ═══
-    e("section", {className:"hip-dk-section",id:"verify",style:{padding:"100px 0",background:dkc,borderTop:"1px solid "+bd,borderBottom:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Independent Verification"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Don't trust us. Verify it yourself."), e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "Everything about HIP is independently verifiable using only public tools. No account. No API key. No special software.")),
-        e(Fade, {delay:0.06}, e("div", {style:{padding:"20px 22px",border:"1px solid rgba(212,160,84,0.2)",borderRadius:8,background:gg,marginBottom:8}},
-          e("div", {style:{fontFamily:mo,fontSize:12,color:t2,marginBottom:10}}, "Start here — opens in a new tab:"),
-          e("div", {className:"hip-vtool-grid",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}},
-            [["⛓","mempool.space",G.explorer],["🔗","Blockstream","https://blockstream.info/tx/"+G.txid],["📄","IPFS Payload","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["📄","Arweave Payload","https://arweave.net/"+G.arweavePayload]].map(function(row,i) {
-              return e("a", {key:i, href:row[2],target:"_blank",rel:"noopener",style:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",border:"1px solid "+bd,borderRadius:6,background:dkc,fontFamily:mo,fontSize:11,color:t1,textDecoration:"none"}},
-                e("span", {style:{fontSize:15}}, row[0]), e("span", null, row[1])
+    e("section", {id:"verify",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null, SL("PROTOCOL / VERIFICATION"), ST("Don\u2019t trust us. Verify it yourself."),
+        P("Everything about HIP is independently verifiable using only public tools. No account. No API key. No special software.",{maxWidth:640,marginBottom:28})
+      ),
+
+      e(Fade, {delay:0.1},
+        e("div",{style:{padding:"20px 22px",border:"1px solid rgba(224,90,0,0.2)",background:surface,marginBottom:16}},
+          e("div",{style:{fontFamily:mo,fontSize:11,color:dimLabel,marginBottom:12}},"Start here \u2014 opens in a new tab:"),
+          EqGrid(4,"hip-grid-4",
+            [["\u26D3","mempool.space",G.explorer],["\uD83D\uDD17","Blockstream","https://blockstream.info/tx/"+G.txid],
+             ["\uD83D\uDCC4","IPFS Payload","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],
+             ["\uD83D\uDCC4","Arweave Payload","https://arweave.net/"+G.arweavePayload]
+            ].map(function(row,i) {
+              return e("a",{key:i,href:row[2],target:"_blank",rel:"noopener",
+                style:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",border:"1px solid "+rule,fontFamily:mo,fontSize:11,color:t1,textDecoration:"none",background:dk}},
+                e("span",{style:{fontSize:15}},row[0]),e("span",null,row[1])
               );
-            })
+            }),
+            {gap:8,bgColor:"transparent"}
           ),
-          e("div", {style:{marginTop:10}},
-            e("button", {style:{fontFamily:mo,fontSize:12,padding:"10px 20px",background:go,color:dk,border:"none",borderRadius:5,cursor:"pointer",fontWeight:600,letterSpacing:0.5}, onClick:function(){setToolOpen("verify");setToolTab("verify")}}, "Open Verification Tool")
+          e("div",{style:{marginTop:12}},
+            e("button",{style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},
+              onClick:function(){setToolOpen("verify");setToolTab("verify")}},"OPEN VERIFICATION TOOL")
           )
-        )),
-        e(Fade, {delay:0.14}, e("div", {style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:t1,marginBottom:14,marginTop:32}}, "The 5-Step Verification")),
-        e("div", {style:{display:"flex",flexDirection:"column",gap:2}},
-          [{n:"1",t:"Check the blockchain",d:"Look up the Genesis Transaction on any block explorer. Find the OP_RETURN output. Confirm it contains the Genesis Hash.",h:G.genesisHash},
-           {n:"2",t:"Retrieve and hash the payload",d:"Download the Genesis Inscription Payload from IPFS or Arweave. Compute its SHA-256 hash. It must match the Genesis Hash.",cmd:"shasum -a 256 genesis_inscription_payload.json"},
-           {n:"3",t:"Verify the Charter hash",d:"Open the payload JSON. Extract charterHash. Download the Charter. Compute its SHA-256 hash. It must match.",h:G.charterHash},
-           {n:"4",t:"Verify the Firewall hash",d:"Extract Phoenix Firewall clauses PF-1 through PF-11 from the Charter. Compute SHA-256. It must match firewallHash in the payload.",h:G.firewallHash},
-           {n:"5",t:"Verify the Guardian signature",d:'Using the Guardian public key, verify the Ed25519 signature over: "Here we begin the ledger of human signal integrity." All five pass = Genesis confirmed valid.'}
-          ].map(function(s,i) {
-            return e(Fade, {key:i, delay:0.18+i*0.04},
-              e("div", {style:{display:"flex",gap:14,padding:"16px 20px",background:dkc,borderLeft:"2px solid "+go,alignItems:"flex-start"}},
-                e("div", {style:{fontFamily:mo,fontSize:20,fontWeight:300,color:go,opacity:0.4,flexShrink:0,width:28,textAlign:"center"}}, s.n),
-                e("div", {style:{flex:1}},
-                  e("div", {style:{fontSize:16,fontWeight:600,color:t1,marginBottom:4}}, s.t),
-                  e("div", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, s.d),
-                  s.h && e("code", {style:{display:"block",fontFamily:mo,fontSize:10,color:go,opacity:0.7,wordBreak:"break-all",lineHeight:1.5,marginTop:3}}, s.h),
-                  s.cmd && e("code", {style:{display:"block",fontFamily:mo,fontSize:11,color:t1,background:"rgba(255,255,255,0.03)",padding:"5px 9px",borderRadius:4,marginTop:3}}, s.cmd)
-                )
-              )
-            );
-          })
-        ),
-        e(Fade, {delay:0.42}, e("div", {style:{marginTop:18,padding:"14px 18px",border:"1px solid "+bd,borderRadius:6,fontFamily:mo,fontSize:12,color:t2,lineHeight:1.6,background:gg}}, "Prefer your own tools? Use any Bitcoin full node, any SHA-256 implementation, any Ed25519 library. Open standards: FIPS 180-4, RFC 8032. No proprietary software required."))
+        )
+      ),
+
+      // 5-step verification
+      e(Fade, {delay:0.15},
+        e("div",{style:{fontFamily:mo,fontSize:12,letterSpacing:1,marginBottom:14,marginTop:24}},"The 5-Step Verification"),
+        [{n:"1",t:"Check the blockchain",d:"Look up the Genesis Transaction on any block explorer. Find the OP_RETURN output. Confirm it contains the Genesis Hash.",h:G.genesisHash},
+         {n:"2",t:"Retrieve and hash the payload",d:"Download the Genesis Inscription Payload from IPFS or Arweave. Compute its SHA-256 hash. It must match the Genesis Hash.",cmd:"shasum -a 256 genesis_inscription_payload.json"},
+         {n:"3",t:"Verify the Charter hash",d:"Open the payload JSON. Extract charterHash. Download the Charter. Compute its SHA-256 hash. It must match.",h:G.charterHash},
+         {n:"4",t:"Verify the Firewall hash",d:"Extract Phoenix Firewall clauses PF-1 through PF-11 from the Charter. Compute SHA-256. It must match firewallHash in the payload.",h:G.firewallHash},
+         {n:"5",t:"Verify the Guardian signature",d:"Using the Guardian public key, verify the Ed25519 signature over: \"Here we begin the ledger of human signal integrity.\" All five pass = Genesis confirmed valid."}
+        ].map(function(s,i) {
+          return e("div",{key:i,style:{display:"flex",gap:14,padding:"16px 20px",background:surface,borderLeft:"2px solid "+go,marginBottom:2,alignItems:"flex-start"}},
+            e("div",{style:{fontFamily:mo,fontSize:20,fontWeight:300,color:go,opacity:0.4,flexShrink:0,width:28,textAlign:"center"}},s.n),
+            e("div",{style:{flex:1}},
+              e("div",{style:{fontFamily:serif,fontSize:15,fontWeight:600,marginBottom:4}},s.t),
+              P(s.d,{fontSize:13}),
+              s.h && e("div",{style:{fontFamily:mo,fontSize:10,color:go,opacity:0.6,wordBreak:"break-all",lineHeight:1.5,marginTop:3}},s.h),
+              s.cmd && e("div",{style:{fontFamily:mo,fontSize:11,color:t1,background:"rgba(255,255,255,0.03)",padding:"5px 9px",marginTop:3}},s.cmd)
+            )
+          );
+        })
+      ),
+
+      e(Fade, {delay:0.2},
+        P("Prefer your own tools? Use any Bitcoin full node, any SHA-256 implementation, any Ed25519 library. Open standards: FIPS 180-4, RFC 8032. No proprietary software required.",{marginTop:14,padding:"14px 18px",border:"1px solid "+rule,background:surface,fontSize:13})
       )
     ),
 
     // ═══ BUILD ═══
-    e("section", {className:"hip-section",id:"build",style:{padding:"100px 0"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null, e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:4,textTransform:"uppercase",color:go,marginBottom:12}}, "Open Protocol"), e("h2", {className:"hip-section-title",style:{fontFamily:serif,fontSize:"clamp(28px,4vw,44px)",fontWeight:300,lineHeight:1.2,color:t1,marginBottom:20}}, "Built to be built on."), e("p", {style:{fontSize:16,fontWeight:400,lineHeight:1.75,color:t2,maxWidth:640,marginBottom:36}}, "HIP is a protocol, not a product. Anyone can build tools that produce or consume HIP attestation artifacts. The specification is public. No license, API key, or partnership required.")),
-        e("div", {className:"hip-grid-3",style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}},
-          [{ico:"monitor",t:"Platform Integration",d:"Any social media platform or publishing system can check content for matching attestations and display a Proofcard automatically. No partnership needed."},
-           {ico:"plug",t:"Browser Extension",d:"Fingerprint any image or text you're viewing and check for a matching attestation. The creator doesn't have to do anything beyond attesting."},
-           {ico:"phone",t:"Creator Tools",d:"Mobile and desktop apps that make attestation as simple as sharing. A working POC already produces spec-compliant Proof Bundles."},
-           {ico:"building",t:"Institutional Workflows",d:"Newsrooms and publishers can integrate HIP into editorial pipelines. Multi-author Attestation Chains support collaborative content."},
-           {ico:"wrench",t:"Verification Scripts",d:"Build standalone verification in any language — Python, JS, Rust, Go. Standard library crypto. Accept a Bundle and Anchor, confirm the chain."},
-           {ico:"globe",t:"Steward Nodes",d:"Institutions can operate Steward Nodes — distributed infrastructure that hosts Proof Bundles and processes attestations."}
-          ].map(function(c,i) {
-            return e(Fade, {key:i, delay:i*0.05}, e("div", {style:{padding:"24px 22px",border:"1px solid "+bd,borderRadius:8,background:gg}},
-              e("div", {style:{marginBottom:10,color:go}}, e(Ico, {name:c.ico, size:22, color:go, strokeWidth:1.5})),
-              e("h3", {style:{fontSize:16,fontWeight:600,color:t1,marginBottom:6}}, c.t),
-              e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, c.d)
-            ));
-          })
+    e("section", {id:"build",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",background:surface}},
+      e("div", {className:"hip-wrap",style:{maxWidth:1000,margin:"0 auto"}},
+        e(Fade, null, SL("PROTOCOL / BUILD"), ST("Built to be built on."),
+          P("HIP is a protocol, not a product. Anyone can build tools that produce or consume HIP attestation artifacts. The specification is public. No license, API key, or partnership required.",{maxWidth:640,marginBottom:32})
         ),
-        e(Fade, {delay:0.32}, e("div", {style:{padding:"26px 24px",border:"1px solid rgba(212,160,84,0.2)",borderRadius:8,background:gg}},
-          e("div", {style:{fontFamily:mo,fontSize:14,letterSpacing:0.5,color:t1,marginBottom:8}}, "8 Companion Specifications"),
-          e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2,marginBottom:16}}, "Every aspect of HIP is formally specified. Builders have a complete blueprint."),
-          e("div", {className:"hip-grid-2x2sm",style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:5,marginBottom:18}},
-            ["WF-SPEC-v1 — Proof Bundle Wire Format","HP-SPEC-v1 — HUMAN-PROOF Credentials","CRYPTO-SPEC-v1 — Cryptographic Primitives","PFV-SPEC-v1 — Propagation & Verification","PATHWAY-SPEC-v1 — Issuance Governance","INT-SPEC-v1 — Integration Endpoints","GI-SPEC-v1 — Genesis Inscription","SLA-SPEC-v1 — Steward Ledger Activity"].map(function(s,i) {
-              return e("div", {key:i, style:{fontFamily:mo,fontSize:11,color:t2,padding:"7px 11px",background:"rgba(255,255,255,0.02)",borderRadius:4}}, s);
+        e(Fade, {delay:0.1},
+          EqGrid(3,"hip-grid-3",
+            [{t:"Platform Integration",d:"Any social media platform or publishing system can check content for matching attestations and display a Proofcard automatically. No partnership needed."},
+             {t:"Browser Extension",d:"Fingerprint any image or text you\u2019re viewing and check for a matching attestation. The creator doesn\u2019t have to do anything beyond attesting."},
+             {t:"Creator Tools",d:"Mobile and desktop apps that make attestation as simple as sharing. A working POC already produces spec-compliant Proof Bundles."},
+             {t:"Institutional Workflows",d:"Newsrooms and publishers can integrate HIP into editorial pipelines. Multi-author Attestation Chains support collaborative content."},
+             {t:"Verification Scripts",d:"Build standalone verification in any language \u2014 Python, JS, Rust, Go. Standard library crypto. Accept a Bundle and Anchor, confirm the chain."},
+             {t:"Steward Nodes",d:"Institutions can operate Steward Nodes \u2014 distributed infrastructure that hosts Proof Bundles and processes attestations."}
+            ].map(function(c,i) {
+              return e("div",{key:i,style:{padding:"24px 22px",background:dk}},
+                e("div",{style:{fontFamily:serif,fontSize:15,fontWeight:600,marginBottom:6}},c.t),
+                P(c.d,{fontSize:13})
+              );
             })
-          ),
-          e("div", {style:{padding:"16px 20px",border:"1px solid "+bd,borderRadius:6,background:"rgba(255,255,255,0.01)",marginTop:14}},
-            e("div", {style:{fontFamily:mo,fontSize:12,letterSpacing:0.5,color:go,marginBottom:6}}, "Access the Specifications"),
-            e("p", {style:{fontSize:14,fontWeight:400,lineHeight:1.7,color:t2}}, "The Charter, specifications, Genesis Payload, and verification tools are published as an open repository. No license, NDA, or partnership required."),
-            e("a", {href:G.github, target:"_blank", rel:"noopener", style:Object.assign({},btnG,{display:"inline-block",marginTop:12})}, "View on GitHub →")
           )
-        ))
+        ),
+
+        // Companion specs
+        e(Fade, {delay:0.15},
+          e("div",{style:{marginTop:24,padding:"26px 24px",border:"1px solid "+rule,background:dk}},
+            e("div",{style:{fontFamily:serif,fontSize:15,fontWeight:600,marginBottom:8}},"8 Companion Specifications"),
+            P("Every aspect of HIP is formally specified. Builders have a complete blueprint.",{marginBottom:16}),
+            EqGrid(4,"hip-grid-4",
+              ["WF-SPEC-v1 \u2014 Proof Bundle Wire Format","HP-SPEC-v1 \u2014 HUMAN-PROOF Credentials","CRYPTO-SPEC-v1 \u2014 Cryptographic Primitives","PFV-SPEC-v1 \u2014 Propagation & Verification",
+               "PATHWAY-SPEC-v1 \u2014 Issuance Governance","INT-SPEC-v1 \u2014 Integration Endpoints","GI-SPEC-v1 \u2014 Genesis Inscription","SLA-SPEC-v1 \u2014 Steward Ledger Activity"
+              ].map(function(s,i) {
+                return e("div",{key:i,style:{fontFamily:mo,fontSize:10,color:dimLabel,padding:"10px 12px",background:dk}},s);
+              }),
+              {gap:1,bgColor:rule}
+            ),
+            e("div",{style:{marginTop:16}},
+              e("a",{href:G.github,target:"_blank",rel:"noopener",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",textAlign:"center",textDecoration:"none",border:"none",background:go,color:"#fff"}},"VIEW ON GITHUB \u2192")
+            )
+          )
+        )
       )
     ),
 
-    // ═══ COVENANT ═══
-    e("section", {style:{padding:"110px 32px",textAlign:"center",background:"radial-gradient(ellipse at center,rgba(212,160,84,0.04) 0%,transparent 70%)"}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e(Fade, null,
-          e("div", {style:{fontFamily:serif,fontSize:"clamp(22px,4.5vw,44px)",fontWeight:300,fontStyle:"italic",color:go,lineHeight:1.3,marginBottom:18}}, "\u201CHere we begin the ledger of human signal integrity.\u201D"),
-          e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1,color:t2,lineHeight:1.6}}, "Genesis Covenant Line — signed by the Guardian Key, inscribed on Bitcoin block "+G.block)
+    // ═══ GENESIS ═══
+    e("section", {id:"genesis",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
+      e(Fade, null, SL("GENESIS / INSCRIPTION"), ST("Born on Bitcoin. Block "+G.block+"."),
+        P("On March 13, 2026, the HIP Genesis Covenant Charter was permanently inscribed on the Bitcoin blockchain. Every subsequent HIP attestation traces its lineage to this root.",{maxWidth:640,marginBottom:32})
+      ),
+      e(Fade, {delay:0.1},
+        e("div", {className:"hip-hero-split",style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:40}},
+          e("div",{style:{fontFamily:mo,fontSize:11,lineHeight:2.2,color:t2}},
+            [["TX",G.txid.slice(0,12)+"..."+G.txid.slice(-7),G.explorer],
+             ["OP_RETURN",G.opReturn.slice(0,28)+"..."],
+             ["BLOCK",G.block],["CONFIRMED",G.timestamp],
+             ["GENESIS HASH",G.genesisHash.slice(0,16)+"..."+G.genesisHash.slice(-8)],
+             ["CHARTER HASH",G.charterHash.slice(0,16)+"..."+G.charterHash.slice(-6)],
+             ["FIREWALL HASH",G.firewallHash.slice(0,16)+"..."+G.firewallHash.slice(-6)],
+             ["GUARDIAN KEY",G.guardianKey.slice(0,16)+"..."+G.guardianKey.slice(-6)]
+            ].map(function(row,i) {
+              return e("div",{key:i,style:{display:"flex",justifyContent:"space-between",borderBottom:"1px solid "+rule,padding:"4px 0"}},
+                e("span",{style:{color:dimLabel}},row[0]),
+                row[2]?e("a",{href:row[2],target:"_blank",rel:"noopener",style:{color:go}},row[1])
+                  :e("span",{style:{color:"#999"}},row[1])
+              );
+            })
+          ),
+          e("div",null,
+            e("div",{style:{fontFamily:mo,fontSize:12,letterSpacing:1,marginBottom:14}},"Content-Addressed Storage"),
+            P("The full payload and charter are on two independent, permanent networks.",{marginBottom:14,fontSize:13}),
+            EqGrid(2,"hip-grid-2",
+              [["IPFS \u2014 Payload",G.ipfsPayload,"https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],
+               ["IPFS \u2014 Charter",G.ipfsCharter,"https://gateway.pinata.cloud/ipfs/"+G.ipfsCharter],
+               ["Arweave \u2014 Payload",G.arweavePayload,"https://arweave.net/"+G.arweavePayload],
+               ["Arweave \u2014 Charter",G.arweaveCharter,"https://arweave.net/"+G.arweaveCharter]
+              ].map(function(row,i) {
+                return e("a",{key:i,href:row[2],target:"_blank",rel:"noopener",style:{display:"block",padding:"12px 14px",background:surface,textDecoration:"none"}},
+                  e("div",{style:{fontFamily:mo,fontSize:9,letterSpacing:2,textTransform:"uppercase",color:dimLabel,marginBottom:3}},row[0]),
+                  e("div",{style:{fontFamily:mo,fontSize:10,color:go,wordBreak:"break-all",lineHeight:1.5,marginBottom:3}},row[1]),
+                  e("div",{style:{fontFamily:mo,fontSize:10,color:t1,opacity:0.5}},"Open \u2192")
+                );
+              }),
+              {gap:1,bgColor:rule}
+            )
+          )
+        )
+      ),
+
+      // Covenant line
+      e(Fade, {delay:0.15},
+        e("div",{style:{fontFamily:serif,fontSize:22,fontStyle:"italic",fontWeight:400,color:go,textAlign:"center",
+          marginTop:40,padding:"28px 0",borderTop:"1px solid "+rule,borderBottom:"1px solid "+rule}},
+          "\u201CHere we begin the ledger of human signal integrity.\u201D"
+        ),
+        e("div",{style:{fontFamily:mo,fontSize:10,color:dimLabel,textAlign:"center",marginTop:10,letterSpacing:1}},
+          "Signed by the Guardian Key \u00B7 Inscribed on Bitcoin block "+G.block
         )
       )
     ),
 
     // ═══ FOOTER ═══
-    e("footer", {style:{padding:"50px 0 36px",borderTop:"1px solid "+bd}},
-      e("div", {className:"hip-wrapper",style:{maxWidth:1080,margin:"0 auto",padding:"0 32px"}},
-        e("div", {style:{display:"flex",flexDirection:"column",alignItems:"center",gap:10,textAlign:"center"}},
-          e("div", {style:{fontFamily:mo,fontSize:20,fontWeight:500,letterSpacing:8,color:go}}, "HIP"),
-          e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:t2}}, "Human Integrity Protocol"),
-          e("div", {style:{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",alignItems:"center"}},
-            [["Verify on-chain",G.explorer],["GitHub",G.github],["IPFS","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["Arweave","https://arweave.net/"+G.arweavePayload],["Blockstream","https://blockstream.info/tx/"+G.txid]].map(function(row,i) {
-              return e("span", {key:i},
-                i>0 && e("span", {style:{color:t2,margin:"0 6px"}}, "·"),
-                e("a", {href:row[1],target:"_blank",rel:"noopener",style:{fontFamily:mo,fontSize:11,color:go}}, row[0])
-              );
-            })
-          ),
-          e("div", {style:{fontFamily:mo,fontSize:10,color:t2,opacity:0.6}}, "Block "+G.block+" · Inscribed 2026-03-13 · Ed25519 + SHA-256"),
-          e("div", {style:{fontSize:12,fontWeight:400,color:"rgba(138,129,116,0.4)",maxWidth:500,lineHeight:1.6}}, "HIP is a protocol, not a product. This page is informational. The on-chain inscription and content-addressed artifacts are self-verifying.")
+    e("footer", {style:{borderTop:"2px solid "+rule,padding:"36px 32px"}},
+      e("div", {style:{maxWidth:1000,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",gap:10,textAlign:"center"}},
+        e("div",{style:{fontFamily:mo,fontSize:16,fontWeight:600,letterSpacing:2}},"HIP",e("span",{style:{color:go}},"://")),
+        e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:2,color:dimLabel}},"Human Integrity Protocol"),
+        e("div",{style:{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",alignItems:"center"}},
+          [["Verify on-chain",G.explorer],["GitHub",G.github],["IPFS","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["Arweave","https://arweave.net/"+G.arweavePayload],["Blockstream","https://blockstream.info/tx/"+G.txid]].map(function(row,i) {
+            return e("span",{key:i},
+              i>0 && e("span",{style:{color:dimLabel,margin:"0 6px"}},"\u00B7"),
+              e("a",{href:row[1],target:"_blank",rel:"noopener",style:{fontFamily:mo,fontSize:10,color:go}},row[0])
+            );
+          })
+        ),
+        e("div",{style:{fontFamily:mo,fontSize:10,color:dimLabel,opacity:0.5}},"Block "+G.block+" \u00B7 Inscribed 2026-03-13 \u00B7 Ed25519 + SHA-256"),
+        e("div",{style:{fontSize:11,fontWeight:400,color:"rgba(138,138,128,0.4)",maxWidth:500,lineHeight:1.6,fontFamily:sans}},
+          "HIP is a protocol, not a product. This page is informational. The on-chain inscription and content-addressed artifacts are self-verifying."
         )
       )
     )
@@ -1777,12 +1919,12 @@ function App() {
 try {
   ReactDOM.render(React.createElement(App), document.getElementById("root"));
 } catch(ex) {
-  document.getElementById("root").innerHTML = '<div style="max-width:560px;margin:80px auto;padding:24px;font-family:sans-serif;color:#e8e0d4;text-align:center">'
-    + '<h2 style="color:#d4a054;margin-bottom:16px">HIP — Human Integrity Protocol</h2>'
+  document.getElementById("root").innerHTML = '<div style="max-width:560px;margin:80px auto;padding:24px;font-family:sans-serif;color:#E8E8E0;text-align:center">'
+    + '<h2 style="color:#E05A00;margin-bottom:16px">HIP \u2014 Human Integrity Protocol</h2>'
     + '<p style="margin-bottom:16px;line-height:1.6">This page could not load in your current browser. This is usually caused by strict privacy protections that block cryptographic APIs needed for credential operations.</p>'
     + '<p style="margin-bottom:16px;line-height:1.6"><strong>To fix this:</strong> Tap the shield or lock icon in your address bar and disable protections for this site, then reload. Alternatively, open this page in Safari, Chrome, or Firefox.</p>'
     + '<p style="margin-bottom:24px;line-height:1.6;font-size:13px;opacity:0.6">Error: ' + (ex.message || 'Unknown') + '</p>'
-    + '<a href="https://hipprotocol.org" style="color:#d4a054" onclick="location.reload();return false">Reload Page</a>'
+    + '<a href="https://hipprotocol.org" style="color:#E05A00" onclick="location.reload();return false">Reload Page</a>'
     + '</div>';
 }
 </script>
