@@ -292,6 +292,32 @@ var dl = function(obj, name) {
 };
 
 // ============================================================
+// COPYHASH — truncated hash display with click-to-copy
+// ============================================================
+// Usage: e(CopyHash, {value:"abc123...", label:"Content Fingerprint", chars:16})
+// chars: number of leading chars to show (default 16), 0 = show full
+// color: text color (default t2)
+// fontSize: code font size (default 11)
+function CopyHash(props) {
+  var val = props.value || "";
+  var chars = props.chars !== undefined ? props.chars : 16;
+  var display = chars > 0 && val.length > chars + 4 ? val.substring(0, chars) + "…" + val.slice(-4) : val;
+  var cs = useState(false); var copied = cs[0]; var setCopied = cs[1];
+  var doCopy = function() {
+    if (navigator.clipboard && val) {
+      navigator.clipboard.writeText(val).then(function() {
+        setCopied(true);
+        setTimeout(function() { setCopied(false); }, 1500);
+      });
+    }
+  };
+  return e("div", {style:{display:"flex",alignItems:"center",gap:6,minWidth:0}},
+    e("code", {style:{fontSize:props.fontSize||11,fontFamily:mo,color:props.color||"#999",wordBreak:"break-all",cursor:"pointer",flex:"1 1 auto",minWidth:0},title:val,onClick:doCopy}, display),
+    e("button", {onClick:doCopy, style:{flexShrink:0,background:"none",border:"1px solid "+(copied?"#4ade80":"#333"),borderRadius:4,padding:"2px 7px",cursor:"pointer",fontFamily:mo,fontSize:10,color:copied?"#4ade80":"#666",transition:"all 0.15s"},title:"Copy full value"}, copied?"✓":"⧉")
+  );
+}
+
+// ============================================================
 // ATTESTATION WIZARD — with credential persistence & Proofcard
 // ============================================================
 
@@ -499,7 +525,7 @@ function QrTransferPanel(props) {
         correctLevel: QRCode.CorrectLevel.M
       });
     } catch(ex) {
-      el.innerHTML = "<div style='color:#f87171;font-size:12px'>QR generation failed: " + ex.message + "</div>";
+      el.innerHTML = "<div style='color:#f87171;font-size:12px'>Couldn't generate QR code. Try reloading the page.</div>";
     }
   }, [qrState && qrState.status]);
 
@@ -525,7 +551,7 @@ function QrTransferPanel(props) {
             setQrState(Object.assign({}, qrState, { status: "received" }));
             onImport(credObj, null);
           } catch (ex) {
-            setQrState(Object.assign({}, qrState, { status: "error", error: "Decryption failed: " + ex.message }));
+            setQrState(Object.assign({}, qrState, { status: "error", error: "Couldn't decrypt the transferred credential. The QR code may have been scanned incorrectly. Try generating a new QR code and scanning again." }));
           }
           return;
         }
@@ -651,7 +677,7 @@ var doT3Bio=async function(){
 try{
 // S29: Server-side registration — request challenge from worker
 var challengeResp=await fetch(HIP_WORKER_URL+"/tier3/challenge",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-if(!challengeResp.ok){var cErr=await challengeResp.json().catch(function(){return{message:"Server error"}});setErr(challengeResp.status===429?cErr.message||"Rate limit exceeded. Try again later.":"Server error: "+(cErr.error||cErr.message));setBusy(false);setWaStep(0);return}
+if(!challengeResp.ok){var cErr=await challengeResp.json().catch(function(){return{message:"Server error"}});setErr(challengeResp.status===429?"Too many credentials created from this network today (max 2 per 24 hours). Try again tomorrow or from a different network.":"Couldn't connect to the HIP server. Check your internet connection and try again.");setBusy(false);setWaStep(0);return}
 var challengeData=await challengeResp.json();
 var serverChallenge=Uint8Array.from(atob(challengeData.challenge),function(c){return c.charCodeAt(0)});
 
@@ -675,7 +701,7 @@ var waTs=new Date().toISOString();
 // S29: Send attestation to worker for validation
 var regResp=await fetch(HIP_WORKER_URL+"/tier3/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 session_id:challengeData.session_id,credential_id:waCredId,attestation_object:waAttObj,client_data_json:waCdj,public_key:pub})});
-if(!regResp.ok){var rErr=await regResp.json().catch(function(){return{message:"Registration failed"}});setErr(regResp.status===429?rErr.message||"Rate limit exceeded.":"Registration failed: "+(rErr.error||rErr.message));setBusy(false);setWaStep(0);return}
+if(!regResp.ok){var rErr=await regResp.json().catch(function(){return{message:"Registration failed"}});setErr(regResp.status===429?"Too many credentials created from this network today (max 2 per 24 hours). Try again tomorrow or from a different network.":"Registration couldn't be completed. This can happen if the session expired (5 minute limit) or the server is temporarily unavailable. Please try again.");setBusy(false);setWaStep(0);return}
 var regData=await regResp.json();
 
 var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
@@ -700,10 +726,10 @@ if(!d||d.version!=="hip-credential-v1"){setErr("Not a valid HIP credential file.
 // S25: Check crypto capability
 if (HIP_CRYPTO_OK === false) {setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");return}
 try{var computed=await sha256(unhex(d.publicKey));
-if(computed!==d.credentialId){setErr("Credential integrity check failed.");return}
+if(computed!==d.credentialId){setErr("This credential file appears to be damaged — the internal ID doesn't match the public key. Try downloading a fresh backup from the device where you created it.");return}
 d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);
 d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);
-wrapSetCred(d);setErr(null)}catch(ex){setErr("Failed to load: "+ex.message)}};
+wrapSetCred(d);setErr(null)}catch(ex){setErr("Couldn't load this credential file. It may be corrupted or from an incompatible version. Try downloading a fresh backup.")}};
 
 if(cred){
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
@@ -721,8 +747,8 @@ e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRad
 e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
 HIP_IMPORT_RESULT==="imported"&&ToolAlert("success",e("span",null,"Your Tier 1 credential was ",e("strong",null,"transferred from hipverify.org")," and saved in this browser. You can start attesting right away.")),
 autoLoaded&&!HIP_IMPORT_RESULT&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
-e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e("code",{style:wizRV},cred.credentialId),
-e("div",{style:wizRL},"Public Key"),e("code",{style:wizRV},cred.publicKey),
+e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e(CopyHash,{value:cred.credentialId,chars:20}),
+e("div",{style:wizRL},"Public Key"),e(CopyHash,{value:cred.publicKey,chars:20}),
 e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—"),
 e("div",{style:wizRL},"Saved"),e("code",{style:wizRV},"This browser ("+window.location.hostname+")")),
 e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy"),
@@ -748,7 +774,7 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
       e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(224,90,0,0.25)",borderRadius:8}},
         e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}},"EXISTING CREDENTIAL FOUND"),
         e("div",{style:{fontSize:14,fontWeight:600,color:t1,marginBottom:4}},sTn),
-        e("div",{style:{fontFamily:mo,fontSize:11,color:t2,wordBreak:"break-all",marginBottom:4}},"ID: "+saved.credentialId.substring(0,24)+"…"),
+        e("div",{style:{fontFamily:mo,fontSize:11,color:t2,marginBottom:4,display:"flex",alignItems:"center",gap:4}},e("span",{style:{flexShrink:0}},"ID: "),e(CopyHash,{value:saved.credentialId,chars:20,fontSize:11})),
         saved.created&&e("div",{style:{fontFamily:mo,fontSize:11,color:t2}},"Created: "+new Date(saved.created).toLocaleDateString())),
       ToolAlert("info",e("span",null,"You already have a credential saved in this browser. HIP follows a ",e("strong",null,"one credential per human")," principle. Use your existing credential or retire it to create a new one.")),
       e("button",{style:Object.assign({},btnG,{width:"100%"}),onClick:function(){
@@ -763,7 +789,7 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
             saved._priv=await crypto.subtle.importKey("pkcs8",b64d(saved.privateKey),"Ed25519",false,["sign"]);
             saved._pub=await crypto.subtle.importKey("raw",unhex(saved.publicKey),"Ed25519",true,["verify"]);
             wrapSetCred(saved);setAutoLoaded(true);setErr(null);
-          }catch(ex){setErr("Failed to load saved credential: "+ex.message+". Try Chrome, Firefox, or Safari 17+.")}
+          }catch(ex){setErr("Couldn't restore your saved credential. This can happen after a browser update. Try importing your backup file, or create a new credential.")}
         })()
       }},"Use My Existing Credential"),
       e("button",{style:Object.assign({},btnSm,{width:"100%",marginTop:2}),onClick:function(){setRetireMode(true)}},"Retire and create a new credential"));
@@ -849,7 +875,7 @@ var privKey=vCred._priv;
 var t={version:"hip-vouch-token-v1",nonce:mkNonce(),timestamp:new Date().toISOString().replace(/\.\d{3}Z$/,"Z"),
 recipientPublicKey:pk,voucherCredentialId:vCred.credentialId,voucherPublicKey:vCred.publicKey,voucherTier:vCred.tier};
 var canon=canonJSON(t);var sigBuf=await crypto.subtle.sign("Ed25519",privKey,new TextEncoder().encode(canon));
-setToken(Object.assign({},t,{signature:b64e(sigBuf)}));setStep(3);setBusy(false)}catch(ex){props.setErr("Error: "+ex.message);setBusy(false)}};
+setToken(Object.assign({},t,{signature:b64e(sigBuf)}));setStep(3);setBusy(false)}catch(ex){props.setErr("Something went wrong creating the vouch token. Make sure you uploaded a valid Tier 1 credential file and try again.");setBusy(false)}};
 
 var genK=async function(){setBusy(true);try{
 if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");setBusy(false);return}
@@ -857,23 +883,23 @@ var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
 var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
 var cid=await sha256(unhex(pub));var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
 setRKeys({publicKey:pub,credentialId:cid,privateKey:b64e(privBytes),_priv:kp.privateKey,_pub:kp.publicKey});
-setStep(2)}catch(ex){props.setErr(ex.message)}setBusy(false)};
+setStep(2)}catch(ex){props.setErr("Couldn't generate your keys. Your browser may not support the required cryptography. Try Chrome, Firefox, or Safari 17+.")}setBusy(false)};
 
 var acceptV=async function(){setBusy(true);try{var t;try{t=JSON.parse(tText)}catch(ex){props.setErr("Paste the complete vouch token.");setBusy(false);return}
-if(t.version!=="hip-vouch-token-v1"){props.setErr("Not a valid vouch token.");setBusy(false);return}
+if(t.version!=="hip-vouch-token-v1"){props.setErr("This doesn't look like a vouch token. Make sure you're pasting the JSON that the voucher sent you, not a credential file.");setBusy(false);return}
 if(t.recipientPublicKey!==rKeys.publicKey){props.setErr("This vouch was created for someone else.");setBusy(false);return}
 var sig=t.signature;var body={};Object.keys(t).forEach(function(k){if(k!=="signature")body[k]=t[k]});
 var vPub=await crypto.subtle.importKey("raw",unhex(t.voucherPublicKey),"Ed25519",false,["verify"]);
 var valid=await crypto.subtle.verify("Ed25519",vPub,b64d(sig),new TextEncoder().encode(canonJSON(body)));
-if(!valid){props.setErr("Signature failed.");setBusy(false);return}
-if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("Vouch expired (>24h).");setBusy(false);return}
+if(!valid){props.setErr("The vouch token's signature couldn't be verified. Make sure you pasted the complete token exactly as the voucher sent it.");setBusy(false);return}
+if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("This vouch token has expired (older than 24 hours). Ask the voucher to create a new one.");setBusy(false);return}
 props.onDone({version:"hip-credential-v1",credentialId:rKeys.credentialId,publicKey:rKeys.publicKey,privateKey:rKeys.privateKey,
 tier:2,pathway:"peer-vouch-bound-token-v1",
 vouchRecord:{voucherCredentialId:t.voucherCredentialId,voucherPublicKey:t.voucherPublicKey,voucherTier:t.voucherTier,nonce:t.nonce,timestamp:t.timestamp,signature:sig},
 created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub});
 // S29: Initialize trust record for new Tier 2 vouch credential
 try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2})})}catch(te){}
-setStep(4);setBusy(false)}catch(ex){props.setErr("Error: "+ex.message);setBusy(false)}};
+setStep(4);setBusy(false)}catch(ex){props.setErr("Something went wrong processing the vouch. Make sure you pasted the complete token and try again.");setBusy(false)}};
 
 return e("div",null,
 e("button",{onClick:props.onBack,style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
@@ -884,8 +910,8 @@ e("button",{onClick:function(){setRole("r");setStep(1)},style:Object.assign({},b
 role==="v"&&e("div",null,
 e(StepDot,{n:1,title:"Load Your Credential",active:step===1,done:step>1},
 step===1&&e(ToolDropZone,{onLoad:function(d,er){if(er){props.setErr(er);return}if(!d||d.version!=="hip-credential-v1"){props.setErr("Not a valid credential.");return}if(d.tier!==1){props.setErr("Only Tier 1 (Government ID) credentials can vouch. The voucher must have a Tier 1 credential.");return}
-(async function(){try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);setVCred(d);setStep(2);props.setErr(null)}catch(ex){props.setErr("Failed: "+ex.message)}})()},label:"Drop your credential file here"}),
-step>1&&vCred&&e("div",{style:{fontSize:12,color:"#4ade80",fontFamily:mo}},"✓ Loaded: "+vCred.credentialId.slice(0,16)+"…")),
+(async function(){try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);setVCred(d);setStep(2);props.setErr(null)}catch(ex){props.setErr("Couldn't read this credential file. It may be damaged — try downloading a fresh backup from the device where you created it.")}})()},label:"Drop your credential file here"}),
+step>1&&vCred&&e("div",{style:{fontSize:12,color:"#4ade80",fontFamily:mo,display:"flex",alignItems:"center",gap:4}},"✓ Loaded: ",e(CopyHash,{value:vCred.credentialId,chars:16,fontSize:12,color:"#4ade80"}))),
 e(StepDot,{n:2,title:"Enter Recipient's Public Key",active:step===2,done:step>2},
 step===2&&e("div",null,e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"The recipient opens this tool, chooses 'I'm the Recipient,' and shares their public key."),
 e("textarea",{style:Object.assign({},wizTxt,{fontSize:12,fontFamily:mo,minHeight:48}),placeholder:"Paste their 64-char hex public key",value:rPub,onChange:function(ev){setRPub(ev.target.value.trim())}}),
@@ -1036,12 +1062,12 @@ e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBo
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Credential Tier"),e("div",{style:{fontSize:13,color:go,fontWeight:600}},"Tier "+(cred.tier||"?"))),
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Liveness"),e("div",{style:{fontSize:13,color:lv==="done"?"#4ade80":t2,fontWeight:600}},lv==="done"?"Confirmed":"Not verified")),
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Trust Score"),e("div",{style:{fontSize:13,color:trustScore!==null?(trustScore>=75?"#4ade80":trustScore>=50?go:trustScore>=25?"#facc15":"#ef4444"):t2,fontWeight:600}},trustScore!==null?trustScore+"/100":"—"))),
-e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Content Fingerprint"),e("code",{style:{fontSize:10,fontFamily:mo,color:t2,wordBreak:"break-all"}},hash)),
+e("div",{style:{marginBottom:12}},e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Content Fingerprint"),e(CopyHash,{value:hash,chars:24})),
 editorial&&e("div",{style:{padding:"10px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd}},
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:3}},"Creator's Statement"),e("div",{style:{fontSize:13,color:t1,lineHeight:1.6,fontStyle:"italic"}},editorial))),
 e("button",{onClick:function(){setShowTech(!showTech)},style:{background:"none",border:"none",color:t2,cursor:"pointer",fontSize:11,fontFamily:mo,padding:"4px 0",marginBottom:showTech?8:0}},showTech?"▾ Hide technical details":"▸ Show technical details"),
 showTech&&e("div",{style:{padding:14,background:dkc,borderRadius:6,border:"1px solid "+bd}},
-e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e("code",{style:Object.assign({},wizRV,{color:go})},bHash)),
+e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e(CopyHash,{value:bHash,chars:24,color:go})),
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{style:wizRV},proofcard.proofBundle.id)),
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
 // S21b: Download section — attested JPEG + Proof Card
@@ -1066,7 +1092,7 @@ e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},
 
 if(step===1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,isJpg&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},"EXIF embed")),
-e("div",{style:wizRL},"Content Fingerprint"),e("code",{style:Object.assign({},wizRV,{color:go})},hash),
+e("div",{style:wizRL},"Content Fingerprint"),e(CopyHash,{value:hash,chars:24,color:go}),
 isJpg&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Final hash will be computed after HIP metadata is embedded.")),
 e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
 cats.map(function(c){return e("button",{key:c[0],style:{display:"block",width:"100%",textAlign:"left",padding:"12px 16px",border:"1px solid "+(cls===c[0]?go:bd),borderRadius:6,background:cls===c[0]?gg:"transparent",color:t1,fontSize:13,fontFamily:sans,cursor:"pointer",marginBottom:4},onClick:function(){setCls(c[0])}},
@@ -1145,12 +1171,12 @@ function VerifyWizard() {
       var canon = canonJSON(content);
       var ch = await sha256(canon);
 
-      r.push({l:"Bundle hash matches Anchor", p:ch===a.bundleHash, d:ch===a.bundleHash ? ch.substring(0,24)+"…" : "Computed: "+ch.substring(0,16)+"… vs Anchor: "+(a.bundleHash||"").substring(0,16)+"…"});
-      r.push({l:"Bundle ID matches hash", p:b.id==="urn:hip:bundle:"+ch, d:b.id||"(missing)"});
-      r.push({l:"Content hash consistent", p:b.credentialSubject&&b.credentialSubject.contentHash===a.contentHash, d:(a.contentHash||"").substring(0,24)+"…"});
+      r.push({l:"Bundle hash matches Anchor", p:ch===a.bundleHash, d:ch===a.bundleHash ? ch.substring(0,24)+"…" : "Computed: "+ch.substring(0,16)+"… vs Anchor: "+(a.bundleHash||"").substring(0,16)+"…", full:ch});
+      r.push({l:"Bundle ID matches hash", p:b.id==="urn:hip:bundle:"+ch, d:b.id||"(missing)", full:b.id||""});
+      r.push({l:"Content hash consistent", p:b.credentialSubject&&b.credentialSubject.contentHash===a.contentHash, d:(a.contentHash||"").substring(0,24)+"…", full:a.contentHash||""});
 
       var credOk = b.issuer&&b.issuer.id===a.credentialId && b.proof&&b.proof.verificationMethod===b.issuer.id;
-      r.push({l:"Credential ID consistent", p:credOk, d:(a.credentialId||"").substring(0,24)+"…"});
+      r.push({l:"Credential ID consistent", p:credOk, d:(a.credentialId||"").substring(0,24)+"…", full:a.credentialId||""});
       r.push({l:"Valid classification", p:["CompleteHumanOrigin","HumanOriginAssisted","HumanDirectedCollaborative"].indexOf(b.credentialSubject&&b.credentialSubject.classification)!==-1, d:b.credentialSubject&&b.credentialSubject.classification||"(missing)"});
       r.push({l:"Schema version WF-v1.0", p:b.version==="WF-v1.0"&&a.version==="WF-v1.0", d:"Bundle: "+(b.version||"?")+", Anchor: "+(a.version||"?")});
       r.push({l:"Anchor link format", p:a.anchorLink&&a.anchorLink.indexOf("hip://")===0, d:a.anchorLink||"(missing)"});
@@ -1207,7 +1233,8 @@ function VerifyWizard() {
         r.push({l:"Content file matches Proof Card", p:match,
           d:match
             ? "File hash matches. This Proof Card attests to \"" + (contentFileName||"this file") + "\"."
-            : "MISMATCH — File hash: " + contentFileHash.substring(0,16) + "… vs Proof Card: " + (expectedHash||"").substring(0,16) + "…. This Proof Card does not attest to this file."});
+            : "MISMATCH — File hash: " + contentFileHash.substring(0,16) + "… vs Proof Card: " + (expectedHash||"").substring(0,16) + "…. This Proof Card does not attest to this file.",
+          full:contentFileHash});
         if(match) {
           var pcFn = null;
           try { var ppc = JSON.parse(pcText); pcFn = ppc.originalFilename; } catch(ex){}
@@ -1238,7 +1265,7 @@ function VerifyWizard() {
       }
 
       setRes(r);
-    } catch(ex) { setRes([{l:"Parse error", p:false, d:ex.message}]); }
+    } catch(ex) { setRes([{l:"Couldn't read Proof Card", p:false, d:"This file doesn't appear to be a valid HIP Proof Card. Make sure you're uploading the JSON file that was created when the content was attested."}]); }
     setRun(false);
   };
 
@@ -1294,9 +1321,11 @@ function VerifyWizard() {
         var icon = r.p===true?"✓":r.p===false?"✗":"?";
         return e("div", {key:i, style:{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 14px",background:dkc,borderRadius:6,borderLeft:"3px solid "+color}},
           e("span", {style:{fontSize:15,width:22,textAlign:"center",flexShrink:0,color:color}}, icon),
-          e("div", null,
+          e("div", {style:{flex:1,minWidth:0}},
             e("div", {style:{fontSize:13,fontWeight:500,color:t1}}, r.l),
-            e("code", {style:{fontSize:10,color:t2,wordBreak:"break-all",fontFamily:mo,display:"block",marginTop:2,lineHeight:1.5}}, r.d)
+            r.full ? e("div",{style:{marginTop:2}},e(CopyHash,{value:r.full,chars:24,fontSize:10}),
+              r.d.indexOf("MISMATCH")===0?e("div",{style:{fontSize:10,color:"#f87171",fontFamily:mo,marginTop:2}},r.d):null)
+            : e("code", {style:{fontSize:10,color:t2,wordBreak:"break-all",fontFamily:mo,display:"block",marginTop:2,lineHeight:1.5}}, r.d)
           )
         );
       }),
@@ -1864,17 +1893,20 @@ function App() {
       e(Fade, {delay:0.1},
         e("div", {className:"hip-hero-split",style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:40}},
           e("div",{style:{fontFamily:mo,fontSize:11,lineHeight:2.2,color:t2}},
-            [["TX",G.txid.slice(0,12)+"..."+G.txid.slice(-7),G.explorer],
-             ["OP_RETURN",G.opReturn.slice(0,28)+"..."],
+            [["TX",G.txid.slice(0,12)+"..."+G.txid.slice(-7),G.explorer,G.txid],
+             ["OP_RETURN",G.opReturn.slice(0,28)+"...",null,G.opReturn],
              ["BLOCK",G.block],["CONFIRMED",G.timestamp],
-             ["GENESIS HASH",G.genesisHash.slice(0,16)+"..."+G.genesisHash.slice(-8)],
-             ["CHARTER HASH",G.charterHash.slice(0,16)+"..."+G.charterHash.slice(-6)],
-             ["FIREWALL HASH",G.firewallHash.slice(0,16)+"..."+G.firewallHash.slice(-6)],
-             ["GUARDIAN KEY",G.guardianKey.slice(0,16)+"..."+G.guardianKey.slice(-6)]
+             ["GENESIS HASH",G.genesisHash.slice(0,16)+"..."+G.genesisHash.slice(-8),null,G.genesisHash],
+             ["CHARTER HASH",G.charterHash.slice(0,16)+"..."+G.charterHash.slice(-6),null,G.charterHash],
+             ["FIREWALL HASH",G.firewallHash.slice(0,16)+"..."+G.firewallHash.slice(-6),null,G.firewallHash],
+             ["GUARDIAN KEY",G.guardianKey.slice(0,16)+"..."+G.guardianKey.slice(-6),null,G.guardianKey]
             ].map(function(row,i) {
-              return e("div",{key:i,style:{display:"flex",justifyContent:"space-between",borderBottom:"1px solid "+rule,padding:"4px 0"}},
-                e("span",{style:{color:dimLabel}},row[0]),
-                row[2]?e("a",{href:row[2],target:"_blank",rel:"noopener",style:{color:go}},row[1])
+              return e("div",{key:i,style:{display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid "+rule,padding:"4px 0"}},
+                e("span",{style:{color:dimLabel,flexShrink:0,marginRight:12}},row[0]),
+                row[3]?e("div",{style:{display:"flex",alignItems:"center",gap:4}},
+                  row[2]?e("a",{href:row[2],target:"_blank",rel:"noopener",style:{color:go,fontSize:11,fontFamily:mo}},row[1]):e("span",{style:{color:"#999"}},row[1]),
+                  e("button",{onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(row[3])},style:{flexShrink:0,background:"none",border:"1px solid #333",borderRadius:4,padding:"1px 5px",cursor:"pointer",fontFamily:mo,fontSize:9,color:"#666"},title:"Copy full value"},"⧉"))
+                :row[2]?e("a",{href:row[2],target:"_blank",rel:"noopener",style:{color:go}},row[1])
                   :e("span",{style:{color:"#999"}},row[1])
               );
             })
