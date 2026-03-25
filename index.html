@@ -20,8 +20,8 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{background:#0A0A0A;font-family:'Space Grotesk',sans-serif;color:#E8E8E0}
-a{color:#E05A00;text-decoration:none;transition:color 0.15s,opacity 0.15s}
-a:hover{text-decoration:underline;opacity:0.85}
+a{color:#E05A00;text-decoration:none;transition:color 0.15s}
+a:hover{text-decoration:underline}
 ::selection{background:rgba(224,90,0,0.3);color:#fff}
 strong{font-weight:600;color:#E8E8E0}
 em{font-style:italic}
@@ -1379,14 +1379,11 @@ function App() {
     return e("div",{className:cls,style:{display:"grid",gridTemplateColumns:"repeat("+cols+",1fr)",gap:opts.gap!==undefined?opts.gap:1,background:opts.bgColor||rule,alignItems:"stretch"}},children)
   }
 
-  // ── Nav button with hover ──
+  // ── Nav button (static — orange border, black bg, white text) ──
   function NavBtn(props) {
-    var hov=useState(false); var isHov=hov[0]; var setHov=hov[1];
     return e("button",{
       style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"10px 22px",cursor:"pointer",textAlign:"center",
-        border:"1px solid "+go,background:isHov?go:dk,color:isHov?"#fff":t1,
-        transition:"background 0.15s, color 0.15s"},
-      onMouseEnter:function(){setHov(true)},onMouseLeave:function(){setHov(false)},
+        border:"1px solid "+go,background:dk,color:t1,width:"100%",display:"block"},
       onClick:props.onClick
     },props.children)
   }
@@ -1440,8 +1437,8 @@ function App() {
           style:{fontFamily:mo,fontSize:12,letterSpacing:1,color:dimLabel,textDecoration:"none",padding:"8px 0",borderBottom:"1px solid "+rule}},n[1]);
       }),
       e("div",{style:{display:"flex",gap:8,marginTop:4}},
-        e("button",{style:Object.assign({},btnG,{flex:1,display:"block",textAlign:"center"}),onClick:function(){setMobileOpen(false);setToolOpen("attest");setToolTab("attest")}},"ATTEST"),
-        e("button",{style:Object.assign({},btnO,{flex:1,display:"block",textAlign:"center",cursor:"pointer"}),onClick:function(){setMobileOpen(false);setToolOpen("verify");setToolTab("verify")}},"VERIFY")
+        e("div",{style:{flex:1}},e(NavBtn,{onClick:function(){setMobileOpen(false);setToolOpen("attest");setToolTab("attest")}},"ATTEST")),
+        e("div",{style:{flex:1}},e(NavBtn,{onClick:function(){setMobileOpen(false);setToolOpen("verify");setToolTab("verify")}},"VERIFY"))
       )
     ),
 
@@ -1491,7 +1488,7 @@ function App() {
           e("p",{style:{fontFamily:sans,fontSize:17,color:t2,lineHeight:1.75}},"A cryptographic attestation system that lets human creators prove \u2014 verifiably, permanently, and without any institution\u2019s permission \u2014 that their work is human-made."),
           e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
             e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,marginBottom:4}},"ACTIONS"),
-            e(CtaBtn,{href:"#how"},"HOW IT WORKS"),
+            e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){window.location.hash="#how"}},"HOW IT WORKS"),
             e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST NOW")
           )
         )
