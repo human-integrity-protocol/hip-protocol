@@ -127,6 +127,17 @@ function isJpeg(fname) {
   return ext === "jpg" || ext === "jpeg";
 }
 
+// S34: PNG support
+function isPng(fname) {
+  if(!fname) return false;
+  return fname.toLowerCase().split(".").pop() === "png";
+}
+
+// S34: Check if file is an image type that supports HIP metadata embedding
+function isEmbeddable(fname) {
+  return isJpeg(fname) || isPng(fname);
+}
+
 function fileToDataURL(file) {
   return new Promise(function(resolve, reject) {
     var r = new FileReader();
@@ -178,6 +189,145 @@ function embedHipExif(dataURL, hipMeta) {
   } catch(ex) {
     throw new Error("Failed to embed EXIF: " + ex.message);
   }
+}
+
+// ── S34: PNG tEXt chunk read/write ──
+// PNG files use tEXt/iTXt chunks for metadata. We store HIP metadata
+// in an iTXt chunk with keyword "HIP-Protocol". This is a standard
+// PNG extension mechanism — any PNG viewer preserves unknown chunks.
+
+function readHipPng(bytes) {
+  // PNG signature: 8 bytes, then chunks: [4-byte length][4-byte type][data][4-byte CRC]
+  try {
+    if(bytes.length < 8) return null;
+    var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var pos = 8; // skip PNG signature
+    while(pos + 12 <= bytes.length) {
+      var len = dv.getUint32(pos);
+      var type = String.fromCharCode(bytes[pos+4],bytes[pos+5],bytes[pos+6],bytes[pos+7]);
+      if(type === "tEXt" || type === "iTXt") {
+        var chunkData = bytes.slice(pos+8, pos+8+len);
+        // Check keyword (ASCII before first null byte)
+        var kwEnd = -1;
+        for(var ki=0;ki<Math.min(chunkData.length,80);ki++){if(chunkData[ki]===0){kwEnd=ki;break}}
+        if(kwEnd>0) {
+          var kw = String.fromCharCode.apply(null, chunkData.slice(0,kwEnd));
+          if(kw === "HIP-Protocol") {
+            var textStart;
+            if(type === "iTXt") {
+              // iTXt: keyword\0 compressionFlag compressionMethod langTag\0 transKey\0 text
+              // Skip: kwEnd+1=comprFlag, kwEnd+2=comprMethod, then langTag\0, then transKey\0
+              var si = kwEnd + 3; // past null + 2 flag bytes
+              // skip language tag (find null)
+              while(si < chunkData.length && chunkData[si] !== 0) si++;
+              si++; // past language null
+              // skip translated keyword (find null)
+              while(si < chunkData.length && chunkData[si] !== 0) si++;
+              si++; // past translated keyword null
+              textStart = si;
+            } else {
+              // tEXt: keyword\0 text
+              textStart = kwEnd + 1;
+            }
+            if(textStart < chunkData.length) {
+              var textBytes = chunkData.slice(textStart);
+              var val = new TextDecoder("utf-8").decode(textBytes);
+              if(val.indexOf("{") !== -1) {
+                try { return JSON.parse(val.substring(val.indexOf("{"))); }
+                catch(ex) { return {raw:val}; }
+              }
+            }
+          }
+        }
+      }
+      if(type === "IEND") break;
+      pos += 12 + len; // 4 length + 4 type + data + 4 CRC
+    }
+    return null;
+  } catch(ex) { return null; }
+}
+
+function embedHipPng(bytes, hipMeta) {
+  // Insert an iTXt chunk with keyword "HIP-Protocol" before the IEND chunk
+  try {
+    var metaStr = JSON.stringify(hipMeta);
+    // iTXt chunk: keyword\0 compressionFlag(0) compressionMethod(0) languageTag\0 translatedKeyword\0 text
+    var keyword = "HIP-Protocol";
+    var chunkContent = [];
+    // keyword bytes
+    for(var i=0;i<keyword.length;i++) chunkContent.push(keyword.charCodeAt(i));
+    chunkContent.push(0); // null separator
+    chunkContent.push(0); // compression flag (0 = uncompressed)
+    chunkContent.push(0); // compression method
+    chunkContent.push(0); // language tag (empty, null terminated)
+    chunkContent.push(0); // translated keyword (empty, null terminated)
+    // text content
+    var textBytes = new TextEncoder().encode(metaStr);
+    for(var j=0;j<textBytes.length;j++) chunkContent.push(textBytes[j]);
+
+    var chunkData = new Uint8Array(chunkContent);
+    var chunkLen = chunkData.length;
+
+    // Build chunk: [4-byte length][iTXt][data][4-byte CRC]
+    var typeBytes = new Uint8Array([0x69,0x54,0x58,0x74]); // "iTXt"
+    var crcInput = new Uint8Array(4 + chunkLen);
+    crcInput.set(typeBytes, 0);
+    crcInput.set(chunkData, 4);
+    var crc = pngCRC32(crcInput);
+
+    var chunk = new Uint8Array(12 + chunkLen);
+    chunk[0] = (chunkLen>>>24)&0xff; chunk[1] = (chunkLen>>>16)&0xff;
+    chunk[2] = (chunkLen>>>8)&0xff; chunk[3] = chunkLen&0xff;
+    chunk.set(typeBytes, 4);
+    chunk.set(chunkData, 8);
+    chunk[8+chunkLen] = (crc>>>24)&0xff; chunk[8+chunkLen+1] = (crc>>>16)&0xff;
+    chunk[8+chunkLen+2] = (crc>>>8)&0xff; chunk[8+chunkLen+3] = crc&0xff;
+
+    // Find IEND position
+    var iendPos = -1;
+    var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var pos = 8;
+    while(pos + 12 <= bytes.length) {
+      var len = dv.getUint32(pos);
+      var type = String.fromCharCode(bytes[pos+4],bytes[pos+5],bytes[pos+6],bytes[pos+7]);
+      if(type === "IEND") { iendPos = pos; break; }
+      pos += 12 + len;
+    }
+    if(iendPos === -1) throw new Error("No IEND chunk found");
+
+    // Assemble: everything before IEND + our chunk + IEND chunk (12 bytes)
+    var iendChunk = bytes.slice(iendPos, iendPos + 12);
+    var result = new Uint8Array(iendPos + chunk.length + 12);
+    result.set(bytes.slice(0, iendPos), 0);
+    result.set(chunk, iendPos);
+    result.set(iendChunk, iendPos + chunk.length);
+    return result;
+  } catch(ex) {
+    throw new Error("Failed to embed PNG metadata: " + ex.message);
+  }
+}
+
+// CRC32 for PNG chunks (standard CRC-32/ISO-3309)
+var _pngCrcTable = null;
+function pngCRC32(buf) {
+  if(!_pngCrcTable) {
+    _pngCrcTable = new Uint32Array(256);
+    for(var n=0;n<256;n++) {
+      var c = n;
+      for(var k=0;k<8;k++) c = (c&1) ? (0xEDB88320^(c>>>1)) : (c>>>1);
+      _pngCrcTable[n] = c;
+    }
+  }
+  var crc = 0xFFFFFFFF;
+  for(var i=0;i<buf.length;i++) crc = _pngCrcTable[(crc^buf[i])&0xFF]^(crc>>>8);
+  return (crc^0xFFFFFFFF)>>>0;
+}
+
+// S34: Unified HIP metadata read — works for JPEG (EXIF) and PNG (iTXt)
+function readHipMeta(fname, dataOrBytes) {
+  if(isJpeg(fname) && typeof dataOrBytes === "string") return readHipExif(dataOrBytes);
+  if(isPng(fname) && dataOrBytes instanceof Uint8Array) return readHipPng(dataOrBytes);
+  return null;
 }
 
 // ── Scroll fade ──
@@ -485,6 +635,44 @@ var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "err
   }
 })();
 
+// S34: Handle tier upgrade return from hipverify.org
+// Hash format: #hip-upgrade=<credentialId>&tier=<newTier>&session=<sessionId>
+var HIP_UPGRADE_RESULT = null; // null | "upgraded" | "mismatch" | "error"
+(function checkHipUpgrade() {
+  try {
+    var hash = window.location.hash;
+    if (!hash || hash.indexOf("#hip-upgrade=") !== 0) return;
+    var params = new URLSearchParams(hash.substring(1));
+    var upgCredId = params.get("hip-upgrade");
+    var newTier = parseInt(params.get("tier"), 10);
+    var sessionId = params.get("session");
+    if (!upgCredId || !newTier) { HIP_UPGRADE_RESULT = "error"; window.history.replaceState({}, document.title, window.location.pathname); return; }
+    // Check that we have a matching credential in localStorage
+    var existing = loadCredFromStorage();
+    if (!existing || existing.version !== "hip-credential-v1" || existing.credentialId !== upgCredId) {
+      HIP_UPGRADE_RESULT = "mismatch";
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return;
+    }
+    // Update local credential
+    var oldTier = existing.tier;
+    existing.tier = newTier;
+    existing.upgradedFrom = oldTier;
+    existing.upgradedAt = new Date().toISOString();
+    if (newTier === 1) existing.pathway = "government-id-didit-v1";
+    localStorage.setItem(HIP_CRED_KEY, JSON.stringify(existing));
+    HIP_UPGRADE_RESULT = "upgraded";
+    // Call worker to update trust record tier
+    try{fetch("https://hip-tier1-worker.hipprotocol.workers.dev/upgrade-credential",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      upgrade_type:"tier1-idv",credential_id:upgCredId,new_tier:newTier,session_id:sessionId||null
+    })})}catch(te){}
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } catch (ex) {
+    HIP_UPGRADE_RESULT = "error";
+    try { window.history.replaceState({}, document.title, window.location.pathname); } catch(_){}
+  }
+})();
+
 // ============================================================
 // S27: QR TRANSFER — Desktop shows QR, phone sends credential
 // ============================================================
@@ -622,6 +810,14 @@ var qrRef=useRef(null);
 
 useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
+// S33: Handle deep link initialMode from parent (e.g. #tier3 hash)
+useEffect(function(){
+  if(props.initialMode && !cred) {
+    setMode(props.initialMode);
+    if(props.clearInitialMode) props.clearInitialMode();
+  }
+},[props.initialMode]);
+
 // S21: Auto-load credential from localStorage on mount
 // S24: DDG browser fix — surface crypto.subtle errors instead of silent fail
 // S25: Check HIP_CRYPTO_OK before attempting any Ed25519 operations
@@ -743,15 +939,31 @@ e("div",{style:{fontSize:12,color:t2,lineHeight:1.5}},"Your device confirmed you
 bioConfirmed&&ToolAlert("success",e("span",null,"Your credential has been ",e("strong",null,"saved in this browser automatically"),". It will be here next time you visit. Download a backup copy below in case you clear your browser data or switch devices.")),
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:6}},tn),
-e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},HIP_IMPORT_RESULT==="imported"?"✓ Credential imported from hipverify.org":autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
+e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},HIP_IMPORT_RESULT==="imported"?"✓ Credential imported from hipverify.org":HIP_UPGRADE_RESULT==="upgraded"?"✓ Credential upgraded to Tier "+cred.tier:cred.recoveredFrom?"✓ Credential recovered (trust migrated)":cred.upgradedFrom?"✓ Upgraded from Tier "+cred.upgradedFrom:autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
 e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
 HIP_IMPORT_RESULT==="imported"&&ToolAlert("success",e("span",null,"Your Tier 1 credential was ",e("strong",null,"transferred from hipverify.org")," and saved in this browser. You can start attesting right away.")),
-autoLoaded&&!HIP_IMPORT_RESULT&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
+HIP_UPGRADE_RESULT==="upgraded"&&ToolAlert("success",e("span",null,"Your credential was ",e("strong",null,"upgraded to Tier "+cred.tier)," via hipverify.org. Your trust history has been preserved — attestation count, credential age, and trust score all carried forward. Download a new backup copy below.")),
+HIP_UPGRADE_RESULT==="mismatch"&&ToolAlert("danger","A tier upgrade was detected but the credential ID doesn't match the one saved in this browser. Make sure you're using the same browser where your credential is stored."),
+cred.recoveredFrom&&!HIP_IMPORT_RESULT&&ToolAlert("success",e("span",null,"Your credential was ",e("strong",null,"recovered via re-verification"),". Trust history has been migrated. Your old credential (",e(CopyHash,{value:cred.recoveredFrom,chars:12,fontSize:12}),") is superseded.")),
+autoLoaded&&!HIP_IMPORT_RESULT&&!cred.recoveredFrom&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
 e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e(CopyHash,{value:cred.credentialId,chars:20}),
 e("div",{style:wizRL},"Public Key"),e(CopyHash,{value:cred.publicKey,chars:20}),
 e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—"),
 e("div",{style:wizRL},"Saved"),e("code",{style:wizRV},"This browser ("+window.location.hostname+")")),
 e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy"),
+// S34: Upgrade button — show for Tier 2 and Tier 3 credentials
+cred.tier>1&&e("div",{style:{marginTop:4}},
+e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}},"UPGRADE CREDENTIAL"),
+e("div",{style:{display:"flex",flexDirection:"column",gap:6}},
+cred.tier===3&&e("button",{onClick:function(){setMode("upgrade-t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(74,222,128,0.03)",color:go,border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e(Ico,{name:"building",size:16,color:"#4ade80"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 1"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Government ID verification · $1 one-time · trust history preserved"))),
+cred.tier===3&&e("button",{onClick:function(){setMode("upgrade-t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(224,90,0,0.03)",color:go,border:"1px solid rgba(224,90,0,0.15)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e(Ico,{name:"scale",size:16,color:go}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 2"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Peer vouch from a Tier 1 holder · no cost · trust history preserved"))),
+cred.tier===2&&e("button",{onClick:function(){setMode("upgrade-t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(74,222,128,0.03)",color:go,border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e(Ico,{name:"building",size:16,color:"#4ade80"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 1"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Government ID verification · $1 one-time · trust history preserved"))))),
+// S34: Show upgrade status if credential was upgraded
+cred.upgradedFrom&&ToolAlert("success",e("span",null,"This credential was ",e("strong",null,"upgraded from Tier "+cred.upgradedFrom)," on ",new Date(cred.upgradedAt).toLocaleDateString(),". Your trust history was preserved — attestation count, credential age, and trust score all carried forward.")),
 ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")))}
 
 // S25: retireMode useState moved to top of CredPanel (hook ordering fix)
@@ -809,16 +1021,21 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
 // Normal tier selection (only shows when no saved credential exists, or after retirement)
 !mode&&!retireMode&&!(function(){var s=loadCredFromStorage();return s&&s.version==="hip-credential-v1"}())&&e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
 e("button",{onClick:function(){setMode("t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 1 — Government ID"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Highest assurance — via hipverify.org · small fee"))),
+e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 1 — Government ID"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Highest assurance — via hipverify.org · $1 one-time fee"))),
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — free"))),
+e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — no cost"))),
 e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — free, instant, low starting trust"))),
+e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — instant, no cost, lower starting trust"))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
 e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
 e("button",{onClick:function(){setMode("qr")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px dashed "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans,marginTop:8}},
-e("span",{style:{fontSize:20,flexShrink:0}},"📱"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Import via QR Code"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Scan a code on this screen with your phone to transfer")))),
+e("span",{style:{fontSize:20,flexShrink:0}},"📱"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Import via QR Code"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Scan a code on this screen with your phone to transfer"))),
+// S33: Recover credential section
+e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Lost Your Credential?"),
+e("button",{onClick:function(){setMode("recover")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px dashed "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e("span",{style:{fontSize:20,flexShrink:0}},"↻"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Recover via Re-Verification"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Re-verify your identity to get new keys — trust history preserved")))),
 
 mode==="qr"&&e("div",null,
 e("button",{onClick:function(){setMode(null);setQrState(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
@@ -831,12 +1048,59 @@ e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Tier 1 is the highest credential level. It verifies your identity against a government-issued document through an independent pathway operator. Your personal data is processed by the verification provider and never stored by HIP — only a one-way deduplication hash."),
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},e("strong",null,"How it works:")," You'll be directed to ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," — an independent verification service that issues HIP-compatible Tier 1 credentials. Scan your government ID and complete a liveness check. Once approved, your credential is created and saved in this browser automatically."),
 e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(96,165,250,0.06)",border:"1px solid rgba(96,165,250,0.15)",color:"#60a5fa",fontSize:13,lineHeight:1.6,marginBottom:12}},e("strong",null,"Why a separate site?")," HIP is a protocol, not a business. It has no treasury and collects no money (Charter DP-7). Tier 1 verification requires a paid identity check, so it's provided by an independent pathway operator under DP-5 — just as any organization can build HIP-compatible tools without permission."),
-ToolAlert("warn",e("span",null,e("strong",null,"About cost:")," The verification service charges a small fee (approximately $1.00) to cover identity verification and processing. This fee is paid to the pathway operator, not to HIP. ",e("strong",null,"HIP does not collect money."))),
+ToolAlert("warn",e("span",null,e("strong",null,"About the $1.00 fee:")," Verifying a government ID has real costs — there's no way around it. The verification service charges a one-time fee of $1.00 to cover identity verification processing. This is ",e("strong",null,"not a subscription")," — you pay once and your credential is yours for life. The fee goes to the pathway operator (hipverify.org), not to the HIP protocol. ",e("strong",null,"Want to try HIP first?")," Create a Tier 3 credential (device biometric) at no cost to experience the full protocol before committing.")),
 e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:12})},"Go to hipverify.org →"),
 e("div",{style:{marginTop:12,padding:"12px 16px",border:"1px solid "+bd,borderRadius:6,background:"rgba(255,255,255,0.02)",fontSize:12,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Institutional operators:")," Organizations that perform their own government ID verification (universities, employers, government agencies) can issue Tier 1 credentials directly through the ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," institutional API. ",e("a",{href:"https://hipverify.org/docs",target:"_blank",rel:"noopener",style:{color:go}},"Learn more →")))),
 
+// S33: Recovery mode panel
+mode==="recover"&&e("div",null,
+e("button",{onClick:function(){setMode(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{padding:18,border:"1px solid rgba(96,165,250,0.2)",borderRadius:8,background:"rgba(96,165,250,0.02)"}},
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:"#60a5fa",marginBottom:10,textTransform:"uppercase"}},"CREDENTIAL RECOVERY"),
+e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:16}},"Lost access to your credential? If you cleared your browser data, switched devices, or lost your backup file, you can recover by proving your identity again. Your trust history (attestation count, credential age, trust score) will be preserved."),
+
+e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+// Tier 1 recovery
+e("div",{style:{padding:"14px 16px",border:"1px solid rgba(74,222,128,0.15)",borderRadius:8,background:"rgba(74,222,128,0.02)"}},
+e("div",{style:{fontSize:14,fontWeight:700,color:t1,marginBottom:4}},"Tier 1 — Government ID Recovery"),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:10}},"Re-verify your identity with the same government ID you used originally. The system matches your identity hash to your previous credential and issues new keys. Costs $1.00 (re-verification fee)."),
+e("a",{href:"https://hipverify.org?mode=recovery",target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none"})},"Recover Tier 1 at hipverify.org →")),
+
+// Tier 2 recovery
+e("div",{style:{padding:"14px 16px",border:"1px solid rgba(224,90,0,0.15)",borderRadius:8,background:"rgba(224,90,0,0.02)"}},
+e("div",{style:{fontSize:14,fontWeight:700,color:t1,marginBottom:4}},"Tier 2 — Peer Vouch Recovery"),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:4}},"Ask the same person who originally vouched for you to vouch again. The system verifies the voucher matches and migrates your trust history. No cost."),
+e("button",{onClick:function(){setMode("t2recover")},style:Object.assign({},btnO,{width:"100%"})},"Start Tier 2 Recovery →")),
+
+// Tier 3 info
+e("div",{style:{padding:"14px 16px",border:"1px solid "+bd,borderRadius:8,background:"rgba(255,255,255,0.02)"}},
+e("div",{style:{fontSize:14,fontWeight:700,color:t1,marginBottom:4}},"Tier 3 — Device Biometric"),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},"Tier 3 credentials cannot be recovered because there is no reusable identity anchor — your biometric is tied to a specific device. Create a fresh Tier 3 credential instead (trust score starts over), or consider upgrading to Tier 1 for recoverable credentials."))))),
+
+// S33: Tier 2 recovery flow
+mode==="t2recover"&&e(T2RecoveryFlow,{onDone:wrapSetCred,onBack:function(){setMode("recover");setErr(null)},setErr:setErr}),
+
+// S34: Upgrade to Tier 1 panel (links to hipverify.org with upgrade mode)
+mode==="upgrade-t1"&&e("div",null,
+e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{padding:18,border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,background:"rgba(74,222,128,0.02)"}},
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:"#4ade80",marginBottom:10,textTransform:"uppercase"}},"UPGRADE TO TIER 1"),
+e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Upgrade your Tier "+(cred?cred.tier:"")+" credential to Tier 1 by verifying your government ID. Your existing credential stays the same — same ID, same keys, same attestation history. Only the tier level and trust score change."),
+e("div",{style:{display:"flex",flexDirection:"column",gap:10,marginBottom:16}},
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Trust history preserved")," — your attestation count, credential age, and behavioral score carry forward.")),
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Same credential ID")," — your existing Proof Cards and attestations remain linked to this credential.")),
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Higher tier_base")," — your trust score's base component increases from "+(cred&&cred.tier===3?"10 to 40":cred&&cred.tier===2?"25 to 40":"its current value to 40"),".")))),
+ToolAlert("info",e("span",null,e("strong",null,"How it works: "),"You'll be redirected to hipverify.org to verify your government ID ($1 one-time fee). After verification, hipverify.org sends the upgrade confirmation back here. No new keys are generated — your credential keeps its existing identity.")),
+e("a",{href:"https://hipverify.org?mode=upgrade&cred="+encodeURIComponent(cred?cred.credentialId:""),target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:8})},"Go to hipverify.org to Upgrade →")),
+mode==="upgrade-t2"&&cred&&e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updatedCred){wrapSetCred(updatedCred);setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}),
+
 mode==="t3"&&e("div",null,
 e("button",{onClick:function(){setMode(null);setWaStep(0);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{padding:18,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,background:gg,marginBottom:12}},
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}},"TIER 3 — DEVICE BIOMETRIC"),
+e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:8}},"Tier 3 is the fastest way to try HIP — completely free, no payment or personal information required. Use your device's built-in biometric (Face ID, Touch ID, Windows Hello) to create a credential in seconds."),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Good to know: "),"Tier 3 starts with a lower trust score than Tier 1 or Tier 2, but it lets you attest files, create Proof Cards, and experience the full protocol before deciding if you want to upgrade. You can upgrade to Tier 1 ($1 one-time fee) or Tier 2 (peer vouch, no cost) at any time from the Credential tab."),
+ToolAlert("success",e("span",null,e("strong",null,"Tier upgrade is available. "),"After creating a Tier 3 credential, you can upgrade to a higher tier at any time from the Credential tab. Your attestation history, credential age, and trust score will all be preserved — nothing is lost."))),
 waEnv&&waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"Biometric can't run here.")," Browsers block biometric in embedded frames. Open this tool directly at ",e("strong",{style:{color:go}},"hipprotocol.org")," for Tier 3.")),
 waEnv&&!waEnv.ok&&!waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"No biometric detected.")," Try a smartphone or laptop with Face ID, Touch ID, or Windows Hello.")),
 e(StepDot,{n:1,title:"Generate Cryptographic Identity",active:waStep===0,done:waStep>0},
@@ -898,7 +1162,8 @@ tier:2,pathway:"peer-vouch-bound-token-v1",
 vouchRecord:{voucherCredentialId:t.voucherCredentialId,voucherPublicKey:t.voucherPublicKey,voucherTier:t.voucherTier,nonce:t.nonce,timestamp:t.timestamp,signature:sig},
 created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub});
 // S29: Initialize trust record for new Tier 2 vouch credential
-try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2})})}catch(te){}
+// S33: Include voucher_credential_id for recovery support
+try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2,voucher_credential_id:t.voucherCredentialId})})}catch(te){}
 setStep(4);setBusy(false)}catch(ex){props.setErr("Something went wrong processing the vouch. Make sure you pasted the complete token and try again.");setBusy(false)}};
 
 return e("div",null,
@@ -939,6 +1204,214 @@ e(StepDot,{n:3,title:"You're Credentialed",active:step>=4,done:step>=4},
 step>=4&&ToolAlert("success",e("span",null,e("strong",null,"Tier 2 credential issued.")," Save your credential file now.")))))}
 
 // ============================================================
+// S33: TIER 2 RECOVERY — Same voucher re-vouches
+// ============================================================
+function T2RecoveryFlow(props){
+var ss=useState(0);var step=ss[0];var setStep=ss[1];
+var bus=useState(false);var busy=bus[0];var setBusy=bus[1];
+var vs=useState(null);var vCred=vs[0];var setVCred=vs[1];
+var os=useState("");var oldCredId=os[0];var setOldCredId=os[1];
+var ks=useState(null);var rKeys=ks[0];var setRKeys=ks[1];
+var tts=useState("");var tText=tts[0];var setTText=tts[1];
+var rps=useState("");var rPub=rps[0];var setRPub=rps[1];
+var ts=useState(null);var token=ts[0];var setToken=ts[1];
+var rls=useState(null);var role=rls[0];var setRole=rls[1];
+
+// Voucher signs a recovery vouch (includes old credential ID)
+var signRecoveryV=async function(){setBusy(true);try{
+if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography.");setBusy(false);return}
+var pk=rPub.trim();
+if(!pk||pk.length!==64){props.setErr("Enter the recipient's 64-character public key.");setBusy(false);return}
+var oid=oldCredId.trim();
+if(!oid||oid.length!==64){props.setErr("Enter the old credential ID (64-character hex hash).");setBusy(false);return}
+var privKey=vCred._priv;
+var t={version:"hip-recovery-vouch-v1",nonce:mkNonce(),timestamp:new Date().toISOString().replace(/\.\d{3}Z$/,"Z"),
+recipientPublicKey:pk,oldCredentialId:oid,voucherCredentialId:vCred.credentialId,voucherPublicKey:vCred.publicKey,voucherTier:vCred.tier};
+var canon=canonJSON(t);var sigBuf=await crypto.subtle.sign("Ed25519",privKey,new TextEncoder().encode(canon));
+setToken(Object.assign({},t,{signature:b64e(sigBuf)}));setStep(3);setBusy(false)}catch(ex){props.setErr("Something went wrong creating the recovery vouch.");setBusy(false)}};
+
+// Recipient generates keys
+var genK=async function(){setBusy(true);try{
+if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography.");setBusy(false);return}
+var kp=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
+var pub=hex(await crypto.subtle.exportKey("raw",kp.publicKey));
+var cid=await sha256(unhex(pub));var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
+setRKeys({publicKey:pub,credentialId:cid,privateKey:b64e(privBytes),_priv:kp.privateKey,_pub:kp.publicKey});
+setStep(2)}catch(ex){props.setErr("Couldn't generate keys.")}setBusy(false)};
+
+// Recipient accepts recovery vouch and calls /recover-credential
+var acceptRecoveryV=async function(){setBusy(true);try{
+var t;try{t=JSON.parse(tText)}catch(ex){props.setErr("Paste the complete recovery vouch token.");setBusy(false);return}
+if(t.version!=="hip-recovery-vouch-v1"){props.setErr("This isn't a recovery vouch token. Make sure the voucher used the recovery flow.");setBusy(false);return}
+if(t.recipientPublicKey!==rKeys.publicKey){props.setErr("This recovery vouch was created for a different recipient.");setBusy(false);return}
+var sig=t.signature;var body={};Object.keys(t).forEach(function(k){if(k!=="signature")body[k]=t[k]});
+var vPub=await crypto.subtle.importKey("raw",unhex(t.voucherPublicKey),"Ed25519",false,["verify"]);
+var valid=await crypto.subtle.verify("Ed25519",vPub,b64d(sig),new TextEncoder().encode(canonJSON(body)));
+if(!valid){props.setErr("The recovery vouch signature is invalid.");setBusy(false);return}
+if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("This recovery vouch has expired (older than 24 hours).");setBusy(false);return}
+
+// Call worker to perform recovery
+var recoverResp=await fetch(HIP_WORKER_URL+"/recover-credential",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+recovery_type:"tier2-revouch",old_credential_id:t.oldCredentialId,new_credential_id:rKeys.credentialId,
+voucher_credential_id:t.voucherCredentialId,vouch_signature:t.signature,vouch_body:canonJSON(body)})});
+
+var recoverData=await recoverResp.json();
+if(!recoverResp.ok){props.setErr(recoverData.error||"Recovery failed. The voucher may not match the original, or no trust record exists for the old credential.");setBusy(false);return}
+
+// Create credential
+var newCred={version:"hip-credential-v1",credentialId:rKeys.credentialId,publicKey:rKeys.publicKey,privateKey:rKeys.privateKey,
+tier:2,pathway:"peer-vouch-bound-token-v1",
+vouchRecord:{voucherCredentialId:t.voucherCredentialId,voucherPublicKey:t.voucherPublicKey,voucherTier:t.voucherTier,nonce:t.nonce,timestamp:t.timestamp,signature:sig},
+recoveredFrom:t.oldCredentialId,recoveredAt:new Date().toISOString(),trustMigrated:recoverData.trust_migrated||false,
+created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub};
+
+props.onDone(newCred);setStep(4);setBusy(false)}catch(ex){props.setErr("Recovery error: "+ex.message);setBusy(false)}};
+
+return e("div",null,
+e("button",{onClick:props.onBack,style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:"#60a5fa",marginBottom:10,textTransform:"uppercase"}},"TIER 2 RECOVERY"),
+e("p",{style:{fontSize:13,color:t2,marginBottom:12,lineHeight:1.6}},"Recovery requires the ",e("strong",{style:{color:t1}},"same voucher")," who originally credentialed you. The voucher loads their credential and creates a recovery vouch that includes your old credential ID. The server verifies the voucher matches."),
+!role&&e("div",null,
+e("button",{onClick:function(){setRole("v");setStep(1)},style:Object.assign({},btnG,{width:"100%",marginBottom:8,textAlign:"left"})},e("div",null,e("div",{style:{fontWeight:700}},"I'm the Voucher"),e("div",{style:{fontSize:11,fontWeight:400,opacity:0.8,marginTop:2}},"I have a Tier 1 credential and am re-vouching for someone"))),
+e("button",{onClick:function(){setRole("r");setStep(1)},style:Object.assign({},btnO,{width:"100%",textAlign:"left"})},e("div",null,e("div",{style:{fontWeight:700}},"I'm the Recipient"),e("div",{style:{fontSize:11,fontWeight:400,opacity:0.8,marginTop:2}},"I lost my Tier 2 credential and need recovery")))),
+
+// Voucher flow
+role==="v"&&e("div",null,
+e(StepDot,{n:1,title:"Load Your Credential",active:step===1,done:step>1},
+step===1&&e(ToolDropZone,{onLoad:function(d,er){if(er){props.setErr(er);return}if(!d||d.version!=="hip-credential-v1"){props.setErr("Not a valid credential.");return}if(d.tier!==1){props.setErr("Only Tier 1 credentials can vouch.");return}
+(async function(){try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);setVCred(d);setStep(2);props.setErr(null)}catch(ex){props.setErr("Couldn't read credential.")}})()},label:"Drop your credential file here"}),
+step>1&&vCred&&e("div",{style:{fontSize:12,color:"#4ade80",fontFamily:mo}},"✓ Loaded: ",e(CopyHash,{value:vCred.credentialId,chars:16,fontSize:12,color:"#4ade80"}))),
+e(StepDot,{n:2,title:"Enter Recovery Details",active:step===2,done:step>2},
+step===2&&e("div",null,
+e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Enter the recipient's ",e("strong",null,"new")," public key (from their recovery screen) and their ",e("strong",null,"old")," credential ID."),
+e("textarea",{style:Object.assign({},wizTxt,{fontSize:12,fontFamily:mo,minHeight:40,marginBottom:8}),placeholder:"Recipient's new public key (64-char hex)",value:rPub,onChange:function(ev){setRPub(ev.target.value.trim())}}),
+e("textarea",{style:Object.assign({},wizTxt,{fontSize:12,fontFamily:mo,minHeight:40}),placeholder:"Recipient's OLD credential ID (64-char hex)",value:oldCredId,onChange:function(ev){setOldCredId(ev.target.value.trim())}}),
+e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:signRecoveryV,disabled:busy},busy?"Signing...":"Create Recovery Vouch →"))),
+e(StepDot,{n:3,title:"Send to Recipient",active:step===3,done:false},
+step===3&&token&&e("div",null,ToolAlert("success","Recovery vouch created. Send it to the recipient."),
+e("textarea",{readOnly:true,style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:100}),value:JSON.stringify(token,null,2),onClick:function(ev){ev.target.select()}}),
+e("div",{style:{display:"flex",gap:8,marginTop:8}},
+e("button",{style:btnG,onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(token,null,2))}},"Copy"),
+e("button",{style:btnDl,onClick:function(){dl(token,"HIP_RecoveryVouch_"+token.nonce.slice(0,8)+".json")}},"↓ Download"))))),
+
+// Recipient flow
+role==="r"&&e("div",null,
+e(StepDot,{n:1,title:"Generate New Key Pair",active:step===1,done:step>1},
+step===1&&e("div",null,e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Generate new keys, then share your public key and old credential ID with your voucher."),
+e("button",{style:btnG,onClick:genK,disabled:busy},busy?"Creating...":"Generate New Identity →"))),
+e(StepDot,{n:2,title:"Exchange Details & Receive Recovery Vouch",active:step===2,done:step>2},
+step===2&&rKeys&&e("div",null,
+ToolAlert("info",e("span",null,e("strong",null,"Step A:")," Copy and send both values to your voucher.")),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,marginBottom:4}},"Your new public key:"),
+e("code",{style:Object.assign({},wizRV,{display:"block",padding:"8px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd,cursor:"pointer",marginBottom:8,fontSize:11,wordBreak:"break-all"}),onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(rKeys.publicKey)}},rKeys.publicKey),
+e("button",{style:Object.assign({},btnG,{padding:"8px 14px",fontSize:12,marginBottom:10}),onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(rKeys.publicKey)}},"Copy Public Key"),
+ToolAlert("warn",e("span",null,e("strong",null,"Also tell your voucher your old credential ID.")," This was shown on your previous credential panel and in your backup file (the 'credentialId' field). If you don't have it, check any Proof Cards you signed — it's in the 'credentialId' field.")),
+e("div",{style:{height:1,background:bd,margin:"12px 0"}}),
+ToolAlert("info",e("span",null,e("strong",null,"Step B:")," Paste the recovery vouch token you received.")),
+e("textarea",{style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:80}),placeholder:"Paste the recovery vouch token here",value:tText,onChange:function(ev){setTText(ev.target.value)}}),
+e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:acceptRecoveryV,disabled:busy},busy?"Recovering...":"Recover Credential →"))),
+e(StepDot,{n:3,title:"Credential Recovered",active:step>=4,done:step>=4},
+step>=4&&e("div",null,ToolAlert("success",e("span",null,e("strong",null,"Tier 2 credential recovered!")," Your trust history has been migrated. Save your backup file now.")),
+ToolAlert("warn","Your old credential ID is now superseded. Any Proof Cards signed with the old credential remain valid, but new attestations must use this recovered credential.")))))}
+
+// ============================================================
+// S34: TIER UPGRADE — T3→T2 VIA PEER VOUCH (in-app)
+// Same credential ID and keys, only tier changes in trust record
+// ============================================================
+function T2UpgradeVouchFlow(props){
+var rs=useState(null);var role=rs[0];var setRole=rs[1];
+var ss=useState(0);var step=ss[0];var setStep=ss[1];
+var bus=useState(false);var busy=bus[0];var setBusy=bus[1];
+var ts=useState(null);var token=ts[0];var setToken=ts[1];
+var tt=useState("");var tText=tt[0];var setTText=tt[1];
+// Voucher's credential (loaded from localStorage or file)
+var vc=useState(null);var vCred=vc[0];var setVCred=vc[1];
+// Recipient's credential ID and public key (from their existing T3 credential)
+var rid=useState("");var recipCredId=rid[0];var setRecipCredId=rid[1];
+
+// Voucher loads their own Tier 1 credential
+var loadVoucher=async function(d,er){if(er){props.setErr(er);return}
+if(!d||d.version!=="hip-credential-v1"){props.setErr("Not a valid HIP credential file.");return}
+if(d.tier!==1){props.setErr("Only Tier 1 credential holders can vouch for tier upgrades.");return}
+if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography.");return}
+try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);
+d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);
+setVCred(d);setStep(2)}catch(ex){props.setErr("Couldn't load this credential. "+ex.message)}};
+
+// Voucher signs an upgrade vouch
+var signUpgradeV=async function(){if(!vCred||!recipCredId.trim()){props.setErr("Enter the recipient's credential ID.");return}
+setBusy(true);try{
+var t={version:"hip-upgrade-vouch-v1",nonce:mkNonce(),timestamp:new Date().toISOString().replace(/\.\d{3}Z$/,"Z"),
+voucherCredentialId:vCred.credentialId,voucherPublicKey:vCred.publicKey,
+recipientCredentialId:recipCredId.trim(),targetTier:2};
+var canon=JSON.stringify(t);var sigBuf=await crypto.subtle.sign("Ed25519",vCred._priv,new TextEncoder().encode(canon));
+setToken(Object.assign({},t,{signature:b64e(sigBuf)}));setStep(3);setBusy(false)}catch(ex){props.setErr("Something went wrong creating the upgrade vouch.");setBusy(false)}};
+
+// Recipient accepts upgrade vouch and calls /upgrade-credential
+var acceptUpgradeV=async function(){if(!tText.trim()){props.setErr("Paste the upgrade vouch token.");return}
+setBusy(true);var t;try{t=JSON.parse(tText)}catch(ex){props.setErr("Paste the complete upgrade vouch token.");setBusy(false);return}
+if(t.version!=="hip-upgrade-vouch-v1"){props.setErr("This isn't an upgrade vouch token. Make sure the voucher used the upgrade flow.");setBusy(false);return}
+if(t.recipientCredentialId!==props.cred.credentialId){props.setErr("This upgrade vouch was created for a different credential.");setBusy(false);return}
+// Verify voucher signature
+try{var vPub=await crypto.subtle.importKey("raw",unhex(t.voucherPublicKey),"Ed25519",true,["verify"]);
+var tCopy=Object.assign({},t);delete tCopy.signature;var canon=JSON.stringify(tCopy);
+var valid=await crypto.subtle.verify("Ed25519",vPub,b64d(t.signature),new TextEncoder().encode(canon));
+if(!valid){props.setErr("The upgrade vouch signature is invalid.");setBusy(false);return}}catch(ex){props.setErr("Couldn't verify the vouch signature.");setBusy(false);return}
+if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("This upgrade vouch has expired (older than 24 hours).");setBusy(false);return}
+// Call worker to perform tier upgrade
+try{var upResp=await fetch(HIP_WORKER_URL+"/upgrade-credential",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+upgrade_type:"tier2-vouch",credential_id:props.cred.credentialId,new_tier:2,
+voucher_credential_id:t.voucherCredentialId,voucher_public_key:t.voucherPublicKey,vouch_signature:t.signature,vouch_timestamp:t.timestamp})});
+var upData=await upResp.json();
+if(!upResp.ok){props.setErr(upData.error||"Upgrade failed. The voucher may not be a valid Tier 1 credential holder.");setBusy(false);return}
+// Update credential object in memory and localStorage
+var updated=Object.assign({},props.cred);updated.tier=2;updated.upgradedFrom=3;updated.upgradedAt=new Date().toISOString();
+delete updated._priv;delete updated._pub;
+updated._priv=props.cred._priv;updated._pub=props.cred._pub;
+setStep(4);setBusy(false);props.onDone(updated)}catch(ex){props.setErr("Network error during upgrade. Try again.");setBusy(false)}};
+
+return e("div",null,
+e("button",{onClick:props.onBack,style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{padding:18,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,background:"rgba(224,90,0,0.02)"}},
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}},"UPGRADE TO TIER 2 — PEER VOUCH"),
+e("p",{style:{fontSize:13,color:t2,marginBottom:12,lineHeight:1.6}},"A ",e("strong",{style:{color:t1}},"Tier 1 credential holder")," vouches for your upgrade. Your credential ID and keys stay the same — only the tier changes in the trust record. Your attestation history is fully preserved."),
+e("div",{style:{display:"flex",flexDirection:"column",gap:8,marginBottom:14}},
+e("button",{onClick:function(){setRole("v");setStep(1)},style:Object.assign({},btnG,{width:"100%",textAlign:"left"})},e("div",null,e("div",{style:{fontWeight:700}},"I'm the Voucher"),e("div",{style:{fontSize:11,fontWeight:400,opacity:0.8,marginTop:2}},"I have a Tier 1 credential and want to vouch for an upgrade"))),
+e("button",{onClick:function(){setRole("r");setStep(1)},style:Object.assign({},btnO,{width:"100%",textAlign:"left"})},e("div",null,e("div",{style:{fontWeight:700}},"I'm the Recipient"),e("div",{style:{fontSize:11,fontWeight:400,opacity:0.8,marginTop:2}},"I have a Tier 3 credential and want to upgrade to Tier 2"))))),
+// Voucher flow
+role==="v"&&e("div",null,
+e(StepDot,{n:1,title:"Load Your Tier 1 Credential",active:step===1,done:step>1},
+step===1&&e("div",null,e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Load your Tier 1 credential to sign the upgrade vouch."),
+vCred?e("div",null,ToolAlert("success","Tier 1 credential loaded: "+vCred.credentialId.substring(0,16)+"…")):e(ToolDropZone,{onLoad:loadVoucher,label:"Drop your Tier 1 credential file here, or tap to browse"}))),
+e(StepDot,{n:2,title:"Enter Recipient's Credential ID",active:step===2,done:step>2},
+step===2&&e("div",null,
+e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Enter the Tier 3 holder's ",e("strong",null,"existing credential ID")," (from their Credential tab or backup file)."),
+e("textarea",{style:Object.assign({},wizTxt,{fontSize:12,fontFamily:mo,minHeight:40}),placeholder:"Recipient's credential ID (64-char hex)",value:recipCredId,onChange:function(ev){setRecipCredId(ev.target.value.trim())}}),
+e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:signUpgradeV,disabled:busy},busy?"Signing...":"Create Upgrade Vouch →"))),
+e(StepDot,{n:3,title:"Send to Recipient",active:step===3,done:false},
+step===3&&token&&e("div",null,ToolAlert("success","Upgrade vouch created. Send it to the recipient."),
+e("textarea",{readOnly:true,style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:100}),value:JSON.stringify(token,null,2),onClick:function(ev){ev.target.select()}}),
+e("div",{style:{display:"flex",gap:8,marginTop:8}},
+e("button",{style:btnG,onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(token,null,2))}},"Copy"),
+e("button",{style:btnDl,onClick:function(){dl(token,"HIP_UpgradeVouch_"+token.nonce.slice(0,8)+".json")}},"↓ Download"))))),
+// Recipient flow
+role==="r"&&e("div",null,
+e(StepDot,{n:1,title:"Your Credential",active:step===1,done:step>1},
+step===1&&e("div",null,
+e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Your current Tier 3 credential will be upgraded. Share your credential ID with the voucher."),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,marginBottom:4}},"Your credential ID:"),
+e("code",{style:Object.assign({},wizRV,{display:"block",padding:"8px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid "+bd,cursor:"pointer",marginBottom:8,fontSize:11,wordBreak:"break-all"}),onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(props.cred.credentialId)}},props.cred.credentialId),
+e("button",{style:Object.assign({},btnG,{padding:"8px 14px",fontSize:12,marginBottom:10}),onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(props.cred.credentialId);setStep(2)}},"Copy Credential ID & Continue →"))),
+e(StepDot,{n:2,title:"Accept Upgrade Vouch",active:step===2,done:step>2},
+step===2&&e("div",null,
+ToolAlert("info",e("span",null,e("strong",null,"Paste the upgrade vouch token")," you received from the Tier 1 voucher.")),
+e("textarea",{style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:80}),placeholder:"Paste the upgrade vouch token here",value:tText,onChange:function(ev){setTText(ev.target.value)}}),
+e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:acceptUpgradeV,disabled:busy},busy?"Upgrading...":"Upgrade to Tier 2 →"))),
+e(StepDot,{n:3,title:"Upgrade Complete",active:step>=4,done:step>=4},
+step>=4&&e("div",null,ToolAlert("success",e("span",null,e("strong",null,"Credential upgraded to Tier 2!")," Your trust history has been preserved. Your credential ID and keys are unchanged — only the tier has been updated.")),
+ToolAlert("info","Download a new backup copy of your credential. It now shows Tier 2.")))))}
+
+// ============================================================
 // ATTESTATION PANEL
 // ============================================================
 function AttestPanel(props){
@@ -954,33 +1427,50 @@ var ss=useState(0);var step=ss[0];var setStep=ss[1];
 var ls=useState("idle");var lv=ls[0];var setLv=ls[1];
 var sts=useState(false);var showTech=sts[0];var setShowTech=sts[1];
 var fref=useRef(null);
-// S21b: EXIF state
+// S21b: EXIF/metadata state (S34: expanded for PNG support)
 var jps=useState(false);var isJpg=jps[0];var setIsJpg=jps[1];
+var pps=useState(false);var isPngFile=pps[0];var setIsPngFile=pps[1];
 var exs=useState(null);var existingHip=exs[0];var setExistingHip=exs[1];
 var drs=useState(null);var rawDataURL=drs[0];var setRawDataURL=drs[1];
 var eds=useState(null);var embeddedDataURL=eds[0];var setEmbeddedDataURL=eds[1];
+var rbs=useState(null);var rawBytes=rbs[0];var setRawBytes=rbs[1]; // S34: raw bytes for PNG
+var ebs=useState(null);var embeddedBytes=ebs[0];var setEmbeddedBytes=ebs[1]; // S34: embedded PNG bytes
 // S29: Trust Score state
 var tss=useState(null);var trustScore=tss[0];var setTrustScore=tss[1];
 var tbs=useState(null);var trustBreakdown=tbs[0];var setTrustBreakdown=tbs[1];
 
+// S34: convenience — does this file support HIP metadata embedding?
+var canEmbed = isJpg || isPngFile;
+
 if(!cred)return e("p",{style:{fontSize:14,color:t2}},"Get your credential first (Credential tab), then come here to attest.");
 
-var pickFile=async function(ev){var f=ev.target.files&&ev.target.files[0];if(!f)return;
-setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);
+// S35: drag state for drop zone visual feedback
+var dgs=useState(false);var dragging=dgs[0];var setDragging=dgs[1];
+
+// S35: Core file handler — accepts a File object directly
+var handleFile=async function(f){if(!f)return;
+setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);
 var jpeg=isJpeg(f.name)&&HAS_PIEXIF;setIsJpg(jpeg);
+var png=isPng(f.name);setIsPngFile(png);
 if(jpeg){
-  // Read as DataURL for EXIF inspection
   var du=await fileToDataURL(f);
   setRawDataURL(du);
   var existing=readHipExif(du);
   if(existing){setExistingHip(existing);setStep(-1);return}
-  // No existing HIP metadata — proceed normally but don't hash yet (hash after embed)
-  // Compute preliminary hash of the raw file for display
   setHash(await sha256(new Uint8Array(await f.arrayBuffer())));
+  setStep(1);
+} else if(png){
+  var ab=await f.arrayBuffer();var bytes=new Uint8Array(ab);
+  setRawBytes(bytes);
+  var existing=readHipPng(bytes);
+  if(existing){setExistingHip(existing);setStep(-1);return}
+  setHash(await sha256(bytes));
   setStep(1);
 } else {
   setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1);
 }};
+var pickFile=function(ev){var f=ev.target.files&&ev.target.files[0];handleFile(f)};
+var dropFile=function(ev){ev.preventDefault();ev.stopPropagation();setDragging(false);var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];handleFile(f)};
 
 var buildIt=async function(){
 if(HIP_CRYPTO_OK===false){setErr&&setErr("Your browser doesn't support Ed25519 cryptography needed for signing.");return}
@@ -991,6 +1481,7 @@ if(cred.tier===3&&cred.webauthn&&cred.webauthn.credentialId){setLv("prompting");
 try{await waLiveness(cred.webauthn.credentialId);ld="device-attested";setLv("done")}catch(ex){setLv("failed")}}
 
 // S21b: For JPEG files, embed HIP metadata before hashing
+// S34: Also for PNG files, embed HIP metadata in iTXt chunk
 var finalHash=hash;
 var pcFilename="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";
 if(isJpg&&rawDataURL){
@@ -999,12 +1490,24 @@ if(isJpg&&rawDataURL){
     var embedded=embedHipExif(rawDataURL,hipMeta);
     setEmbeddedDataURL(embedded);
     // Hash the embedded version — this is the canonical hash
-    var embeddedBytes=dataURLtoBytes(embedded);
-    finalHash=await sha256(embeddedBytes);
+    var embBytes=dataURLtoBytes(embedded);
+    finalHash=await sha256(embBytes);
     setHash(finalHash);
   }catch(ex){
     // EXIF embed failed — fall back to raw file hash
     setEmbeddedDataURL(null);
+  }
+} else if(isPngFile&&rawBytes){
+  try{
+    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
+    var embPng=embedHipPng(rawBytes,hipMeta);
+    setEmbeddedBytes(embPng);
+    // Hash the embedded version — this is the canonical hash
+    finalHash=await sha256(embPng);
+    setHash(finalHash);
+  }catch(ex){
+    // PNG embed failed — fall back to raw file hash
+    setEmbeddedBytes(null);
   }
 }
 
@@ -1032,13 +1535,16 @@ setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);
 try{var arResp=await fetch(HIP_WORKER_URL+"/attest-register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,bundle_hash:ch,liveness_designation:ld,timestamp:now})});
 if(arResp.ok){var arData=await arResp.json();setTrustScore(arData.trust_score);setTrustBreakdown(arData.score_breakdown||null)}}catch(te){}};
 
-var dlEmbeddedJpeg=function(){
-  if(!embeddedDataURL)return;
-  var bytes=dataURLtoBytes(embeddedDataURL);
-  var blob=new Blob([bytes],{type:"image/jpeg"});
-  var u=URL.createObjectURL(blob);
-  var a=document.createElement("a");a.href=u;a.download=fname||"attested.jpg";a.click();URL.revokeObjectURL(u);
-};
+// S35: Generate blob URLs for deliberate download (no auto-download)
+// These are computed fresh each render in step 4 — acceptable since step 4 is stable.
+var embeddedBlobURL=null;
+if(embeddedDataURL){var eb=dataURLtoBytes(embeddedDataURL);embeddedBlobURL=URL.createObjectURL(new Blob([eb],{type:"image/jpeg"}))}
+else if(embeddedBytes){embeddedBlobURL=URL.createObjectURL(new Blob([embeddedBytes],{type:"image/png"}))}
+var pcBlobURL=null;
+if(proofcard){pcBlobURL=URL.createObjectURL(new Blob([JSON.stringify(proofcard,null,2)],{type:"application/json"}))}
+var bundleBlobURL=null;var anchorBlobURL=null;
+if(proofcard){bundleBlobURL=URL.createObjectURL(new Blob([JSON.stringify(proofcard.proofBundle,null,2)],{type:"application/json"}))}
+if(proofcard){anchorBlobURL=URL.createObjectURL(new Blob([JSON.stringify(proofcard.proofAnchor,null,2)],{type:"application/json"}))}
 
 var cats=[["CompleteHumanOrigin","CHO","Complete Human Origin — I made this entirely myself"],["HumanOriginAssisted","HOA","Human Origin Assisted — I used some AI help"],["HumanDirectedCollaborative","HDC","Human-Directed Collaborative — I directed AI to make this"]];
 
@@ -1047,7 +1553,7 @@ if(step===-1&&existingHip){
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 ToolAlert("warn",e("span",null,e("strong",null,"This file already has a HIP attestation.")," It was attested",existingHip.timestamp?" on "+existingHip.timestamp.split("T")[0]:""," with credential ",existingHip.credentialId?existingHip.credentialId+"…":"",(existingHip.proofCardFilename?". Proof Card: "+existingHip.proofCardFilename:""),".")),
 e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},"You can verify this attestation in the Verify tab. If you want to re-attest this file, you'll need to use the original version without HIP metadata."),
-e("button",{style:btnSm,onClick:function(){setStep(0);setHash(null);setFname(null);setExistingHip(null);setRawDataURL(null)}},"← Choose a different file"))}
+e("button",{style:btnSm,onClick:function(){setStep(0);setHash(null);setFname(null);setExistingHip(null);setRawDataURL(null);setRawBytes(null)}},"← Choose a different file"))}
 
 if(step===4&&proofcard){
 var clsN={"CompleteHumanOrigin":"Complete Human Origin","HumanOriginAssisted":"Human Origin Assisted","HumanDirectedCollaborative":"Human-Directed Collaborative"}[proofcard.proofBundle.credentialSubject.classification]||cls;
@@ -1070,30 +1576,30 @@ showTech&&e("div",{style:{padding:14,background:dkc,borderRadius:6,border:"1px s
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e(CopyHash,{value:bHash,chars:24,color:go})),
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{style:wizRV},proofcard.proofBundle.id)),
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
-// S21b: Download section — attested JPEG + Proof Card
-embeddedDataURL&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
-ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's EXIF.")),
-e("button",{style:Object.assign({},btnG,{width:"100%",marginBottom:8}),onClick:dlEmbeddedJpeg},"↓ Save Attested "+fname),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
+// S21b/S34: Download section — attested image (JPEG EXIF or PNG iTXt) + Proof Card
+(embeddedDataURL||embeddedBytes)&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
+ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"EXIF":"metadata chunk",".")),
+e("a",{style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":"attested.png")},"↓ Save Attested "+fname),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
-e("button",{style:Object.assign({},embeddedDataURL?btnDl:btnG,{width:"100%"}),onClick:function(){var pcName="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";dl(proofcard,pcName)}},"↓ Save Proof Card")),
+e("a",{style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
-e("button",{style:btnDl,onClick:function(){dl(proofcard.proofBundle,"HIP_Bundle.json")}},"↓ Bundle"),
-e("button",{style:btnDl,onClick:function(){dl(proofcard.proofAnchor,"HIP_Anchor.json")}},"↓ Anchor")),
-e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null)}},"Attest Another"))}
+e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:bundleBlobURL,download:"HIP_Bundle.json"},"↓ Bundle"),
+e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
+e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null)}},"Attest Another"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
 e("p",{style:{fontSize:14,color:t2}},"Select a file. Its fingerprint is computed locally — nothing leaves your device."),
-e("div",{style:{border:"2px dashed "+bd,borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer"},onClick:function(){fref.current&&fref.current.click()}},
+e("div",{style:{border:"2px dashed "+(dragging?"rgba(74,222,128,0.6)":bd),borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:dragging?"rgba(74,222,128,0.04)":"transparent",transition:"border-color 0.15s, background 0.15s"},onClick:function(){fref.current&&fref.current.click()},onDragOver:function(ev){ev.preventDefault();ev.stopPropagation()},onDragEnter:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(true)},onDragLeave:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(false)},onDrop:dropFile},
 e("input",{ref:fref,type:"file",style:{display:"none"},onChange:pickFile}),
-e("span",{style:{color:t2}},"Click to select a file")),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG images get HIP metadata embedded in EXIF — the attestation travels with the file."));
+e("span",{style:{color:dragging?"#4ade80":t2}},dragging?"Drop file here":"Drop a file here or click to select")),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG and PNG images get HIP metadata embedded — the attestation travels with the file."));
 
 if(step===1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,isJpg&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},"EXIF embed")),
+e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,canEmbed&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},isJpg?"EXIF embed":"metadata embed")),
 e("div",{style:wizRL},"Content Fingerprint"),e(CopyHash,{value:hash,chars:24,color:go}),
-isJpg&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Final hash will be computed after HIP metadata is embedded.")),
+canEmbed&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Final hash will be computed after HIP metadata is embedded.")),
 e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
 cats.map(function(c){return e("button",{key:c[0],style:{display:"block",width:"100%",textAlign:"left",padding:"12px 16px",border:"1px solid "+(cls===c[0]?go:bd),borderRadius:6,background:cls===c[0]?gg:"transparent",color:t1,fontSize:13,fontFamily:sans,cursor:"pointer",marginBottom:4},onClick:function(){setCls(c[0])}},
 e("span",{style:{fontFamily:mo,color:go,fontWeight:600,marginRight:8}},c[1])," ",c[2])}),
@@ -1382,11 +1888,25 @@ function App() {
   var s4=useState(null); var toolCred=s4[0]; var setToolCred=s4[1];
   var s5=useState("credential"); var toolTab=s5[0]; var setToolTab=s5[1];
   var s6=useState(new Date()); var time=s6[0]; var setTime=s6[1];
+  // S33: Deep link support — #tier2, #tier3 open credential panel to that mode
+  var s7=useState(null); var initialCredMode=s7[0]; var setInitialCredMode=s7[1];
 
   useEffect(function() {
     var h = function() { setNs(window.scrollY>40) };
     window.addEventListener("scroll",h,{passive:true});
     var t = setInterval(function(){setTime(new Date())},1000);
+    // Check hash for tier deep links
+    var hash = window.location.hash;
+    if (hash === "#tier3") {
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("t3");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    } else if (hash === "#tier2") {
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("t2");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    } else if (hash === "#tier1") {
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("t1");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    }
     return function() { window.removeEventListener("scroll",h); clearInterval(t) };
   }, []);
 
@@ -1395,7 +1915,7 @@ function App() {
     if(href) window.location.hash = href;
   };
 
-  var navLinks = [["#how","SPEC"],["#trust","TRUST"],["#genesis","GENESIS"],["#verify","VERIFY"],["#build","BUILD"],[G.github,"GITHUB",true]];
+  var navLinks = [["#what","ABOUT"],["#how","SPEC"],["#trust","TRUST"],["#genesis","GENESIS"],["#verify","VERIFY"],["#build","BUILD"],[G.github,"GITHUB",true]];
 
   // ── Section label helper ──
   function SL(text) { return e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:2,color:dimLabel,marginBottom:24,textTransform:"uppercase"}},text) }
@@ -1489,7 +2009,7 @@ function App() {
               cursor:"pointer",fontWeight:active?600:400,textTransform:"capitalize"}, onClick:function(){setToolTab(tab)}}, tab);
           })
         ),
-        toolTab==="credential" && e(CredPanel, {cred:toolCred, setCred:setToolCred}),
+        toolTab==="credential" && e(CredPanel, {cred:toolCred, setCred:setToolCred, initialMode:initialCredMode, clearInitialMode:function(){setInitialCredMode(null)}}),
         toolTab==="attest" && e(AttestPanel, {cred:toolCred}),
         toolTab==="verify" && e(VerifyWizard)
       )
@@ -1519,6 +2039,52 @@ function App() {
             e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,color:dimLabel,marginBottom:4}},"ACTIONS"),
             e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){window.location.hash="#how"}},"HOW IT WORKS"),
             e("button",{className:"hip-cta-btn",style:{display:"block",width:"100%",fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 20px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff"},onClick:function(){setToolOpen("attest");setToolTab("attest")}},"ATTEST NOW")
+          )
+        )
+      )
+    ),
+
+    // ═══ WHAT IS HIP? — Front-door explainer (S33) ═══
+    e("section", {id:"what",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",background:surface}},
+      e("div", {className:"hip-wrap",style:{maxWidth:900,margin:"0 auto"}},
+        e(Fade, null, SL("INTRODUCTION"), ST("What is HIP?")),
+        e(Fade, {delay:0.1},
+          e("div", {className:"hip-grid-2",style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:32,marginBottom:32}},
+            e("div", null,
+              e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:10}}, "THE PROBLEM"),
+              P("AI-generated text, images, and audio are now indistinguishable from human-made content. Every platform, newsroom, and creator faces the same question: how do you know a human made this?"),
+              P("Current solutions require trusting a company to stay honest, stay online, and not change the rules. They create walled gardens. They expire. They depend on institutions that may not exist in ten years.")
+            ),
+            e("div", null,
+              e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:10}}, "THE SOLUTION"),
+              P("HIP is an open protocol that lets human creators cryptographically prove their work is human-made. No accounts. No uploads. No institution controls it."),
+              P("You get a credential proving you're a real person. You sign your work with it. Anyone can verify the signature — forever — using only the public protocol and the Bitcoin blockchain. No company required.")
+            )
+          ),
+          e("div", {style:{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:16,marginBottom:24},className:"hip-grid-3"},
+            e("div", {style:{padding:"20px 16px",background:dk,borderRadius:8,border:"1px solid "+rule}},
+              e("div", {style:{fontFamily:mo,fontSize:22,color:go,marginBottom:8}}, "∅"),
+              e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1,fontWeight:600,marginBottom:6}}, "NO UPLOAD"),
+              P("Your files never leave your device. HIP fingerprints them locally using SHA-256. The protocol only needs the hash — never the content.")
+            ),
+            e("div", {style:{padding:"20px 16px",background:dk,borderRadius:8,border:"1px solid "+rule}},
+              e("div", {style:{fontFamily:mo,fontSize:22,color:go,marginBottom:8}}, "∞"),
+              e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1,fontWeight:600,marginBottom:6}}, "PERMANENT"),
+              P("Attestations are anchored on the Bitcoin blockchain. They don't expire, can't be revoked by a third party, and are verifiable by anyone with an internet connection.")
+            ),
+            e("div", {style:{padding:"20px 16px",background:dk,borderRadius:8,border:"1px solid "+rule}},
+              e("div", {style:{fontFamily:mo,fontSize:22,color:go,marginBottom:8}}, "⚡"),
+              e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1,fontWeight:600,marginBottom:6}}, "OPEN PROTOCOL"),
+              P("The protocol has no treasury, collects no fees, and requires no permission to use. Credentials start free — Tier 1 verification costs $1 (one time, not a subscription) because identity checks have real costs. Anyone can build tools on top of HIP.")
+            )
+          ),
+          e("div", {style:{padding:"20px 24px",background:"rgba(224,90,0,0.03)",border:"1px solid rgba(224,90,0,0.12)",borderRadius:8,textAlign:"center"}},
+            e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:8}}, "TRY IT NOW"),
+            P("Get a credential, attest a file, and verify the result — all in your browser, in under two minutes.",{textAlign:"center",marginBottom:12}),
+            e("div",{style:{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}},
+              e("button",{className:"hip-cta-btn",style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"12px 24px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff",borderRadius:4},onClick:function(){setToolOpen("attest");setToolTab("cred")}},"GET A CREDENTIAL"),
+              e("button",{className:"hip-cta-btn",style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"12px 24px",cursor:"pointer",textAlign:"center",border:"1px solid "+go,background:"transparent",color:go,borderRadius:4},onClick:function(){window.location.hash="#how"}},"SEE HOW IT WORKS")
+            )
           )
         )
       )
