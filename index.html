@@ -1586,7 +1586,9 @@ e("a",{style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width
 e("div",{style:{display:"flex",gap:8}},
 e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:bundleBlobURL,download:"HIP_Bundle.json"},"↓ Bundle"),
 e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
-e("button",{style:Object.assign({},btnSm,{marginTop:8}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null)}},"Attest Another"))}
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:2,textAlign:"center"}},"Tip: right-click any download link and choose \"Save As\" to pick a save location."),
+e("div",{style:{borderTop:"1px solid "+bd,marginTop:14,paddingTop:14}},
+e("button",{style:Object.assign({},btnG,{width:"100%",background:"transparent",border:"1px solid "+go,color:go}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null)}},"Attest Another File")))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
