@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HIP Proof Card — Human Integrity Protocol</title>
+<meta name="description" content="Verify human-origin content attestation on the Human Integrity Protocol.">
+<meta property="og:title" content="HIP Proof Card">
+<meta property="og:description" content="Cryptographic proof of human-origin content. Verified on the Human Integrity Protocol.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✋</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600&family=Azeret+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:#0A0A0A;font-family:'Space Grotesk',sans-serif;color:#E8E8E0;min-height:100vh;-webkit-font-smoothing:antialiased}
+a{color:#E05A00;text-decoration:none}
+a:hover{text-decoration:underline}
+::selection{background:rgba(224,90,0,0.3);color:#fff}
+.mono{font-family:'Azeret Mono','SF Mono',monospace}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(10,10,10,0.95);backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.nav-brand{font-family:'Azeret Mono',monospace;font-size:13px;font-weight:500;letter-spacing:1px;color:#E8E8E0;display:flex;align-items:center;gap:10px}
+.nav-brand .hip{color:#E8E8E0}.nav-brand .sep{color:#E05A00}
+.nav-links{display:flex;gap:20px;align-items:center}
+.nav-links a{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:0.5px;color:#666;transition:color 0.15s}
+.nav-links a:hover{color:#E8E8E0;text-decoration:none}
+.wrap{max-width:720px;margin:0 auto;padding:48px 24px 80px}
+/* Loading / error states */
+.state-box{text-align:center;padding:80px 24px}
+.state-box h2{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:400;color:#E8E8E0;margin-bottom:12px}
+.state-box p{font-size:15px;color:#666;line-height:1.7;max-width:480px;margin:0 auto}
+.spinner{display:inline-block;width:32px;height:32px;border:3px solid rgba(255,255,255,0.06);border-top-color:#E05A00;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:24px}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Badge */
+.badge-wrap{display:flex;justify-content:center;margin-bottom:32px}
+.badge-img{width:80px;height:80px;filter:invert(1)}
+.badge-img.verified{filter:invert(0) sepia(1) saturate(5) hue-rotate(5deg) brightness(0.9);opacity:0.9}
+.badge-img.unverified{filter:invert(1);opacity:0.2}
+.badge-img.sealed{filter:invert(0) sepia(1) saturate(2) hue-rotate(190deg) brightness(0.8);opacity:0.7}
+/* Proof card */
+.proof-card{background:#111;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:32px;margin-bottom:24px;position:relative;overflow:hidden}
+.proof-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#E05A00,rgba(224,90,0,0.3))}
+.proof-card.sealed-card::before{background:linear-gradient(90deg,#4A6FA5,rgba(74,111,165,0.3))}
+.proof-card.invalid-card::before{background:linear-gradient(90deg,#ef4444,rgba(239,68,68,0.3))}
+.card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px}
+.card-title-group{}
+.card-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#E05A00;margin-bottom:6px}
+.card-title{font-family:'Space Grotesk',sans-serif;font-size:clamp(20px,4vw,28px);font-weight:400;color:#E8E8E0;line-height:1.2}
+.status-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:100px;font-family:'Azeret Mono',monospace;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;white-space:nowrap}
+.pill-verified{background:rgba(224,90,0,0.12);border:1px solid rgba(224,90,0,0.3);color:#E05A00}
+.pill-sealed{background:rgba(74,111,165,0.12);border:1px solid rgba(74,111,165,0.3);color:#6B9FD4}
+.pill-invalid{background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:#ef4444}
+.pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+/* Fields */
+.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.field-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:520px){.field-grid,.field-grid-3{grid-template-columns:1fr}}
+.field{}
+.field-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:5px}
+.field-val{font-size:15px;color:#E8E8E0;font-weight:500;line-height:1.4}
+.field-val.mono{font-size:11px;color:#888;word-break:break-all}
+.field-val.cls{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:400;color:#E8E8E0}
+.field-val.tier-1{color:#E05A00}.field-val.tier-2{color:#f59e0b}.field-val.tier-3{color:#888}
+.divider{height:1px;background:rgba(255,255,255,0.06);margin:20px 0}
+/* Sig verification */
+.sig-block{padding:14px 16px;border-radius:8px;margin-bottom:20px;font-size:13px;line-height:1.6}
+.sig-ok{background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.15);color:#4ade80}
+.sig-fail{background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);color:#ef4444}
+.sig-pending{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);color:#666}
+/* Verify zones */
+.verify-section{background:#0d0d0d;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:24px;margin-bottom:16px}
+.verify-title{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:4px}
+.verify-desc{font-size:13px;color:#555;line-height:1.6;margin-bottom:16px}
+.drop-zone{border:2px dashed rgba(255,255,255,0.1);border-radius:8px;padding:24px 20px;text-align:center;cursor:pointer;transition:border-color 0.15s,background 0.15s}
+.drop-zone:hover,.drop-zone.drag-over{border-color:rgba(224,90,0,0.4);background:rgba(224,90,0,0.03)}
+.drop-label{font-size:13px;color:#555}
+.drop-result{margin-top:12px;padding:12px 14px;border-radius:6px;font-size:13px;line-height:1.6}
+.match-exact{background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.2);color:#4ade80}
+.match-high{background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.12);color:#4ade80}
+.match-med{background:rgba(245,158,11,0.04);border:1px solid rgba(245,158,11,0.15);color:#f59e0b}
+.match-low{background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);color:#ef4444}
+.match-none{background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);color:#ef4444}
+/* Embed code */
+.embed-section{background:#0d0d0d;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:24px;margin-bottom:16px}
+.embed-title{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:4px}
+.embed-desc{font-size:13px;color:#555;line-height:1.6;margin-bottom:16px}
+.code-block{background:#080808;border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:14px 16px;font-family:'Azeret Mono',monospace;font-size:11px;color:#888;word-break:break-all;line-height:1.7;position:relative}
+.copy-btn{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#666;cursor:pointer;font-family:'Azeret Mono',monospace;font-size:10px;padding:4px 10px;border-radius:4px;margin-top:8px;display:inline-block;transition:all 0.2s}
+.copy-btn:hover{background:rgba(255,255,255,0.08);color:#E8E8E0}
+/* Honest boundary */
+.boundary{padding:14px 16px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);font-size:12px;color:#555;line-height:1.7;margin-bottom:24px;font-style:italic}
+/* Footer */
+.footer{text-align:center;padding:40px 24px 20px;font-size:12px;color:#444;border-top:1px solid rgba(255,255,255,0.04)}
+.footer a{color:#666}
+.footer a:hover{color:#E8E8E0}
+/* Not found */
+.not-found{text-align:center;padding:80px 24px}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="hip">HIP</span><span class="sep">://</span><span style="color:#555;font-size:11px">PROOF CARD</span>
+  </div>
+  <div class="nav-links">
+    <a href="https://hipprotocol.org">hipprotocol.org</a>
+    <a href="https://hipprotocol.org#attest">Attest Your Work</a>
+  </div>
+</nav>
+
+<div class="wrap" id="main">
+  <div class="state-box" id="loading">
+    <div class="spinner"></div>
+    <p style="color:#555;font-family:'Azeret Mono',monospace;font-size:12px;letter-spacing:1px">LOADING PROOF RECORD</p>
+  </div>
+</div>
+
+<div class="footer" id="footer" style="display:none">
+  <p style="margin-bottom:8px">This verification is only valid at <strong style="color:#E8E8E0">hipprotocol.org</strong></p>
+  <p><a href="https://hipprotocol.org">hipprotocol.org</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol">GitHub</a> · Genesis Block 940,558</p>
+</div>
+
+<script>
+// ── Constants ──
+var WORKER_URL = "https://hip-tier1-worker.hipprotocol.workers.dev";
+var BADGE_B64 = "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";
+
+// ── Helpers ──
+var hex = function(b){return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,"0")}).join("")};
+var unhex = function(h){var b=new Uint8Array(h.length/2);for(var i=0;i<h.length;i+=2)b[i/2]=parseInt(h.substr(i,2),16);return b};
+var b64d = function(s){var b=atob(s);var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+
+function qs(id){return document.getElementById(id)}
+function setHTML(id,h){var el=qs(id);if(el)el.innerHTML=h}
+function show(id){var el=qs(id);if(el)el.style.display=""}
+function hide(id){var el=qs(id);if(el)el.style.display="none"}
+
+// ── Get content hash from URL ──
+// Supports: /proof/[hash]  or  ?hash=[hash]
+function getHashFromURL(){
+  var path=window.location.pathname;
+  var m=path.match(/\/proof\/([0-9a-f]{64})/i);
+  if(m)return m[1].toLowerCase();
+  var params=new URLSearchParams(window.location.search);
+  var h=params.get("hash");
+  if(h&&/^[0-9a-f]{64}$/i.test(h))return h.toLowerCase();
+  return null;
+}
+
+// ── Classification display ──
+var CLS_LABELS={
+  "CompleteHumanOrigin":"Complete Human Origin",
+  "HumanOriginAssisted":"Human Origin Assisted",
+  "HumanDirectedCollaborative":"Human-Directed Collaborative"
+};
+var CLS_DESCS={
+  "CompleteHumanOrigin":"The creator attested this work was made entirely by a human, without AI assistance.",
+  "HumanOriginAssisted":"The creator attested this work was human-made with some AI assistance.",
+  "HumanDirectedCollaborative":"The creator attested this work was produced by directing AI tools."
+};
+
+// ── Tier display ──
+function tierLabel(t){return t===1?"Tier 1 — Government ID":t===2?"Tier 2 — Peer Vouched":"Tier 3 — Device Biometric"}
+function tierClass(t){return t===1?"tier-1":t===2?"tier-2":"tier-3"}
+
+// ── Format timestamp ──
+function fmtDate(iso){
+  if(!iso)return "—";
+  try{
+    var d=new Date(iso);
+    return d.toUTCString().replace(" GMT","") + " UTC";
+  }catch(e){return iso}
+}
+
+// ── pHash helpers (same as hipprotocol_index.html) ──
+var pHashDistance=function(a,b){
+  if(!a||!b||a.length!==16||b.length!==16)return null;
+  try{
+    var ah=parseInt(a.substring(0,8),16)|0; var al=parseInt(a.substring(8,16),16)|0;
+    var bh=parseInt(b.substring(0,8),16)|0; var bl=parseInt(b.substring(8,16),16)|0;
+    var xh=ah^bh; var xl=al^bl;
+    function pop32(n){n=n>>>0;n=n-((n>>>1)&0x55555555);n=(n&0x33333333)+((n>>>2)&0x33333333);n=(n+(n>>>4))&0x0f0f0f0f;return(n*0x01010101)>>>24}
+    return pop32(xh)+pop32(xl);
+  }catch(e){return null}
+};
+var pHashSimilarity=function(a,b){var d=pHashDistance(a,b);if(d===null)return null;return Math.round(((64-d)/64)*100)};
+
+var computePHash=function(imgEl){
+  return new Promise(function(resolve){
+    try{
+      var SIZE=32;
+      var c=document.createElement("canvas");c.width=SIZE;c.height=SIZE;
+      var ctx=c.getContext("2d");ctx.drawImage(imgEl,0,0,SIZE,SIZE);
+      var data=ctx.getImageData(0,0,SIZE,SIZE).data;
+      var gray=new Float32Array(SIZE*SIZE);
+      for(var i=0;i<SIZE*SIZE;i++)gray[i]=0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2];
+      var DCT_SIZE=8;var dct=new Float32Array(DCT_SIZE*DCT_SIZE);
+      var blockW=SIZE/DCT_SIZE;
+      for(var by=0;by<DCT_SIZE;by++)for(var bx=0;bx<DCT_SIZE;bx++){
+        var sum=0;
+        for(var py=0;py<blockW;py++)for(var px=0;px<blockW;px++)sum+=gray[(by*blockW+py)*SIZE+(bx*blockW+px)];
+        dct[by*DCT_SIZE+bx]=sum/(blockW*blockW);
+      }
+      var mean=dct.reduce(function(a,v){return a+v},0)/dct.length;
+      var hi=0; var lo=0;
+      for(var k=0;k<32;k++) hi=(hi<<1)|(dct[k]>=mean?1:0);
+      for(var k=32;k<64;k++) lo=(lo<<1)|(dct[k]>=mean?1:0);
+      resolve(((hi>>>0).toString(16).padStart(8,"0"))+((lo>>>0).toString(16).padStart(8,"0")));
+    }catch(e){resolve(null)}
+  });
+};
+
+// ── Ed25519 signature verification ──
+async function verifyEd25519(publicKeyHex, message, signatureB64) {
+  try {
+    var pubKeyBytes = unhex(publicKeyHex);
+    var key = await crypto.subtle.importKey(
+      "raw", pubKeyBytes,
+      {name:"Ed25519"}, false, ["verify"]
+    );
+    var msgBytes = new TextEncoder().encode(message);
+    var sigBytes = b64d(signatureB64);
+    return await crypto.subtle.verify("Ed25519", key, sigBytes, msgBytes);
+  } catch(e) {
+    return null; // null = browser doesn't support Ed25519 verify
+  }
+}
+
+// ── SHA-256 ──
+async function sha256(bytes){
+  return hex(await crypto.subtle.digest("SHA-256", bytes instanceof Uint8Array ? bytes : new TextEncoder().encode(bytes)));
+}
+
+// ── Render badge img tag ──
+function badgeImg(cls){
+  return '<img src="data:image/png;base64,'+BADGE_B64+'" class="badge-img '+cls+'" alt="HIP Badge" width="80" height="80">';
+}
+
+// ── Main render ──
+async function init(){
+  var contentHash = getHashFromURL();
+
+  if(!contentHash){
+    renderNoHash();
+    return;
+  }
+
+  // Fetch proof record
+  var record = null;
+  try{
+    var resp = await fetch(WORKER_URL+"/api/proof/"+contentHash);
+    var data = await resp.json();
+    if(resp.status===404||!data.found){
+      renderNotFound(contentHash);
+      return;
+    }
+    record = data;
+  }catch(e){
+    renderError("Could not reach the HIP proof registry. Please try again.");
+    return;
+  }
+
+  if(record.sealed){
+    renderSealed(contentHash, record);
+  } else {
+    renderProof(contentHash, record);
+  }
+}
+
+// ── Render: no hash in URL ──
+function renderNoHash(){
+  qs("main").innerHTML = '<div class="state-box"><h2 style="color:#555">No proof hash specified</h2><p>This page displays HIP proof records. Share a link like<br><code style="color:#E05A00;font-family:\'Azeret Mono\',monospace">hipprotocol.org/proof/[content-hash]</code><br>to verify a specific attestation.</p><p style="margin-top:20px"><a href="https://hipprotocol.org" style="color:#E05A00">← Back to hipprotocol.org</a></p></div>';
+  show("footer");
+}
+
+// ── Render: not found ──
+function renderNotFound(hash){
+  qs("main").innerHTML = '<div class="not-found">'
+    +'<div style="font-size:48px;margin-bottom:20px;opacity:0.2">✋</div>'
+    +'<h2 style="font-family:\'Space Grotesk\',sans-serif;font-size:24px;font-weight:400;color:#E8E8E0;margin-bottom:12px">No proof record found</h2>'
+    +'<p style="font-size:14px;color:#555;line-height:1.7;max-width:480px;margin:0 auto 20px">No attestation has been published to the HIP registry for this content hash. The creator may not have published a proof link, or the content may have been modified from the attested original.</p>'
+    +'<div style="padding:12px 16px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;font-family:\'Azeret Mono\',monospace;font-size:11px;color:#444;word-break:break-all;margin-bottom:20px">'+hash+'</div>'
+    +'<a href="https://hipprotocol.org" style="color:#E05A00;font-size:13px">← hipprotocol.org</a>'
+    +'</div>';
+  show("footer");
+}
+
+// ── Render: error ──
+function renderError(msg){
+  qs("main").innerHTML = '<div class="state-box"><h2 style="color:#ef4444">Error</h2><p>'+msg+'</p></div>';
+  show("footer");
+}
+
+// ── Render: sealed ──
+function renderSealed(hash, record){
+  qs("main").innerHTML =
+    '<div class="badge-wrap">'+badgeImg("sealed")+'</div>'
+    +'<div class="proof-card sealed-card">'
+    +'<div class="card-header">'
+    +'<div class="card-title-group"><div class="card-label">HIP Proof Card</div><div class="card-title">Sealed Attestation</div></div>'
+    +'<div class="status-pill pill-sealed"><span class="pill-dot"></span>SEALED</div>'
+    +'</div>'
+    +'<p style="font-size:14px;color:#666;line-height:1.7;margin-bottom:20px">This attestation has been registered by its creator but the details are sealed. The timestamp confirms the work existed before this date. The creator may unseal this record when they choose to publish.</p>'
+    +'<div class="field"><div class="field-label">Content Hash</div><div class="field-val mono">'+hash+'</div></div>'
+    +'<div class="divider"></div>'
+    +'<div class="field"><div class="field-label">Registered</div><div class="field-val">'+fmtDate(record.registered_at)+'</div></div>'
+    +'</div>'
+    +'<div class="boundary">This record confirms a HIP credential holder registered this content hash before this date. Details are withheld by the creator\'s choice. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable.</div>'
+    +'<div style="text-align:center;margin-top:8px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
+  show("footer");
+}
+
+// ── Render: full proof ──
+async function renderProof(hash, record){
+  var clsLabel = CLS_LABELS[record.classification] || record.classification;
+  var clsDesc = CLS_DESCS[record.classification] || "";
+  var tierLbl = tierLabel(record.credential_tier);
+  var tierCls = tierClass(record.credential_tier);
+
+  var isDisputed = record.disputes && record.disputes.length > 0;
+  var html = '<div class="badge-wrap">'+badgeImg(isDisputed?"unverified":"verified")+'</div>';
+
+  html += '<div class="proof-card'+(isDisputed?' invalid-card':'')+'" id="proof-main">'
+    +'<div class="card-header">'
+    +'<div class="card-title-group"><div class="card-label">HIP Proof Card · hipprotocol.org</div><div class="card-title">'+clsLabel+'</div></div>'
+    +(isDisputed
+      ?'<div class="status-pill pill-invalid"><span class="pill-dot"></span>DISPUTED</div>'
+      :'<div class="status-pill pill-verified"><span class="pill-dot"></span>ATTESTED</div>')
+    +'</div>';
+
+  html += '<div class="field" style="margin-bottom:16px"><div class="field-label">Classification</div>'
+    +'<div class="field-val cls">'+clsLabel+'</div>'
+    +'<div style="font-size:13px;color:#555;margin-top:4px;line-height:1.6">'+clsDesc+'</div>'
+    +'</div>';
+
+  html += '<div class="field-grid-3">'
+    +'<div class="field"><div class="field-label">Credential Tier</div><div class="field-val '+tierCls+'">'+tierLbl+'</div></div>'
+    +'<div class="field"><div class="field-label">Attested</div><div class="field-val" style="font-size:13px">'+fmtDate(record.attested_at)+'</div></div>'
+    +'<div class="field"><div class="field-label">Registered</div><div class="field-val" style="font-size:13px">'+fmtDate(record.registered_at)+'</div></div>'
+    +'</div>';
+
+  html += '<div class="divider"></div>';
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Content Hash (SHA-256)</div><div class="field-val mono">'+hash+'</div></div>';
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Credential ID</div><div class="field-val mono">'+record.credential_id+'</div></div>';
+
+  if(record.public_key){
+    html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Public Key (Ed25519)</div><div class="field-val mono">'+record.public_key+'</div></div>';
+  }
+
+  if(record.perceptual_hash){
+    html += '<div class="field" style="margin-bottom:4px"><div class="field-label">Visual Fingerprint (pHash)</div><div class="field-val mono">'+record.perceptual_hash+'</div></div>';
+  }
+
+  // Signature verification block
+  html += '<div class="divider"></div>';
+  html += '<div class="sig-block sig-pending" id="sig-status">Verifying signature…</div>';
+
+  html += '</div>'; // end proof-card
+
+  // Honest boundary statement
+  html += '<div class="boundary">This record shows that a verified HIP credential holder attested this content as <strong style="color:#E8E8E0;font-style:normal">'+clsLabel+'</strong> at '+fmtDate(record.attested_at)+'. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable. The signature above was verified live in your browser against HIP\'s public registry.</div>';
+
+  // Verify zones
+  html += '<div class="verify-section">'
+    +'<div class="verify-title">Exact Match Verification</div>'
+    +'<div class="verify-desc">Have the original file? Drop it here to confirm it matches this attestation exactly. Works for any file type.</div>'
+    +'<div class="drop-zone" id="exact-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleExactDrop(event,\''+hash+'\')" onclick="document.getElementById(\'exact-input\').click()">'
+    +'<div class="drop-label">Drop file here or click to select</div>'
+    +'<input type="file" id="exact-input" style="display:none" onchange="handleExactFile(event,\''+hash+'\')">'
+    +'</div>'
+    +'<div id="exact-result"></div>'
+    +'</div>';
+
+  if(record.perceptual_hash){
+    html += '<div class="verify-section">'
+      +'<div class="verify-title">Visual Similarity (Screenshot / Re-upload)</div>'
+      +'<div class="verify-desc">Have a screenshot or re-uploaded copy? Drop it here to check visual similarity against the attested original. Robust to compression and resizing.</div>'
+      +'<div class="drop-zone" id="phash-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handlePHashDrop(event,\''+record.perceptual_hash+'\')" onclick="document.getElementById(\'phash-input\').click()">'
+      +'<div class="drop-label">Drop image or screenshot here</div>'
+      +'<input type="file" id="phash-input" style="display:none" accept="image/*" onchange="handlePHashFile(event,\''+record.perceptual_hash+'\')">'
+      +'</div>'
+      +'<div id="phash-result"></div>'
+      +'</div>';
+  }
+
+  // Platform embed code
+  html += '<div class="embed-section">'
+    +'<div class="embed-title">Platform Embed</div>'
+    +'<div class="embed-desc">Add a HIP verification badge to your post, portfolio, or platform listing. Links directly to this proof card.</div>'
+    +'<div class="code-block" id="embed-code">'
+    +'&lt;a href="https://hipprotocol.org/proof.html?hash='+hash+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'"&gt;\n'
+    +'  &lt;img src="https://hipprotocol.org/badge.png" alt="HIP Verified" width="32" height="32"&gt;\n'
+    +'&lt;/a&gt;'
+    +'</div>'
+    +'<button class="copy-btn" id="embed-copy-btn" onclick="copyEmbed(\''+hash+'\',\''+clsLabel+'\')">Copy embed code</button>'
+    +'</div>';
+
+  // Show existing disputes if any
+  if(record.disputes && record.disputes.length > 0){
+    html += '<div class="verify-section" style="border-color:rgba(239,68,68,0.15)">'
+      +'<div class="verify-title" style="color:#ef4444">⚠ Disputes ('+record.disputes.length+')</div>'
+      +'<div class="verify-desc">This attestation has been contested by other HIP credential holders.</div>';
+    for(var di=0;di<record.disputes.length;di++){
+      var d=record.disputes[di];
+      html += '<div style="padding:10px 14px;background:rgba(239,68,68,0.03);border:1px solid rgba(239,68,68,0.1);border-radius:6px;margin-bottom:8px">'
+        +'<div style="font-size:12px;color:#ef4444;margin-bottom:4px">"'+escHtml(d.reason)+'"</div>'
+        +'<div style="font-size:10px;color:#555;font-family:Azeret Mono,monospace">Filed by Tier '+d.credential_tier+' credential · '+fmtDate(d.filed_at)+'</div>'
+        +'</div>';
+    }
+    html += '</div>';
+  }
+
+  // Dispute filing section
+  html += '<div class="verify-section" id="dispute-section">'
+    +'<div class="verify-title">Contest This Attestation</div>'
+    +'<div class="verify-desc">If you believe this attestation is inaccurate, you can file a dispute. Requires a valid HIP credential.</div>'
+    +'<div id="dispute-ui">'
+    +'<button class="copy-btn" style="font-size:12px;padding:8px 16px" onclick="showDisputeForm(\''+hash+'\')">File a Dispute</button>'
+    +'</div>'
+    +'<div id="dispute-form" style="display:none">'
+    +'<div style="margin-bottom:10px"><div class="field-label" style="margin-bottom:6px">Your Credential File</div>'
+    +'<div class="drop-zone" id="dispute-cred-zone" style="padding:16px" onclick="document.getElementById(\'dispute-cred-input\').click()">'
+    +'<div class="drop-label" id="dispute-cred-label">Drop credential file here or click</div>'
+    +'<input type="file" id="dispute-cred-input" style="display:none" accept=".json" onchange="loadDisputeCred(event)">'
+    +'</div></div>'
+    +'<div style="margin-bottom:10px"><div class="field-label" style="margin-bottom:6px">Reason (10-500 characters)</div>'
+    +'<textarea id="dispute-reason" style="width:100%;min-height:60px;background:#080808;border:1px solid rgba(255,255,255,0.08);border-radius:6px;color:#E8E8E0;padding:10px;font-family:Space Grotesk,sans-serif;font-size:13px;resize:vertical;box-sizing:border-box" placeholder="Explain why you believe this attestation is inaccurate…" maxlength="500"></textarea></div>'
+    +'<button class="copy-btn" style="font-size:12px;padding:8px 16px;background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.2);color:#ef4444" id="dispute-submit-btn" onclick="submitDispute(\''+hash+'\')">Submit Dispute</button>'
+    +'<div id="dispute-result" style="margin-top:8px"></div>'
+    +'</div>'
+    +'</div>';
+
+  html += '<div style="text-align:center;margin-top:8px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
+
+  qs("main").innerHTML = html;
+  show("footer");
+
+  // Verify signature async
+  await verifySignature(record, hash);
+}
+
+// ── Signature verification ──
+async function verifySignature(record, hash){
+  var el = qs("sig-status");
+  if(!el) return;
+
+  // Check if signature is present
+  if(!record.signature){
+    el.className="sig-block sig-fail";
+    el.innerHTML="<strong>⚠ No signature present</strong> — this record cannot be cryptographically verified. Do not trust this page.";
+    return;
+  }
+
+  // Reconstruct canonical string
+  var canonStr = [
+    hash,
+    record.perceptual_hash || "NULL",
+    record.credential_id,
+    record.attested_at,
+    record.classification
+  ].join("|");
+
+  // If public_key is available, perform full Ed25519 verification
+  if(record.public_key){
+    // First verify public_key → credential_id binding
+    var computedCid = await sha256(unhex(record.public_key));
+    if(computedCid !== record.credential_id){
+      el.className="sig-block sig-fail";
+      el.innerHTML="<strong>⚠ Key mismatch</strong> — the public key in this record does not match the credential ID. This record may be tampered with.";
+      return;
+    }
+
+    // Attempt Ed25519 signature verification
+    var verified = await verifyEd25519(record.public_key, canonStr, record.signature);
+
+    if(verified === true){
+      el.className="sig-block sig-ok";
+      el.innerHTML="<strong>✓ Signature verified</strong> — Ed25519 signature cryptographically verified in your browser."
+        +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Public key: <code style='font-family:Azeret Mono,monospace'>"+record.public_key.substring(0,24)+"…</code></div>"
+        +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>"
+        +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Key binding: SHA-256(public_key) = credential_id ✓</div>";
+      return;
+    } else if(verified === false){
+      el.className="sig-block sig-fail";
+      el.innerHTML="<strong>⚠ Signature invalid</strong> — the Ed25519 signature does not match the public key and canonical data. This record may be tampered with."
+        +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>";
+      return;
+    }
+    // verified === null means browser doesn't support Ed25519 — fall through to format check
+  }
+
+  // Fallback: no public_key stored, or browser lacks Ed25519 support
+  // Confirm signature presence and display canonical string for manual verification
+  var reason = !record.public_key
+    ? "Public key not stored in this record (pre-S38 registration). Signature format confirmed; full cryptographic verification unavailable."
+    : "Your browser does not support Ed25519 verification. Signature format confirmed; try Chrome or Edge for full verification.";
+
+  el.className="sig-block sig-pending";
+  el.innerHTML="<strong>⚡ Signature present</strong> — "+reason
+    +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Credential: <code style='font-family:Azeret Mono,monospace'>"+record.credential_id.substring(0,24)+"…</code></div>"
+    +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>"
+    +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>This page is served from hipprotocol.org. A fake page at any other domain cannot produce a valid record from HIP's registry.</div>";
+}
+
+// ── Exact match handler ──
+async function handleExactDrop(ev, expectedHash){
+  ev.preventDefault();
+  qs("exact-zone").classList.remove("drag-over");
+  var f = ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];
+  if(f) checkExact(f, expectedHash);
+}
+async function handleExactFile(ev, expectedHash){
+  var f = ev.target.files&&ev.target.files[0];
+  if(f) checkExact(f, expectedHash);
+}
+async function checkExact(f, expectedHash){
+  var el = qs("exact-result");
+  el.innerHTML='<div class="drop-result sig-pending">Computing hash…</div>';
+  try{
+    var buf = await f.arrayBuffer();
+    var h = await sha256(new Uint8Array(buf));
+    if(h === expectedHash){
+      el.innerHTML='<div class="drop-result match-exact"><strong>✓ Exact match</strong> — '+f.name+' matches the attested original byte-for-byte. This is the same file that was attested.</div>';
+    } else {
+      el.innerHTML='<div class="drop-result match-none"><strong>✗ No match</strong> — '+f.name+' does not match the attested content. The file may have been modified, recompressed, or this may be a different file.</div>';
+    }
+  }catch(e){
+    el.innerHTML='<div class="drop-result match-none">Error reading file: '+e.message+'</div>';
+  }
+}
+
+// ── pHash similarity handler ──
+async function handlePHashDrop(ev, storedPHash){
+  ev.preventDefault();
+  qs("phash-zone").classList.remove("drag-over");
+  var f = ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];
+  if(f) checkPHash(f, storedPHash);
+}
+async function handlePHashFile(ev, storedPHash){
+  var f = ev.target.files&&ev.target.files[0];
+  if(f) checkPHash(f, storedPHash);
+}
+async function checkPHash(f, storedPHash){
+  var el = qs("phash-result");
+  el.innerHTML='<div class="drop-result sig-pending">Analyzing image…</div>';
+  try{
+    var url = URL.createObjectURL(f);
+    var img = new Image();
+    img.onload = async function(){
+      var ph = await computePHash(img);
+      URL.revokeObjectURL(url);
+      if(!ph){
+        el.innerHTML='<div class="drop-result match-none">Could not compute visual fingerprint for this file.</div>';
+        return;
+      }
+      var sim = pHashSimilarity(ph, storedPHash);
+      var d = pHashDistance(ph, storedPHash);
+      var cls, label, desc;
+      if(d <= 5){
+        cls="match-exact"; label="✓ Near-identical match";
+        desc="This image is visually identical to the attested original (similarity "+sim+"%). Same image, minor compression or format difference.";
+      } else if(d <= 15){
+        cls="match-high"; label="✓ Strong visual match";
+        desc="This image closely resembles the attested original (similarity "+sim+"%). Consistent with a screenshot, re-upload, or resize of the same image.";
+      } else if(d <= 25){
+        cls="match-med"; label="~ Partial similarity";
+        desc="This image partially resembles the attested content (similarity "+sim+"%). May be a cropped, heavily edited, or related version.";
+      } else {
+        cls="match-low"; label="✗ Low similarity";
+        desc="This image does not closely resemble the attested original (similarity "+sim+"%). This is likely a different image.";
+      }
+      el.innerHTML='<div class="drop-result '+cls+'"><strong>'+label+'</strong><br><span style="font-size:12px;opacity:0.85">'+desc+'</span></div>';
+    };
+    img.onerror=function(){URL.revokeObjectURL(url);el.innerHTML='<div class="drop-result match-none">Could not load image file.</div>';};
+    img.src=url;
+  }catch(e){
+    el.innerHTML='<div class="drop-result match-none">Error: '+e.message+'</div>';
+  }
+}
+
+// ── Copy embed code ──
+function copyEmbed(hash, clsLabel){
+  var code = '<a href="https://hipprotocol.org/proof/'+hash+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'">\n  <img src="https://hipprotocol.org/badge.png" alt="HIP Verified" width="32" height="32">\n</a>';
+  navigator.clipboard&&navigator.clipboard.writeText(code).then(function(){
+    var btn=qs("embed-copy-btn");
+    if(btn){btn.textContent="Copied!";setTimeout(function(){btn.textContent="Copy embed code"},2000);}
+  });
+}
+
+// ── HTML escape helper ──
+function escHtml(s){
+  var d=document.createElement("div");d.textContent=s;return d.innerHTML;
+}
+
+// ── Dispute functions ──
+var disputeCredential = null;
+
+function showDisputeForm(hash){
+  var f=qs("dispute-form");
+  var u=qs("dispute-ui");
+  if(f)f.style.display="block";
+  if(u)u.style.display="none";
+}
+
+function loadDisputeCred(ev){
+  var f=ev.target.files&&ev.target.files[0];
+  if(!f)return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var obj=JSON.parse(e.target.result);
+      if(!obj.credentialId||!obj.version){throw new Error("Not a valid credential")}
+      disputeCredential=obj;
+      var lbl=qs("dispute-cred-label");
+      if(lbl)lbl.textContent="✓ Credential loaded: "+obj.credentialId.substring(0,16)+"… (Tier "+(obj.tier||"?")+")"
+    }catch(ex){
+      var lbl=qs("dispute-cred-label");
+      if(lbl)lbl.textContent="Invalid credential file. Try again.";
+      disputeCredential=null;
+    }
+  };
+  reader.readAsText(f);
+}
+
+async function submitDispute(hash){
+  var el=qs("dispute-result");
+  if(!disputeCredential){
+    if(el)el.innerHTML='<div class="drop-result match-none">Load your credential file first.</div>';
+    return;
+  }
+  var reason=(qs("dispute-reason")||{}).value||"";
+  if(reason.trim().length<10){
+    if(el)el.innerHTML='<div class="drop-result match-none">Reason must be at least 10 characters.</div>';
+    return;
+  }
+  var btn=qs("dispute-submit-btn");
+  if(btn){btn.disabled=true;btn.textContent="Submitting…"}
+  try{
+    var body={
+      content_hash:hash,
+      credential_id:disputeCredential.credentialId,
+      reason:reason.trim()
+    };
+    var resp=await fetch(WORKER_URL+"/dispute-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    var data=await resp.json();
+    if(resp.ok&&data.success){
+      if(el)el.innerHTML='<div class="drop-result match-exact"><strong>✓ Dispute filed.</strong> This attestation now shows '+data.dispute_count+' dispute(s). Reload to see the updated record.</div>';
+    } else {
+      if(el)el.innerHTML='<div class="drop-result match-none">'+(data.error||"Dispute failed.")+'</div>';
+    }
+  }catch(ex){
+    if(el)el.innerHTML='<div class="drop-result match-none">Error: '+ex.message+'</div>';
+  }
+  if(btn){btn.disabled=false;btn.textContent="Submit Dispute"}
+}
+
+// ── Boot ──
+init();
+</script>
+</body>
+</html>

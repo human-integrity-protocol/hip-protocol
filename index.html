@@ -105,6 +105,95 @@ var G = {
 var hex = function(b) { return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,"0")}).join("") };
 var unhex = function(h) { var b = new Uint8Array(h.length/2); for(var i=0;i<h.length;i+=2) b[i/2]=parseInt(h.substr(i,2),16); return b };
 var sha256 = async function(d) { var buf = typeof d==="string" ? new TextEncoder().encode(d) : d; return hex(await crypto.subtle.digest("SHA-256",buf)) };
+
+// ── S37: Perceptual hash (DCT-based, 64-bit) ──
+// Computes a perceptual fingerprint of an image that is robust to
+// resizing, compression changes, and screenshot capture.
+// Returns a 16-char hex string (64 bits). Returns null for non-images.
+var computePHash = async function(fileOrBytes, filename) {
+  var isImg = /\.(jpe?g|png|webp|gif|bmp)$/i.test(filename||"");
+  if(!isImg) return null;
+  return new Promise(function(resolve) {
+    try {
+      var url;
+      if(fileOrBytes instanceof File) {
+        url = URL.createObjectURL(fileOrBytes);
+      } else {
+        url = URL.createObjectURL(new Blob([fileOrBytes]));
+      }
+      var img = new Image();
+      img.onload = function() {
+        try {
+          var SIZE = 32; // downsample to 32x32
+          var c = document.createElement("canvas");
+          c.width = SIZE; c.height = SIZE;
+          var ctx = c.getContext("2d");
+          ctx.drawImage(img, 0, 0, SIZE, SIZE);
+          var data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+          // Convert to grayscale
+          var gray = new Float32Array(SIZE * SIZE);
+          for(var i=0;i<SIZE*SIZE;i++) gray[i] = 0.299*data[i*4] + 0.587*data[i*4+1] + 0.114*data[i*4+2];
+          // DCT on 8x8 blocks (simplified: use mean of 8x8 regions across 32x32)
+          // Standard pHash: reduce to 8x8 DCT coefficients, use top-left 8x8
+          var DCT_SIZE = 8;
+          var dct = new Float32Array(DCT_SIZE * DCT_SIZE);
+          var blockW = SIZE / DCT_SIZE; // 4 pixels per block
+          for(var by=0;by<DCT_SIZE;by++) {
+            for(var bx=0;bx<DCT_SIZE;bx++) {
+              var sum = 0;
+              for(var py=0;py<blockW;py++) for(var px=0;px<blockW;px++) {
+                sum += gray[(by*blockW+py)*SIZE + (bx*blockW+px)];
+              }
+              dct[by*DCT_SIZE+bx] = sum / (blockW*blockW);
+            }
+          }
+          // Compute mean of DCT values
+          var mean = dct.reduce(function(a,v){return a+v},0) / dct.length;
+          // Build 64-bit hash as two 32-bit integers: each bit = dct value >= mean
+          var hi = 0; var lo = 0;
+          for(var k=0;k<32;k++) hi = (hi << 1) | (dct[k] >= mean ? 1 : 0);
+          for(var k=32;k<64;k++) lo = (lo << 1) | (dct[k] >= mean ? 1 : 0);
+          // Return as 16-char hex
+          var h = ((hi >>> 0).toString(16).padStart(8,"0")) + ((lo >>> 0).toString(16).padStart(8,"0"));
+          URL.revokeObjectURL(url);
+          resolve(h);
+        } catch(ex) { URL.revokeObjectURL(url); resolve(null); }
+      };
+      img.onerror = function() { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    } catch(ex) { resolve(null); }
+  });
+};
+
+// Hamming distance between two 16-char hex pHash strings (0-64)
+// Uses 32-bit integer pairs to avoid BigInt — compatible with all browsers
+var pHashDistance = function(a, b) {
+  if(!a||!b||a.length!==16||b.length!==16) return null;
+  try {
+    // Split 64-bit hash into two 32-bit halves
+    var ah = parseInt(a.substring(0,8), 16)|0;
+    var al = parseInt(a.substring(8,16), 16)|0;
+    var bh = parseInt(b.substring(0,8), 16)|0;
+    var bl = parseInt(b.substring(8,16), 16)|0;
+    var xh = ah ^ bh; var xl = al ^ bl;
+    // Popcount each 32-bit value
+    function pop32(n) {
+      n = n >>> 0; // treat as unsigned
+      n = n - ((n >>> 1) & 0x55555555);
+      n = (n & 0x33333333) + ((n >>> 2) & 0x33333333);
+      n = (n + (n >>> 4)) & 0x0f0f0f0f;
+      return (n * 0x01010101) >>> 24;
+    }
+    return pop32(xh) + pop32(xl);
+  } catch(ex) { return null; }
+};
+
+// pHash similarity as percentage (0-100)
+var pHashSimilarity = function(a, b) {
+  var d = pHashDistance(a, b);
+  if(d === null) return null;
+  return Math.round(((64 - d) / 64) * 100);
+};
 var b64e = function(b) { var s=""; var u=new Uint8Array(b); for(var i=0;i<u.length;i++) s+=String.fromCharCode(u[i]); return btoa(s) };
 var b64d = function(s) { var b=atob(s); var u=new Uint8Array(b.length); for(var i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u };
 
@@ -1438,6 +1527,13 @@ var ebs=useState(null);var embeddedBytes=ebs[0];var setEmbeddedBytes=ebs[1]; // 
 // S29: Trust Score state
 var tss=useState(null);var trustScore=tss[0];var setTrustScore=tss[1];
 var tbs=useState(null);var trustBreakdown=tbs[0];var setTrustBreakdown=tbs[1];
+// S37: Proof registry state
+var phs=useState(null);var pHash=phs[0];var setPHash=phs[1];
+var sls=useState(false);var sealedAttest=sls[0];var setSealedAttest=sls[1];
+var pus=useState(null);var proofUrl=pus[0];var setProofUrl=pus[1];
+var pbs=useState(false);var publishing=pbs[0];var setPublishing=pbs[1];
+var pcs=useState(false);var proofCopied=pcs[0];var setProofCopied=pcs[1];
+var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
 
 // S34: convenience — does this file support HIP metadata embedding?
 var canEmbed = isJpg || isPngFile;
@@ -1449,7 +1545,7 @@ var dgs=useState(false);var dragging=dgs[0];var setDragging=dgs[1];
 
 // S35: Core file handler — accepts a File object directly
 var handleFile=async function(f){if(!f)return;
-setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);
+setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setProofUrl(null);setProofCopied(false);
 var jpeg=isJpeg(f.name)&&HAS_PIEXIF;setIsJpg(jpeg);
 var png=isPng(f.name);setIsPngFile(png);
 if(jpeg){
@@ -1458,6 +1554,8 @@ if(jpeg){
   var existing=readHipExif(du);
   if(existing){setExistingHip(existing);setStep(-1);return}
   setHash(await sha256(new Uint8Array(await f.arrayBuffer())));
+  // S37: compute pHash for images
+  var ph=await computePHash(f,f.name);setPHash(ph);
   setStep(1);
 } else if(png){
   var ab=await f.arrayBuffer();var bytes=new Uint8Array(ab);
@@ -1465,6 +1563,8 @@ if(jpeg){
   var existing=readHipPng(bytes);
   if(existing){setExistingHip(existing);setStep(-1);return}
   setHash(await sha256(bytes));
+  // S37: compute pHash for images
+  var ph=await computePHash(f,f.name);setPHash(ph);
   setStep(1);
 } else {
   setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1);
@@ -1535,6 +1635,71 @@ setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);
 try{var arResp=await fetch(HIP_WORKER_URL+"/attest-register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,bundle_hash:ch,liveness_designation:ld,timestamp:now})});
 if(arResp.ok){var arData=await arResp.json();setTrustScore(arData.trust_score);setTrustBreakdown(arData.score_breakdown||null)}}catch(te){}};
 
+// S37: Publish proof to public registry
+var publishProof=async function(){
+if(!proofcard||!hash)return;
+setPublishing(true);
+try{
+  // Canonical string to sign: content_hash|perceptual_hash_or_NULL|credential_id|attested_at|classification
+  var pc=proofcard.proofBundle;
+  var attestedAt=pc.issuanceDate;
+  var classification=pc.credentialSubject.classification;
+  var canonStr=[hash,pHash||"NULL",cred.credentialId,attestedAt,classification].join("|");
+  var sigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encode(canonStr));
+  var sig=b64e(sigBuf);
+  var body={
+    content_hash:hash,
+    perceptual_hash:pHash||null,
+    credential_id:cred.credentialId,
+    public_key:cred.publicKey,
+    attested_at:attestedAt,
+    classification:classification,
+    signature:sig,
+    sealed:sealedAttest,
+    protocol_version:"1.2"
+  };
+  var resp=await fetch(HIP_WORKER_URL+"/register-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  var data=await resp.json();
+  if(resp.ok&&data.success){
+    setProofUrl(data.proof_url);
+  } else if(resp.status===409&&data.existing_record){
+    // Already registered — use existing URL
+    setProofUrl("https://hipprotocol.org/proof.html?hash="+hash);
+  } else {
+    throw new Error(data.error||"Registration failed (HTTP "+resp.status+")");
+  }
+}catch(ex){
+  // Fail silently — proof card still works locally, registry is additive
+  console.warn("Proof registry:",ex.message);
+}
+setPublishing(false);};
+
+// S38: Unseal a sealed proof
+var unsealProof=async function(){
+if(!hash||!cred)return;
+setUnsealing(true);
+try{
+  var unsealStr="UNSEAL|"+hash+"|"+cred.credentialId;
+  var sigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encode(unsealStr));
+  var sig=b64e(sigBuf);
+  var body={
+    content_hash:hash,
+    credential_id:cred.credentialId,
+    signature:sig,
+    public_key:cred.publicKey
+  };
+  var resp=await fetch(HIP_WORKER_URL+"/unseal-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  var data=await resp.json();
+  if(resp.ok&&data.success){
+    setSealedAttest(false);
+  } else {
+    throw new Error(data.error||"Unseal failed (HTTP "+resp.status+")");
+  }
+}catch(ex){
+  console.warn("Unseal proof:",ex.message);
+}
+setUnsealing(false);};
+
 // S35: Generate blob URLs for deliberate download (no auto-download)
 // These are computed fresh each render in step 4 — acceptable since step 4 is stable.
 var embeddedBlobURL=null;
@@ -1588,7 +1753,21 @@ e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",t
 e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:2,textAlign:"center"}},"Tip: right-click any download link and choose \"Save As\" to pick a save location."),
 e("div",{style:{borderTop:"1px solid "+bd,marginTop:14,paddingTop:14}},
-e("button",{style:Object.assign({},btnG,{width:"100%",background:"transparent",border:"1px solid "+go,color:go}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null)}},"Attest Another File")))}
+e("div",{style:{marginBottom:14}},
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:8}},"Public Proof Link"),
+!proofUrl?e("div",null,
+e("div",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:10}},"Get a shareable link anyone can use to verify your work"+(pHash?" — includes visual fingerprint for screenshot matching":"")+"."),
+sealedAttest&&ToolAlert("info","Sealed — timestamp registered, details stay private until you unseal."),
+e("button",{style:Object.assign({},btnG,{width:"100%",marginBottom:4,background:"rgba(224,90,0,0.12)",border:"1px solid "+go,color:go}),onClick:publishProof,disabled:publishing},publishing?"Publishing...":"Publish Proof Link"),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,textAlign:"center"}},"Optional. Your local Proof Card works without this."))
+:e("div",null,
+ToolAlert("success",e("span",null,e("strong",null,sealedAttest?"Sealed proof registered. ":"Proof published. "),"Share this link alongside your work.")),
+e("div",{style:{padding:"10px 14px",background:"rgba(255,255,255,0.03)",borderRadius:6,border:"1px solid "+bd,marginBottom:6,display:"flex",alignItems:"center",gap:8}},
+e("code",{style:{fontSize:11,color:go,fontFamily:mo,flex:1,wordBreak:"break-all"}},proofUrl),
+e("button",{style:{background:proofCopied?"rgba(74,222,128,0.1)":"none",border:"1px solid "+(proofCopied?"rgba(74,222,128,0.3)":bd),color:proofCopied?"#4ade80":t2,cursor:"pointer",fontSize:11,fontFamily:mo,padding:"4px 10px",flexShrink:0,borderRadius:4},onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(proofUrl).then(function(){setProofCopied(true);setTimeout(function(){setProofCopied(false)},2000)})}},proofCopied?"Copied":"Copy")),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"Verification is only valid at hipprotocol.org"),
+sealedAttest&&e("button",{style:Object.assign({},btnG,{width:"100%",marginTop:8,background:"rgba(74,111,165,0.12)",border:"1px solid rgba(74,111,165,0.3)",color:"#6B9FD4"}),onClick:unsealProof,disabled:unsealing},unsealing?"Unsealing…":"Unseal — Make Proof Public"))),
+e("button",{style:Object.assign({},btnG,{width:"100%",background:"transparent",border:"1px solid rgba(255,255,255,0.1)",color:t2}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false)}},"Attest Another File"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
@@ -1605,7 +1784,13 @@ canEmbed&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Fina
 e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
 cats.map(function(c){return e("button",{key:c[0],style:{display:"block",width:"100%",textAlign:"left",padding:"12px 16px",border:"1px solid "+(cls===c[0]?go:bd),borderRadius:6,background:cls===c[0]?gg:"transparent",color:t1,fontSize:13,fontFamily:sans,cursor:"pointer",marginBottom:4},onClick:function(){setCls(c[0])}},
 e("span",{style:{fontFamily:mo,color:go,fontWeight:600,marginRight:8}},c[1])," ",c[2])}),
-cls&&e("button",{style:btnG,onClick:function(){setStep(2)}},"Next →"));
+cls&&e("button",{style:btnG,onClick:function(){setStep(2)}},"Next →"),
+// S37: Sealed attestation option — opt-in, unchecked by default
+e("div",{style:{marginTop:8,padding:"10px 14px",border:"1px solid "+bd,borderRadius:6,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},onClick:function(){setSealedAttest(!sealedAttest)}},
+e("input",{type:"checkbox",checked:sealedAttest,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
+e("div",null,
+e("div",{style:{fontSize:13,color:t1,fontWeight:500,marginBottom:2}},"Keep proof sealed (private)"),
+e("div",{style:{fontSize:11,color:t2,lineHeight:1.5}},"Your proof is registered with a timestamp but the details stay hidden until you unseal it. Useful for establishing priority before publishing your work."))));
 
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("p",{style:{fontSize:14,color:t2}},"Optional statement ("+editorial.length+"/2000):"),

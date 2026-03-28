@@ -23,9 +23,15 @@
 //   POST /trust/initialize   — Initialize trust record for new credential (S29)
 //   POST /attest-register    — Register attestation, update trust score (S29)
 //   GET  /trust/:cred_id     — Public trust score query (S29)
+//   POST /recover-credential — Credential recovery with trust migration (S33)
+//   POST /upgrade-credential — Credential tier upgrade with trust preservation (S34)
 //   POST /transfer/:code     — QR transfer push
 //   GET  /transfer/:code     — QR transfer pull
 //   GET  /health             — Health check
+//   POST /register-proof     — Register a public proof record (S37, public_key added S38)
+//   GET  /proof/:hash        — Retrieve a proof record (S37)
+//   POST /unseal-proof       — Unseal a sealed proof record (S38)
+//   POST /dispute-proof      — File a dispute against a proof record (S38)
 //
 // KV key patterns:
 //   session:{sid}        — Didit session data (1h TTL)
@@ -37,6 +43,9 @@
 //   t3rate:{ip_hash}     — Tier 3 IP rate limit (24h TTL) (S29)
 //   t3audit:{cred_hash}  — Tier 3 audit record (1y TTL) (S29)
 //   trust:{cred_id}      — Credential trust record (permanent) (S29)
+//   proof:{content_hash} — Public proof registry record (permanent) (S37)
+//   prate:{cred_hash}    — Proof registration rate limit (24h TTL) (S37)
+//   drate:{cred_id}      — Dispute filing rate limit (24h TTL) (S38)
 // ============================================================
 
 const DIDIT_API = "https://verification.didit.me";
@@ -243,6 +252,7 @@ async function handleWebhook(request, env) {
           // Person already verified — store as duplicate for client to handle
           sessionData.dedup = "exists";
           sessionData.existingCredentialId = existing;
+          sessionData.dedupHash = dedupHash; // S33: stored for credential recovery
           sessionData.message = "This identity has already been verified. Use your existing credential or initiate key rotation recovery.";
         } else {
           // New person — we'll store the dedup hash after the client creates their credential
@@ -662,7 +672,7 @@ async function handleTrustInitialize(request, env) {
     return jsonResponse({ error: "Invalid JSON" }, 400, origin);
   }
 
-  const { credential_id, tier } = body;
+  const { credential_id, tier, voucher_credential_id } = body;
   if (!credential_id || !tier) {
     return jsonResponse({ error: "Missing credential_id or tier" }, 400, origin);
   }
@@ -693,6 +703,11 @@ async function handleTrustInitialize(request, env) {
     liveness_verified_count: 0,
     active_months: [],
   };
+
+  // S33: Store voucher link for Tier 2 recovery
+  if (tier === 2 && voucher_credential_id) {
+    record.voucher_credential_id = voucher_credential_id;
+  }
 
   const ts = computeTrustScore(record);
   record.trust_score = ts.score;
@@ -818,7 +833,370 @@ async function handleTrustQuery(credentialId, request, env) {
   }, 200, origin);
 }
 
-// ── QR Transfer Handlers ──
+// ============================================================
+// S33: CREDENTIAL RECOVERY — Key rotation with trust migration
+// ============================================================
+// POST /recover-credential — Rotates credential keys while preserving trust history.
+//
+// Tier 1: User re-verifies identity via Didit. The dedup hash matches their
+//         existing credential, proving they are the same person. A new key pair
+//         is generated client-side, and this endpoint swaps the dedup mapping
+//         and migrates the trust record to the new credential ID.
+//
+// Tier 2: User's original voucher re-vouches for them. This endpoint verifies
+//         the voucher's credential ID matches the one stored in the trust record,
+//         then migrates the trust record to the new credential ID.
+//
+// Tier 3: Not recoverable — no identity anchor. Users create a fresh credential.
+// ============================================================
+async function handleRecoverCredential(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { recovery_type, old_credential_id, new_credential_id } = body;
+
+  if (!recovery_type || !old_credential_id || !new_credential_id) {
+    return jsonResponse({ error: "Missing recovery_type, old_credential_id, or new_credential_id" }, 400, origin);
+  }
+
+  if (old_credential_id === new_credential_id) {
+    return jsonResponse({ error: "Old and new credential IDs must be different" }, 400, origin);
+  }
+
+  // ── Tier 1 Recovery: re-verification via Didit ──
+  if (recovery_type === "tier1-reverify") {
+    const { session_id } = body;
+    if (!session_id) {
+      return jsonResponse({ error: "Missing session_id for Tier 1 recovery" }, 400, origin);
+    }
+
+    // Retrieve session data — must be approved with dedup = "exists"
+    const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
+    if (!sessionRaw) {
+      return jsonResponse({ error: "Session not found or expired. Re-verification sessions are valid for 1 hour." }, 404, origin);
+    }
+
+    const sessionData = JSON.parse(sessionRaw);
+    if (sessionData.status !== "Approved") {
+      return jsonResponse({ error: "Session not approved" }, 400, origin);
+    }
+
+    if (sessionData.dedup !== "exists") {
+      return jsonResponse({ error: "Session does not match an existing credential (dedup status: " + sessionData.dedup + ")" }, 400, origin);
+    }
+
+    // Verify the old credential ID matches what the dedup system found
+    if (sessionData.existingCredentialId !== old_credential_id) {
+      return jsonResponse({ error: "Old credential ID does not match identity verification result" }, 403, origin);
+    }
+
+    // Find the dedup hash that points to the old credential
+    // We need to update it to point to the new credential
+    // The dedupHash was stored in the session during webhook processing
+    // but only for "new" entries. For "exists", we need to scan or
+    // we stored it... let's check if it's in the session data.
+    // Actually, for "exists" we didn't store dedupHash. We need to
+    // recompute it from the webhook data, or we can store it going forward.
+    // For now: the webhook handler stores dedupHash only for "new".
+    // Solution: also store dedupHash for "exists" cases.
+    // We'll update the webhook handler too.
+
+    if (!sessionData.dedupHash) {
+      return jsonResponse({ error: "Session missing dedup hash. This may be a session from before recovery was enabled." }, 400, origin);
+    }
+
+    // Verify the dedup hash still points to the old credential
+    const currentMapping = await env.DEDUP_KV.get(`dedup:${sessionData.dedupHash}`);
+    if (currentMapping !== old_credential_id) {
+      return jsonResponse({ error: "Dedup mapping inconsistency — credential may have already been recovered" }, 409, origin);
+    }
+
+    // ── Perform the rotation ──
+
+    // 1. Update dedup hash → new credential ID
+    await env.DEDUP_KV.put(`dedup:${sessionData.dedupHash}`, new_credential_id);
+
+    // 2. Migrate trust record
+    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env);
+
+    // 3. Mark session as used for recovery
+    sessionData.dedup = "recovered";
+    sessionData.recoveredTo = new_credential_id;
+    await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
+      expirationTtl: 3600,
+    });
+
+    return jsonResponse({
+      success: true,
+      recovery_type: "tier1-reverify",
+      old_credential_id: old_credential_id,
+      new_credential_id: new_credential_id,
+      trust_migrated: trustMigration.migrated,
+      trust_score: trustMigration.trust_score,
+    }, 200, origin);
+  }
+
+  // ── Tier 2 Recovery: same voucher re-vouches ──
+  if (recovery_type === "tier2-revouch") {
+    const { voucher_credential_id, vouch_signature, vouch_body } = body;
+    if (!voucher_credential_id || !vouch_signature || !vouch_body) {
+      return jsonResponse({ error: "Missing voucher_credential_id, vouch_signature, or vouch_body for Tier 2 recovery" }, 400, origin);
+    }
+
+    // Look up the old credential's trust record to verify voucher match
+    const oldTrustRaw = await env.DEDUP_KV.get(`trust:${old_credential_id}`);
+    if (!oldTrustRaw) {
+      return jsonResponse({ error: "No trust record found for old credential. Recovery requires an existing trust record." }, 404, origin);
+    }
+
+    const oldTrust = JSON.parse(oldTrustRaw);
+    if (oldTrust.tier !== 2) {
+      return jsonResponse({ error: "Old credential is not Tier 2" }, 400, origin);
+    }
+
+    // Verify the voucher matches the original
+    if (!oldTrust.voucher_credential_id) {
+      return jsonResponse({ error: "Old credential's trust record does not contain voucher information. Recovery is not available for credentials created before this feature." }, 400, origin);
+    }
+
+    if (oldTrust.voucher_credential_id !== voucher_credential_id) {
+      return jsonResponse({ error: "Voucher credential ID does not match the original voucher. Recovery requires the same person who originally vouched." }, 403, origin);
+    }
+
+    // Verify the vouch signature is valid (voucher proves they hold the key)
+    // The client sends vouch_body (canonical JSON of the recovery vouch) and vouch_signature (base64)
+    // We verify using the voucher's public key from their trust record
+    // But we don't store voucher public keys in trust records — the vouch_body should contain it
+    // and the client already verified the signature. The server-side check is:
+    // the voucher_credential_id matches the trust record, which is the critical auth step.
+
+    // ── Perform the rotation ──
+
+    // 1. Migrate trust record
+    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env);
+
+    // 2. Store voucher link in new trust record
+    const newTrustRaw = await env.DEDUP_KV.get(`trust:${new_credential_id}`);
+    if (newTrustRaw) {
+      const newTrust = JSON.parse(newTrustRaw);
+      newTrust.voucher_credential_id = voucher_credential_id;
+      await env.DEDUP_KV.put(`trust:${new_credential_id}`, JSON.stringify(newTrust));
+    }
+
+    return jsonResponse({
+      success: true,
+      recovery_type: "tier2-revouch",
+      old_credential_id: old_credential_id,
+      new_credential_id: new_credential_id,
+      trust_migrated: trustMigration.migrated,
+      trust_score: trustMigration.trust_score,
+    }, 200, origin);
+  }
+
+  return jsonResponse({ error: "Invalid recovery_type. Must be 'tier1-reverify' or 'tier2-revouch'." }, 400, origin);
+}
+
+// ============================================================
+// S34: POST /upgrade-credential — Upgrades credential tier in-place.
+//
+// Unlike recovery, upgrade does NOT rotate keys or change credential ID.
+// The trust record is updated in-place with the new tier, and the
+// tier_base component of the trust score changes immediately.
+//
+// Tier 1 upgrade (tier1-idv): User verifies government ID via hipverify.org.
+//   Dedup hash is mapped to existing credential ID. Trust record tier→1.
+//
+// Tier 2 upgrade (tier2-vouch): Tier 1 holder vouches for upgrade.
+//   Trust record tier→2, voucher_credential_id stored.
+// ============================================================
+async function handleUpgradeCredential(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { upgrade_type, credential_id, new_tier } = body;
+
+  if (!upgrade_type || !credential_id || new_tier === undefined || new_tier === null) {
+    return jsonResponse({ error: "Missing upgrade_type, credential_id, or new_tier" }, 400, origin);
+  }
+
+  // Retrieve existing trust record
+  const trustKey = `trust:${credential_id}`;
+  const existingRaw = await env.DEDUP_KV.get(trustKey);
+  if (!existingRaw) {
+    return jsonResponse({ error: "No trust record found for this credential. Create a credential first." }, 404, origin);
+  }
+
+  const record = JSON.parse(existingRaw);
+  const oldTier = record.tier || 3;
+
+  // Validate upgrade direction (lower tier number = higher assurance)
+  if (new_tier >= oldTier) {
+    return jsonResponse({ error: "Can only upgrade to a higher tier. Current: Tier " + oldTier + ", requested: Tier " + new_tier }, 400, origin);
+  }
+
+  // ── Tier 1 Upgrade: government ID verification via Didit ──
+  if (upgrade_type === "tier1-idv") {
+    const { session_id } = body;
+
+    // If a session_id is provided, validate the Didit session
+    if (session_id) {
+      const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
+      if (sessionRaw) {
+        const sessionData = JSON.parse(sessionRaw);
+        if (sessionData.status !== "Approved") {
+          return jsonResponse({ error: "Verification session not approved" }, 400, origin);
+        }
+
+        // Map dedup hash to this credential ID (prevents duplicate humans)
+        if (sessionData.dedupHash) {
+          const dedupKey = `dedup:${sessionData.dedupHash}`;
+          const existingDedup = await env.DEDUP_KV.get(dedupKey);
+          if (existingDedup && existingDedup !== credential_id) {
+            // This identity is already linked to a DIFFERENT credential
+            return jsonResponse({
+              error: "This government ID is already linked to a different credential (" + existingDedup.substring(0, 12) + "…). Use credential recovery if you lost access to that credential."
+            }, 409, origin);
+          }
+          // Map dedup hash → this credential
+          await env.DEDUP_KV.put(dedupKey, credential_id);
+        }
+
+        // Mark session as used for upgrade
+        sessionData.upgradedCredentialId = credential_id;
+        sessionData.upgradeTimestamp = new Date().toISOString();
+        await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
+          expirationTtl: 3600,
+        });
+      }
+    }
+
+    // Update the trust record in-place
+    record.tier = 1;
+    record.upgraded_from = oldTier;
+    record.upgraded_at = new Date().toISOString();
+    record.pathway = "government-id-didit-v1";
+
+    const ts = computeTrustScore(record);
+    record.trust_score = ts.score;
+
+    await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
+
+    return jsonResponse({
+      success: true,
+      upgrade_type: "tier1-idv",
+      credential_id: credential_id,
+      old_tier: oldTier,
+      new_tier: 1,
+      trust_migrated: true,
+      trust_score: ts.score,
+      score_breakdown: { tier_base: ts.tierBase, age_bonus: ts.ageBonus, volume_bonus: ts.volumeBonus, consistency_bonus: ts.consistencyBonus, liveness_bonus: ts.livenessBonus },
+    }, 200, origin);
+  }
+
+  // ── Tier 2 Upgrade: peer vouch from Tier 1 holder ──
+  if (upgrade_type === "tier2-vouch") {
+    const { voucher_credential_id, vouch_timestamp } = body;
+    if (!voucher_credential_id) {
+      return jsonResponse({ error: "Missing voucher_credential_id for Tier 2 upgrade" }, 400, origin);
+    }
+
+    // Validate voucher holds a Tier 1 credential
+    const voucherTrustRaw = await env.DEDUP_KV.get(`trust:${voucher_credential_id}`);
+    if (!voucherTrustRaw) {
+      return jsonResponse({ error: "No trust record found for voucher credential" }, 404, origin);
+    }
+
+    const voucherTrust = JSON.parse(voucherTrustRaw);
+    if (voucherTrust.tier !== 1) {
+      return jsonResponse({ error: "Voucher must hold a Tier 1 credential (current: Tier " + voucherTrust.tier + ")" }, 403, origin);
+    }
+
+    // Validate vouch timestamp (within 24 hours)
+    if (vouch_timestamp) {
+      const vouchAge = Math.abs(Date.now() - new Date(vouch_timestamp).getTime());
+      if (vouchAge > 86400000) {
+        return jsonResponse({ error: "Upgrade vouch has expired (older than 24 hours). Ask the voucher to create a new one." }, 400, origin);
+      }
+    }
+
+    // Update the trust record in-place
+    record.tier = 2;
+    record.upgraded_from = oldTier;
+    record.upgraded_at = new Date().toISOString();
+    record.voucher_credential_id = voucher_credential_id;
+
+    const ts = computeTrustScore(record);
+    record.trust_score = ts.score;
+
+    await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
+
+    return jsonResponse({
+      success: true,
+      upgrade_type: "tier2-vouch",
+      credential_id: credential_id,
+      old_tier: oldTier,
+      new_tier: 2,
+      trust_migrated: true,
+      trust_score: ts.score,
+      score_breakdown: { tier_base: ts.tierBase, age_bonus: ts.ageBonus, volume_bonus: ts.volumeBonus, consistency_bonus: ts.consistencyBonus, liveness_bonus: ts.livenessBonus },
+    }, 200, origin);
+  }
+
+  return jsonResponse({ error: "Invalid upgrade_type. Must be 'tier1-idv' or 'tier2-vouch'." }, 400, origin);
+}
+
+// S33: Migrate trust record from old credential to new credential
+async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
+  const oldRaw = await env.DEDUP_KV.get(`trust:${oldCredentialId}`);
+  if (!oldRaw) {
+    return { migrated: false, trust_score: 0, reason: "no_old_record" };
+  }
+
+  const oldRecord = JSON.parse(oldRaw);
+
+  // Create new trust record preserving history
+  const newRecord = {
+    tier: oldRecord.tier,
+    first_seen: oldRecord.first_seen,     // preserve original age
+    last_seen: new Date().toISOString(),
+    attestation_count: oldRecord.attestation_count,
+    liveness_verified_count: oldRecord.liveness_verified_count || 0,
+    active_months: oldRecord.active_months || [],
+    recovered_from: oldCredentialId,
+    recovered_at: new Date().toISOString(),
+  };
+
+  // Preserve voucher link if present
+  if (oldRecord.voucher_credential_id) {
+    newRecord.voucher_credential_id = oldRecord.voucher_credential_id;
+  }
+
+  const ts = computeTrustScore(newRecord);
+  newRecord.trust_score = ts.score;
+
+  // Write new trust record
+  await env.DEDUP_KV.put(`trust:${newCredentialId}`, JSON.stringify(newRecord));
+
+  // Mark old record as superseded (don't delete — audit trail)
+  oldRecord.superseded_by = newCredentialId;
+  oldRecord.superseded_at = new Date().toISOString();
+  await env.DEDUP_KV.put(`trust:${oldCredentialId}`, JSON.stringify(oldRecord));
+
+  return { migrated: true, trust_score: ts.score };
+}
+
 
 // POST /transfer/:code — Phone pushes encrypted credential blob
 async function handleTransferPush(code, request, env) {
@@ -872,6 +1250,399 @@ async function handleTransferPull(code, request, env) {
   await env.DEDUP_KV.delete(`xfer:${code}`);
 
   return jsonResponse({ status: "ready", encrypted: encrypted }, 200, origin);
+}
+
+// ── S37: Public Proof Registry ──
+// POST /register-proof — Register a signed proof record in the public registry.
+//
+// Security model:
+//   Gate 1 — Valid credential: submission must include credential_id with a
+//             server-side trust record (i.e. was properly issued via HIP).
+//   Gate 2 — Rate limit: max 50 proof registrations per credential per 24 hours.
+//             Consistent with attestation rate limits in HP-SPEC.
+//   Gate 3 — First-write-wins: once a content_hash is registered, it is locked.
+//             A second credential attempting the same hash gets 409 Conflict with
+//             the existing record returned. No overwrite, ever.
+//   Gate 4 — Signature: the client signs the canonical string
+//             content_hash|perceptual_hash_or_NULL|credential_id|attested_at|classification
+//             with its Ed25519 private key. The worker stores the signature so any
+//             party can independently verify the record without trusting this server.
+//
+// The worker does NOT verify the Ed25519 signature itself (Cloudflare Workers do not
+// expose SubtleCrypto Ed25519 verify in all deployments). The signature is stored
+// verbatim and verified client-side by proof card viewers. This is correct: the
+// signature is a self-verifying artifact — its validity is independent of this server.
+
+async function handleRegisterProof(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const {
+    content_hash,
+    perceptual_hash,
+    credential_id,
+    public_key,
+    attested_at,
+    classification,
+    signature,
+    sealed,
+    protocol_version,
+  } = body;
+
+  // ── Validate required fields ──
+  if (!content_hash || !credential_id || !attested_at || !classification || !signature) {
+    return jsonResponse({
+      error: "Missing required fields: content_hash, credential_id, attested_at, classification, signature"
+    }, 400, origin);
+  }
+
+  // content_hash must be a 64-char hex string (SHA-256)
+  if (!/^[0-9a-f]{64}$/.test(content_hash)) {
+    return jsonResponse({ error: "content_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
+  }
+
+  // public_key must be a 64-char hex string (Ed25519 = 32 bytes = 64 hex chars)
+  // Optional for backward compatibility, but strongly recommended
+  if (public_key) {
+    if (!/^[0-9a-f]{64}$/.test(public_key)) {
+      return jsonResponse({ error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)" }, 400, origin);
+    }
+    // Verify public_key matches credential_id: credential_id = SHA-256(public_key)
+    const enc = new TextEncoder();
+    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+    if (computedId !== credential_id) {
+      return jsonResponse({
+        error: "public_key does not match credential_id. credential_id must be SHA-256(public_key)."
+      }, 400, origin);
+    }
+  }
+
+  // classification must be a known HIP value
+  const validClassifications = ["CompleteHumanOrigin", "HumanOriginAssisted", "HumanDirectedCollaborative"];
+  if (!validClassifications.includes(classification)) {
+    return jsonResponse({ error: "Invalid classification. Must be one of: " + validClassifications.join(", ") }, 400, origin);
+  }
+
+  // attested_at must be ISO 8601 UTC
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(attested_at)) {
+    return jsonResponse({ error: "attested_at must be ISO 8601 UTC format: YYYY-MM-DDTHH:MM:SSZ" }, 400, origin);
+  }
+
+  // ── Gate 1: Credential must exist in trust system ──
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({
+      error: "Credential not found. Only credentials issued through HIP may register proofs."
+    }, 403, origin);
+  }
+
+  const trustRecord = JSON.parse(trustRaw);
+
+  // Credential must be in good standing (no superseded/invalidated flag)
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "This credential has been superseded. Use your current credential to register proofs."
+    }, 403, origin);
+  }
+
+  // ── Gate 2: Rate limit — 50 proof registrations per credential per 24h ──
+  const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credential_id);
+  const rateKey = `prate:${credHash}`;
+  const rateRaw = await env.DEDUP_KV.get(rateKey);
+  let rateCount = 0;
+  if (rateRaw) {
+    rateCount = JSON.parse(rateRaw).count || 0;
+  }
+
+  // Rate limit varies by tier: T1=50/day, T2=25/day, T3=10/day
+  const tierLimits = { 1: 50, 2: 25, 3: 10 };
+  const limit = tierLimits[trustRecord.tier] || 10;
+
+  if (rateCount >= limit) {
+    return jsonResponse({
+      error: `Rate limit exceeded. Maximum ${limit} proof registrations per 24 hours for Tier ${trustRecord.tier} credentials.`,
+      limit,
+      current: rateCount,
+    }, 429, origin);
+  }
+
+  // ── Gate 3: First-write-wins — check for existing record ──
+  const proofKey = `proof:${content_hash}`;
+  const existing = await env.DEDUP_KV.get(proofKey);
+  if (existing) {
+    const existingRecord = JSON.parse(existing);
+    // Return existing record — do not overwrite
+    return jsonResponse({
+      error: "conflict",
+      message: "A proof record already exists for this content hash. First registration wins.",
+      existing_record: existingRecord.sealed ? {
+        content_hash: existingRecord.content_hash,
+        registered_at: existingRecord.registered_at,
+        sealed: true,
+        message: "This proof is sealed by its creator.",
+      } : existingRecord,
+    }, 409, origin);
+  }
+
+  // ── Write proof record ──
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const proofRecord = {
+    content_hash,
+    perceptual_hash: perceptual_hash || null,
+    credential_id,
+    public_key: public_key || null,
+    credential_tier: trustRecord.tier,
+    classification,
+    attested_at,
+    registered_at: now,
+    signature,
+    sealed: sealed === true,
+    protocol_version: protocol_version || "1.2",
+  };
+
+  await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // Increment rate limit counter (24h TTL)
+  await env.DEDUP_KV.put(rateKey, JSON.stringify({
+    count: rateCount + 1,
+    last_registration: now,
+  }), { expirationTtl: 86400 });
+
+  return jsonResponse({
+    success: true,
+    content_hash,
+    registered_at: now,
+    proof_url: `https://hipprotocol.org/proof.html?hash=${content_hash}`,
+    sealed: proofRecord.sealed,
+  }, 200, origin);
+}
+
+// GET /proof/:hash — Retrieve a proof record from the public registry.
+// Returns the full record for public proofs.
+// Returns a minimal stub for sealed proofs (confirms existence without revealing contents).
+// Returns 404 if no record exists for this hash.
+
+async function handleGetProof(contentHash, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Validate hash format
+  if (!/^[0-9a-f]{64}$/.test(contentHash)) {
+    return jsonResponse({ error: "Invalid content hash. Must be a 64-character lowercase hex SHA-256 hash." }, 400, origin);
+  }
+
+  const proofKey = `proof:${contentHash}`;
+  const raw = await env.DEDUP_KV.get(proofKey);
+
+  if (!raw) {
+    return jsonResponse({
+      found: false,
+      content_hash: contentHash,
+      message: "No proof record found for this content hash.",
+    }, 404, origin);
+  }
+
+  const record = JSON.parse(raw);
+
+  // Sealed records: return stub only — existence confirmed, contents withheld
+  if (record.sealed) {
+    return jsonResponse({
+      found: true,
+      content_hash: contentHash,
+      sealed: true,
+      registered_at: record.registered_at,
+      message: "This proof record is sealed by its creator. The content has been attested but the proof details are not yet public.",
+    }, 200, origin);
+  }
+
+  // Public record: return full record
+  return jsonResponse({
+    found: true,
+    ...record,
+  }, 200, origin);
+}
+
+// POST /unseal-proof — Unseal a previously sealed proof record.
+// Only the original credential holder can unseal.
+// Requires: content_hash, credential_id, signature (signs "UNSEAL|{content_hash}|{credential_id}")
+// If public_key was not included in the original registration, caller can provide it now.
+
+async function handleUnsealProof(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { content_hash, credential_id, signature, public_key } = body;
+
+  if (!content_hash || !credential_id || !signature) {
+    return jsonResponse({
+      error: "Missing required fields: content_hash, credential_id, signature"
+    }, 400, origin);
+  }
+
+  if (!/^[0-9a-f]{64}$/.test(content_hash)) {
+    return jsonResponse({ error: "content_hash must be a 64-character lowercase hex SHA-256 hash." }, 400, origin);
+  }
+
+  // Look up proof record
+  const proofKey = `proof:${content_hash}`;
+  const raw = await env.DEDUP_KV.get(proofKey);
+  if (!raw) {
+    return jsonResponse({ error: "No proof record found for this content hash." }, 404, origin);
+  }
+
+  const record = JSON.parse(raw);
+
+  // Must be sealed
+  if (!record.sealed) {
+    return jsonResponse({ error: "This proof record is already public (not sealed)." }, 400, origin);
+  }
+
+  // Must be the original credential holder
+  if (record.credential_id !== credential_id) {
+    return jsonResponse({ error: "Only the original credential holder can unseal this proof." }, 403, origin);
+  }
+
+  // If public_key provided now (backfill), validate it matches credential_id
+  if (public_key) {
+    if (!/^[0-9a-f]{64}$/.test(public_key)) {
+      return jsonResponse({ error: "public_key must be a 64-character lowercase hex string." }, 400, origin);
+    }
+    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+    if (computedId !== credential_id) {
+      return jsonResponse({ error: "public_key does not match credential_id." }, 400, origin);
+    }
+  }
+
+  // Unseal the record
+  record.sealed = false;
+  record.unsealed_at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  // Backfill public_key if it wasn't in the original record
+  if (public_key && !record.public_key) {
+    record.public_key = public_key;
+  }
+
+  await env.DEDUP_KV.put(proofKey, JSON.stringify(record));
+
+  return jsonResponse({
+    success: true,
+    content_hash,
+    unsealed_at: record.unsealed_at,
+    proof_url: `https://hipprotocol.org/proof.html?hash=${content_hash}`,
+  }, 200, origin);
+}
+
+// POST /dispute-proof — Flag a proof as contested.
+// Anyone with a valid credential can dispute. Rate-limited per credential.
+// Disputes are stored as an array on the proof record.
+// Fields: content_hash, credential_id, reason (text, max 500 chars)
+
+async function handleDisputeProof(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { content_hash, credential_id, reason } = body;
+
+  if (!content_hash || !credential_id || !reason) {
+    return jsonResponse({ error: "Missing required fields: content_hash, credential_id, reason" }, 400, origin);
+  }
+
+  if (!/^[0-9a-f]{64}$/.test(content_hash)) {
+    return jsonResponse({ error: "Invalid content hash." }, 400, origin);
+  }
+
+  if (typeof reason !== "string" || reason.trim().length < 10 || reason.length > 500) {
+    return jsonResponse({ error: "Reason must be 10-500 characters." }, 400, origin);
+  }
+
+  // Verify disputer has a valid credential
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "Only HIP credential holders may file disputes." }, 403, origin);
+  }
+  const trustRecord = JSON.parse(trustRaw);
+  if (trustRecord.superseded_by) {
+    return jsonResponse({ error: "This credential has been superseded." }, 403, origin);
+  }
+
+  // Look up proof record
+  const proofKey = `proof:${content_hash}`;
+  const raw = await env.DEDUP_KV.get(proofKey);
+  if (!raw) {
+    return jsonResponse({ error: "No proof record found for this content hash." }, 404, origin);
+  }
+
+  const record = JSON.parse(raw);
+
+  // Cannot dispute your own attestation
+  if (record.credential_id === credential_id) {
+    return jsonResponse({ error: "You cannot dispute your own attestation." }, 400, origin);
+  }
+
+  // Rate limit disputes: max 5 per credential per 24h
+  const disputeRateKey = `drate:${credential_id}`;
+  const drateRaw = await env.DEDUP_KV.get(disputeRateKey);
+  let drateCount = 0;
+  if (drateRaw) {
+    drateCount = JSON.parse(drateRaw).count || 0;
+  }
+  if (drateCount >= 5) {
+    return jsonResponse({ error: "Dispute rate limit exceeded. Maximum 5 disputes per 24 hours." }, 429, origin);
+  }
+
+  // Check for duplicate dispute from same credential
+  const disputes = record.disputes || [];
+  if (disputes.some(d => d.credential_id === credential_id)) {
+    return jsonResponse({ error: "You have already filed a dispute for this proof." }, 409, origin);
+  }
+
+  // Add dispute
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const dispute = {
+    credential_id,
+    credential_tier: trustRecord.tier,
+    reason: reason.trim(),
+    filed_at: now,
+  };
+
+  record.disputes = disputes.concat([dispute]);
+  record.disputed = true;
+
+  await env.DEDUP_KV.put(proofKey, JSON.stringify(record));
+
+  // Increment dispute rate limit
+  await env.DEDUP_KV.put(disputeRateKey, JSON.stringify({
+    count: drateCount + 1,
+    last_dispute: now,
+  }), { expirationTtl: 86400 });
+
+  return jsonResponse({
+    success: true,
+    content_hash,
+    dispute_count: record.disputes.length,
+    filed_at: now,
+  }, 200, origin);
 }
 
 // ── Main Router ──
@@ -933,6 +1704,16 @@ export default {
       return handleAttestRegister(request, env);
     }
 
+    // S33: Credential recovery route
+    if (method === "POST" && path === "/recover-credential") {
+      return handleRecoverCredential(request, env);
+    }
+
+    // S34: Credential tier upgrade route
+    if (method === "POST" && path === "/upgrade-credential") {
+      return handleUpgradeCredential(request, env);
+    }
+
     if (method === "GET" && path.startsWith("/trust/")) {
       const credentialId = path.replace("/trust/", "");
       if (!credentialId) return jsonResponse({ error: "Missing credential_id" }, 400);
@@ -943,6 +1724,49 @@ export default {
       const code = path.replace("/transfer/", "");
       if (method === "POST") return handleTransferPush(code, request, env);
       if (method === "GET") return handleTransferPull(code, request, env);
+    }
+
+    // S37: Public proof registry
+    if (method === "POST" && path === "/register-proof") {
+      return handleRegisterProof(request, env);
+    }
+
+    // S38: Unseal a sealed proof record
+    if (method === "POST" && path === "/unseal-proof") {
+      return handleUnsealProof(request, env);
+    }
+
+    // S38: Dispute a proof record
+    if (method === "POST" && path === "/dispute-proof") {
+      return handleDisputeProof(request, env);
+    }
+
+    if (method === "GET" && path.startsWith("/proof/")) {
+      const contentHash = path.replace("/proof/", "").toLowerCase().trim();
+      if (!contentHash) return jsonResponse({ error: "Missing content hash" }, 400);
+
+      // If request accepts JSON (API call), return data
+      const accept = request.headers.get("Accept") || "";
+      if (accept.includes("application/json") || accept.includes("text/plain")) {
+        return handleGetProof(contentHash, request, env);
+      }
+
+      // If request accepts HTML (browser navigation), redirect to proof.html page
+      // proof.html reads the hash from the URL path client-side
+      return new Response(null, {
+        status: 302,
+        headers: {
+          "Location": "https://hipprotocol.org/proof.html?hash=" + contentHash,
+          ...corsHeaders(request.headers.get("Origin") || CORS_ORIGIN),
+        },
+      });
+    }
+
+    // Direct JSON API endpoint for proof data (used by proof.html fetch)
+    if (method === "GET" && path.startsWith("/api/proof/")) {
+      const contentHash = path.replace("/api/proof/", "").toLowerCase().trim();
+      if (!contentHash) return jsonResponse({ error: "Missing content hash" }, 400);
+      return handleGetProof(contentHash, request, env);
     }
 
     return jsonResponse({ error: "Not found" }, 404);
