@@ -2118,6 +2118,7 @@ function App() {
   // ── Nav button (static — orange border, black bg, white text) ──
   function NavBtn(props) {
     return e("button",{
+      className:"hip-cta-btn",
       style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"10px 22px",cursor:"pointer",textAlign:"center",
         border:"1px solid "+go,background:dk,color:t1,width:"100%",display:"block"},
       onClick:props.onClick
@@ -2269,8 +2270,8 @@ function App() {
             e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:8}}, "TRY IT NOW"),
             P("Get a credential, attest a file, and verify the result — all in your browser, in under two minutes.",{textAlign:"center",marginBottom:12}),
             e("div",{style:{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}},
-              e("button",{className:"hip-cta-btn",style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"12px 24px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff",borderRadius:4},onClick:function(){setToolOpen("attest");setToolTab("cred")}},"GET A CREDENTIAL"),
-              e("button",{className:"hip-cta-btn",style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"12px 24px",cursor:"pointer",textAlign:"center",border:"1px solid "+go,background:"transparent",color:go,borderRadius:4},onClick:function(){window.location.hash="#how"}},"SEE HOW IT WORKS")
+              e("button",{className:"hip-cta-btn",style:{flex:1,minWidth:180,fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 24px",cursor:"pointer",textAlign:"center",border:"none",background:go,color:"#fff",borderRadius:4},onClick:function(){setToolOpen("attest");setToolTab("cred")}},"GET A CREDENTIAL"),
+              e("button",{className:"hip-cta-btn",style:{flex:1,minWidth:180,fontFamily:mo,fontSize:12,fontWeight:500,padding:"14px 24px",cursor:"pointer",textAlign:"center",border:"1px solid "+go,background:"transparent",color:go,borderRadius:4},onClick:function(){window.location.hash="#how"}},"SEE HOW IT WORKS")
             )
           )
         )
