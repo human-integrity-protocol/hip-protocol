@@ -1532,6 +1532,7 @@ var phs=useState(null);var pHash=phs[0];var setPHash=phs[1];
 var sls=useState(false);var sealedAttest=sls[0];var setSealedAttest=sls[1];
 var pus=useState(null);var proofUrl=pus[0];var setProofUrl=pus[1];
 var pbs=useState(false);var publishing=pbs[0];var setPublishing=pbs[1];
+var pes=useState(null);var publishError=pes[0];var setPublishError=pes[1];
 var pcs=useState(false);var proofCopied=pcs[0];var setProofCopied=pcs[1];
 var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
 
@@ -1639,8 +1640,8 @@ if(arResp.ok){var arData=await arResp.json();setTrustScore(arData.trust_score);s
 var publishProof=async function(){
 if(!proofcard||!hash)return;
 setPublishing(true);
+setPublishError(null);
 try{
-  // Canonical string to sign: content_hash|perceptual_hash_or_NULL|credential_id|attested_at|classification
   var pc=proofcard.proofBundle;
   var attestedAt=pc.issuanceDate;
   var classification=pc.credentialSubject.classification;
@@ -1663,14 +1664,13 @@ try{
   if(resp.ok&&data.success){
     setProofUrl(data.proof_url);
   } else if(resp.status===409&&data.existing_record){
-    // Already registered — use existing URL
     setProofUrl("https://hipprotocol.org/proof.html?hash="+hash);
   } else {
     throw new Error(data.error||"Registration failed (HTTP "+resp.status+")");
   }
 }catch(ex){
-  // Fail silently — proof card still works locally, registry is additive
   console.warn("Proof registry:",ex.message);
+  setPublishError(ex.message);
 }
 setPublishing(false);};
 
@@ -1744,13 +1744,13 @@ e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofca
 // S21b/S34: Download section — attested image (JPEG EXIF or PNG iTXt) + Proof Card
 (embeddedDataURL||embeddedBytes)&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
 ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"EXIF":"metadata chunk",".")),
-e("a",{style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":"attested.png")},"↓ Save Attested "+fname),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":"attested.png")},"↓ Save Attested "+fname),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
-e("a",{style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card")),
+e("a",{className:"hip-cta-btn",style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
-e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:bundleBlobURL,download:"HIP_Bundle.json"},"↓ Bundle"),
-e("a",{style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:bundleBlobURL,download:"HIP_Bundle.json"},"↓ Bundle"),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:2,textAlign:"center"}},"Tip: right-click any download link and choose \"Save As\" to pick a save location."),
 e("div",{style:{borderTop:"1px solid "+bd,marginTop:14,paddingTop:14}},
 e("div",{style:{marginBottom:14}},
@@ -1758,7 +1758,8 @@ e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"upper
 !proofUrl?e("div",null,
 e("div",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:10}},"Get a shareable link anyone can use to verify your work"+(pHash?" — includes visual fingerprint for screenshot matching":"")+"."),
 sealedAttest&&ToolAlert("info","Sealed — timestamp registered, details stay private until you unseal."),
-e("button",{style:Object.assign({},btnG,{width:"100%",marginBottom:4,background:"rgba(224,90,0,0.12)",border:"1px solid "+go,color:go}),onClick:publishProof,disabled:publishing},publishing?"Publishing...":"Publish Proof Link"),
+e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:4,background:go,border:"1px solid "+go,color:"#fff"}),onClick:publishProof,disabled:publishing},publishing?"Publishing...":"Publish Proof Link"),
+publishError&&e("div",{style:{fontSize:12,color:"#ef4444",fontFamily:mo,textAlign:"center",marginTop:4,marginBottom:4}},publishError),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,textAlign:"center"}},"Optional. Your local Proof Card works without this."))
 :e("div",null,
 ToolAlert("success",e("span",null,e("strong",null,sealedAttest?"Sealed proof registered. ":"Proof published. "),"Share this link alongside your work.")),
@@ -1766,8 +1767,8 @@ e("div",{style:{padding:"10px 14px",background:"rgba(255,255,255,0.03)",borderRa
 e("code",{style:{fontSize:11,color:go,fontFamily:mo,flex:1,wordBreak:"break-all"}},proofUrl),
 e("button",{style:{background:proofCopied?"rgba(74,222,128,0.1)":"none",border:"1px solid "+(proofCopied?"rgba(74,222,128,0.3)":bd),color:proofCopied?"#4ade80":t2,cursor:"pointer",fontSize:11,fontFamily:mo,padding:"4px 10px",flexShrink:0,borderRadius:4},onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(proofUrl).then(function(){setProofCopied(true);setTimeout(function(){setProofCopied(false)},2000)})}},proofCopied?"Copied":"Copy")),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"Verification is only valid at hipprotocol.org"),
-sealedAttest&&e("button",{style:Object.assign({},btnG,{width:"100%",marginTop:8,background:"rgba(74,111,165,0.12)",border:"1px solid rgba(74,111,165,0.3)",color:"#6B9FD4"}),onClick:unsealProof,disabled:unsealing},unsealing?"Unsealing…":"Unseal — Make Proof Public")))),
-e("button",{style:Object.assign({},btnG,{width:"100%",background:"transparent",border:"1px solid rgba(255,255,255,0.1)",color:t2}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false)}},"Attest Another File"))}
+sealedAttest&&e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginTop:8,background:"rgba(74,111,165,0.12)",border:"1px solid rgba(74,111,165,0.3)",color:"#6B9FD4"}),onClick:unsealProof,disabled:unsealing},unsealing?"Unsealing…":"Unseal — Make Proof Public")))),
+e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",background:go,border:"1px solid "+go,color:"#fff"}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false);setPublishError(null)}},"Attest Another File"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
