@@ -228,9 +228,15 @@ function isPng(fname) {
   return fname.toLowerCase().split(".").pop() === "png";
 }
 
-// S34: Check if file is an image type that supports HIP metadata embedding
+// S41: WebP support
+function isWebP(fname) {
+  if(!fname) return false;
+  return fname.toLowerCase().split(".").pop() === "webp";
+}
+
+// S34/S41: Check if file is an image type that supports HIP metadata embedding
 function isEmbeddable(fname) {
-  return isJpeg(fname) || isPng(fname);
+  return isJpeg(fname) || isPng(fname) || isWebP(fname);
 }
 
 function fileToDataURL(file) {
@@ -424,6 +430,157 @@ function readHipMeta(fname, dataOrBytes) {
   if(isPng(fname) && dataOrBytes instanceof Uint8Array) return readHipPng(dataOrBytes);
   return null;
 }
+
+// ── S41: HipImageEmbed — post-attestation metadata embedding ──
+// Embeds full proof metadata (hash, credential, classification, timestamp,
+// short URL, signature) into image files AFTER attestation. This produces
+// a "Save Attested Copy" with embedded proof data readable by any HIP tool.
+// Supports JPEG (XMP), PNG (iTXt), WebP (XMP). All client-side.
+var HipImageEmbed=(function(){
+var CLS_LABELS={CompleteHumanOrigin:"Complete Human Origin",HumanOriginAssisted:"Human Origin Assisted",HumanDirectedCollaborative:"Human-Directed Collaborative"};
+function buildXMP(m){
+var cl=CLS_LABELS[m.classification]||m.classification;
+var pu=m.short_url||("https://hipprotocol.org/proof.html?hash="+m.content_hash);
+return['<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>',
+'<x:xmpmeta xmlns:x="adobe:ns:meta/">','<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
+'<rdf:Description rdf:about=""',' xmlns:dc="http://purl.org/dc/elements/1.1/"',' xmlns:hip="https://hipprotocol.org/ns/1.0/"',
+' hip:Protocol="HIP"',' hip:ProtocolVersion="'+(m.protocol_version||"1.2")+'"',
+' hip:ContentHash="'+m.content_hash+'"',' hip:CredentialID="'+m.credential_id+'"',
+' hip:Classification="'+m.classification+'"',' hip:ClassificationLabel="'+cl+'"',
+' hip:AttestedAt="'+m.attested_at+'"',' hip:Signature="'+m.signature+'"',
+' hip:ProofURL="'+pu+'">',
+'<dc:description><rdf:Alt><rdf:li xml:lang="x-default">HIP Attested: '+cl+' | Proof: '+pu+'</rdf:li></rdf:Alt></dc:description>',
+'</rdf:Description>','</rdf:RDF>','</x:xmpmeta>','<?xpacket end="w"?>'].join("\n");
+}
+function buildJSON(m){
+var pu=m.short_url||("https://hipprotocol.org/proof.html?hash="+m.content_hash);
+return JSON.stringify({protocol:"HIP",version:m.protocol_version||"1.2",content_hash:m.content_hash,
+credential_id:m.credential_id,classification:m.classification,
+classification_label:CLS_LABELS[m.classification]||m.classification,
+attested_at:m.attested_at,signature:m.signature,proof_url:pu});
+}
+function strB(s){return new TextEncoder().encode(s)}
+function u32be(n){return new Uint8Array([(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF])}
+function u32le(n){return new Uint8Array([n&0xFF,(n>>>8)&0xFF,(n>>>16)&0xFF,(n>>>24)&0xFF])}
+function crc32(data){
+if(!_pngCrcTable){_pngCrcTable=new Uint32Array(256);for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);_pngCrcTable[n]=c}}
+var crc=0xFFFFFFFF;for(var i=0;i<data.length;i++)crc=_pngCrcTable[(crc^data[i])&0xFF]^(crc>>>8);return(crc^0xFFFFFFFF)>>>0;
+}
+function detectFmt(buf){
+var u=new Uint8Array(buf,0,16);
+if(u[0]===0xFF&&u[1]===0xD8&&u[2]===0xFF)return"jpeg";
+if(u[0]===0x89&&u[1]===0x50&&u[2]===0x4E&&u[3]===0x47)return"png";
+if(u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46&&u[8]===0x57&&u[9]===0x45&&u[10]===0x42&&u[11]===0x50)return"webp";
+return null;
+}
+function embedJPEG(buf,meta){
+var src=new Uint8Array(buf);var xmpStr=buildXMP(meta);var xmpBytes=strB(xmpStr);
+var nsBytes=strB("http://ns.adobe.com/xap/1.0/\0");
+var segLen=2+nsBytes.length+xmpBytes.length;
+var existingStart=-1,existingEnd=-1,pos=2;
+while(pos<src.length-1){
+if(src[pos]!==0xFF)break;var marker=src[pos+1];
+if(marker===0xD9||marker===0xDA)break;
+var mLen=(src[pos+2]<<8)|src[pos+3];
+if(marker===0xE1&&mLen>nsBytes.length+2){
+var isXMP=true;for(var i=0;i<nsBytes.length;i++){if(src[pos+4+i]!==nsBytes[i]){isXMP=false;break}}
+if(isXMP){existingStart=pos;existingEnd=pos+2+mLen;break}}
+pos+=2+mLen;}
+var newSeg=new Uint8Array(2+2+nsBytes.length+xmpBytes.length);
+newSeg[0]=0xFF;newSeg[1]=0xE1;newSeg[2]=(segLen>>>8)&0xFF;newSeg[3]=segLen&0xFF;
+newSeg.set(nsBytes,4);newSeg.set(xmpBytes,4+nsBytes.length);
+var result;
+if(existingStart>=0){result=new Uint8Array(src.length-(existingEnd-existingStart)+newSeg.length);
+result.set(src.subarray(0,existingStart),0);result.set(newSeg,existingStart);
+result.set(src.subarray(existingEnd),existingStart+newSeg.length);
+}else{result=new Uint8Array(src.length+newSeg.length);
+result.set(src.subarray(0,2),0);result.set(newSeg,2);result.set(src.subarray(2),2+newSeg.length);}
+return result.buffer;
+}
+function embedPNGfull(buf,meta){
+var src=new Uint8Array(buf);var jsonStr=buildJSON(meta);
+var pu=meta.short_url||("https://hipprotocol.org/proof.html?hash="+meta.content_hash);
+var cl=CLS_LABELS[meta.classification]||meta.classification;
+var kw=strB("HIP:Proof");var textBytes=strB(jsonStr);
+var iTXtData=new Uint8Array(kw.length+1+1+1+1+1+textBytes.length);
+var off=0;iTXtData.set(kw,off);off+=kw.length;iTXtData[off++]=0;iTXtData[off++]=0;iTXtData[off++]=0;iTXtData[off++]=0;iTXtData[off++]=0;
+iTXtData.set(textBytes,off);
+var commentKey=strB("Comment");var commentText=strB("HIP Attested: "+cl+" | "+pu);
+var tEXtData=new Uint8Array(commentKey.length+1+commentText.length);
+off=0;tEXtData.set(commentKey,off);off+=commentKey.length;tEXtData[off++]=0;tEXtData.set(commentText,off);
+function makePNGChunk(type,data){
+var typeB=strB(type);var len=u32be(data.length);
+var crcIn=new Uint8Array(4+data.length);crcIn.set(typeB,0);crcIn.set(data,4);var crcVal=u32be(crc32(crcIn));
+var chunk=new Uint8Array(4+4+data.length+4);chunk.set(len,0);chunk.set(typeB,4);chunk.set(data,8);chunk.set(crcVal,8+data.length);return chunk;}
+var iTXtChunk=makePNGChunk("iTXt",iTXtData);
+var tEXtChunk=makePNGChunk("tEXt",tEXtData);
+// Remove existing HIP:Proof chunks, then insert before first IDAT
+var parts=[];parts.push(src.slice(0,8));var p=8;
+while(p<src.length){var chunkLen=(src[p]<<24)|(src[p+1]<<16)|(src[p+2]<<8)|src[p+3];
+var ct=String.fromCharCode(src[p+4],src[p+5],src[p+6],src[p+7]);var fs=12+chunkLen;
+var skip=false;
+if(ct==="iTXt"){var kwS="HIP:Proof";var match=true;for(var i=0;i<kwS.length;i++){if(src[p+8+i]!==kwS.charCodeAt(i)){match=false;break}}if(match&&src[p+8+kwS.length]===0)skip=true;}
+if(!skip)parts.push(src.slice(p,p+fs));p+=fs;}
+var rp=[];var ins=false;
+for(var pi=0;pi<parts.length;pi++){var pa=parts[pi];
+if(!ins&&pa.length>=8){var ct2=String.fromCharCode(pa[4],pa[5],pa[6],pa[7]);if(ct2==="IDAT"){rp.push(iTXtChunk);rp.push(tEXtChunk);ins=true;}}rp.push(pa);}
+if(!ins){var last=rp.pop();rp.push(iTXtChunk);rp.push(tEXtChunk);rp.push(last);}
+var totalLen=0;for(var ri=0;ri<rp.length;ri++)totalLen+=rp[ri].length;
+var result=new Uint8Array(totalLen);var offset=0;for(var ri2=0;ri2<rp.length;ri2++){result.set(rp[ri2],offset);offset+=rp[ri2].length;}
+return result.buffer;
+}
+function embedWebP(buf,meta){
+var src=new Uint8Array(buf);var xmpStr=buildXMP(meta);var xmpBytes=strB(xmpStr);
+var riffDeclaredSize=src[4]|(src[5]<<8)|(src[6]<<16)|(src[7]<<24);
+var riffEnd=Math.min(8+riffDeclaredSize,src.length);
+var hasVP8X=false;var chunks=[];var p=12;
+while(p+8<=riffEnd){var fourcc=String.fromCharCode(src[p],src[p+1],src[p+2],src[p+3]);
+var size=src[p+4]|(src[p+5]<<8)|(src[p+6]<<16)|(src[p+7]<<24);var paddedSize=size+(size&1);
+if(p+8+size>riffEnd)break;
+chunks.push({fourcc:fourcc,offset:p,dataOffset:p+8,size:size,paddedSize:paddedSize,totalSize:8+paddedSize});
+if(fourcc==="VP8X")hasVP8X=true;p+=8+paddedSize;}
+var xmpChunkSize=xmpBytes.length;var xmpPadded=xmpChunkSize+(xmpChunkSize&1);
+var xmpChunk=new Uint8Array(8+xmpPadded);
+xmpChunk[0]=0x58;xmpChunk[1]=0x4D;xmpChunk[2]=0x50;xmpChunk[3]=0x20;
+xmpChunk.set(u32le(xmpChunkSize),4);xmpChunk.set(xmpBytes,8);
+var rp=[];
+if(!hasVP8X){
+var cw=0,ch2=0;for(var ci=0;ci<chunks.length;ci++){var ck=chunks[ci];
+if(ck.fourcc==="VP8 "){var o=ck.dataOffset;cw=(src[o+6]|(src[o+7]<<8))&0x3FFF;ch2=(src[o+8]|(src[o+9]<<8))&0x3FFF;}
+else if(ck.fourcc==="VP8L"){var o2=ck.dataOffset;var b=(src[o2+1])|(src[o2+2]<<8)|(src[o2+3]<<16)|(src[o2+4]<<24);cw=(b&0x3FFF)+1;ch2=((b>>14)&0x3FFF)+1;}}
+if(cw===0)cw=1;if(ch2===0)ch2=1;
+var vp8xData=new Uint8Array(10);vp8xData[0]=0x04;var w=cw-1;
+vp8xData[4]=w&0xFF;vp8xData[5]=(w>>8)&0xFF;vp8xData[6]=(w>>16)&0xFF;
+var h=ch2-1;vp8xData[7]=h&0xFF;vp8xData[8]=(h>>8)&0xFF;vp8xData[9]=(h>>16)&0xFF;
+var vp8xChunk=new Uint8Array(18);
+vp8xChunk[0]=0x56;vp8xChunk[1]=0x50;vp8xChunk[2]=0x38;vp8xChunk[3]=0x58;
+vp8xChunk.set(u32le(10),4);vp8xChunk.set(vp8xData,8);
+rp.push(src.slice(0,12));rp.push(vp8xChunk);
+for(var ci2=0;ci2<chunks.length;ci2++){var ck2=chunks[ci2];rp.push(src.slice(ck2.offset,ck2.offset+ck2.totalSize));}
+rp.push(xmpChunk);
+}else{
+rp.push(src.slice(0,12));
+for(var ci3=0;ci3<chunks.length;ci3++){var ck3=chunks[ci3];
+if(ck3.fourcc==="XMP ")continue;
+if(ck3.fourcc==="VP8X"){var vClone=src.slice(ck3.offset,ck3.offset+ck3.totalSize);vClone[8]|=0x04;rp.push(vClone);}
+else rp.push(src.slice(ck3.offset,ck3.offset+ck3.totalSize));}
+rp.push(xmpChunk);}
+var totalLen=0;for(var ri=0;ri<rp.length;ri++)totalLen+=rp[ri].length;
+var result=new Uint8Array(totalLen);var offset=0;
+for(var ri2=0;ri2<rp.length;ri2++){result.set(rp[ri2]instanceof Uint8Array?rp[ri2]:new Uint8Array(rp[ri2]),offset);offset+=rp[ri2].length;}
+var riffSize=result.length-8;result[4]=riffSize&0xFF;result[5]=(riffSize>>8)&0xFF;result[6]=(riffSize>>16)&0xFF;result[7]=(riffSize>>24)&0xFF;
+return result.buffer;
+}
+function embedImage(buffer,meta,originalFilename){
+var fmt=detectFmt(buffer);if(!fmt||fmt==="tiff")return null;
+var rb;switch(fmt){case"jpeg":rb=embedJPEG(buffer,meta);break;case"png":rb=embedPNGfull(buffer,meta);break;case"webp":rb=embedWebP(buffer,meta);break;default:return null;}
+var ext={jpeg:"jpg",png:"png",webp:"webp"}[fmt]||"bin";
+var mime={jpeg:"image/jpeg",png:"image/png",webp:"image/webp"}[fmt]||"application/octet-stream";
+var fn;if(originalFilename){var ld=originalFilename.lastIndexOf(".");var base=ld>0?originalFilename.substring(0,ld):originalFilename;fn=base+"_hip."+ext;}else fn="attested_hip."+ext;
+return{buffer:rb,filename:fn,mimeType:mime,format:fmt};
+}
+return{embed:embedImage,detectFormat:detectFmt};
+})();
 
 // ── Scroll fade ──
 function useVis(th) {
@@ -1624,11 +1781,14 @@ var fref=useRef(null);
 // S21b: EXIF/metadata state (S34: expanded for PNG support)
 var jps=useState(false);var isJpg=jps[0];var setIsJpg=jps[1];
 var pps=useState(false);var isPngFile=pps[0];var setIsPngFile=pps[1];
+var wps=useState(false);var isWebPFile=wps[0];var setIsWebPFile=wps[1]; // S41: WebP
 var exs=useState(null);var existingHip=exs[0];var setExistingHip=exs[1];
 var drs=useState(null);var rawDataURL=drs[0];var setRawDataURL=drs[1];
 var eds=useState(null);var embeddedDataURL=eds[0];var setEmbeddedDataURL=eds[1];
 var rbs=useState(null);var rawBytes=rbs[0];var setRawBytes=rbs[1]; // S34: raw bytes for PNG
 var ebs=useState(null);var embeddedBytes=ebs[0];var setEmbeddedBytes=ebs[1]; // S34: embedded PNG bytes
+var acs=useState(null);var attestedCopyURL=acs[0];var setAttestedCopyURL=acs[1]; // S41: attested copy blob URL
+var acn=useState(null);var attestedCopyName=acn[0];var setAttestedCopyName=acn[1]; // S41: attested copy filename
 // S29: Trust Score state
 var tss=useState(null);var trustScore=tss[0];var setTrustScore=tss[1];
 var tbs=useState(null);var trustBreakdown=tbs[0];var setTrustBreakdown=tbs[1];
@@ -1641,8 +1801,8 @@ var pes=useState(null);var publishError=pes[0];var setPublishError=pes[1];
 var pcs=useState(false);var proofCopied=pcs[0];var setProofCopied=pcs[1];
 var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
 
-// S34: convenience — does this file support HIP metadata embedding?
-var canEmbed = isJpg || isPngFile;
+// S34/S41: convenience — does this file support HIP metadata embedding?
+var canEmbed = isJpg || isPngFile || isWebPFile;
 
 if(!cred)return e("p",{style:{fontSize:14,color:t2}},"Get your credential first (Credential tab), then come here to attest.");
 
@@ -1651,9 +1811,10 @@ var dgs=useState(false);var dragging=dgs[0];var setDragging=dgs[1];
 
 // S35: Core file handler — accepts a File object directly
 var handleFile=async function(f){if(!f)return;
-setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setProofUrl(null);setProofCopied(false);
+setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setProofUrl(null);setProofCopied(false);setAttestedCopyURL(null);setAttestedCopyName(null);
 var jpeg=isJpeg(f.name)&&HAS_PIEXIF;setIsJpg(jpeg);
 var png=isPng(f.name);setIsPngFile(png);
+var webpF=isWebP(f.name);setIsWebPFile(webpF);
 if(jpeg){
   var du=await fileToDataURL(f);
   setRawDataURL(du);
@@ -1670,6 +1831,13 @@ if(jpeg){
   if(existing){setExistingHip(existing);setStep(-1);return}
   setHash(await sha256(bytes));
   // S37: compute pHash for images
+  var ph=await computePHash(f,f.name);setPHash(ph);
+  setStep(1);
+} else if(webpF){
+  // S41: WebP — store raw bytes, compute hash, compute pHash
+  var ab=await f.arrayBuffer();var bytes=new Uint8Array(ab);
+  setRawBytes(bytes);
+  setHash(await sha256(bytes));
   var ph=await computePHash(f,f.name);setPHash(ph);
   setStep(1);
 } else {
@@ -1713,6 +1881,22 @@ if(isJpg&&rawDataURL){
     setHash(finalHash);
   }catch(ex){
     // PNG embed failed — fall back to raw file hash
+    setEmbeddedBytes(null);
+  }
+} else if(isWebPFile&&rawBytes){
+  // S41: WebP — embed minimal HIP metadata via XMP before hashing
+  try{
+    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
+    var embResult=HipImageEmbed.embed(rawBytes.buffer,{
+      content_hash:"pending",credential_id:cred.credentialId.substring(0,16),
+      classification:cls,attested_at:now,signature:"pending",protocol_version:"1.2"},fname);
+    if(embResult){
+      var embWebP=new Uint8Array(embResult.buffer);
+      setEmbeddedBytes(embWebP);
+      finalHash=await sha256(embWebP);
+      setHash(finalHash);
+    }
+  }catch(ex){
     setEmbeddedBytes(null);
   }
 }
@@ -1770,6 +1954,26 @@ try{
   try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
     setProofUrl(data.short_url||data.proof_url);
+    // S41: Generate attested image copy with full proof metadata embedded
+    if(canEmbed){
+      try{
+        var sourceBytes=null;
+        if(embeddedDataURL){sourceBytes=dataURLtoBytes(embeddedDataURL).buffer}
+        else if(embeddedBytes){sourceBytes=embeddedBytes.buffer}
+        else if(rawBytes){sourceBytes=rawBytes.buffer}
+        else if(rawDataURL){sourceBytes=dataURLtoBytes(rawDataURL).buffer}
+        if(sourceBytes){
+          var acMeta={content_hash:hash,credential_id:cred.credentialId,classification:classification,
+            attested_at:attestedAt,short_url:data.short_url||null,signature:sig,protocol_version:"1.2"};
+          var acResult=HipImageEmbed.embed(sourceBytes,acMeta,fname);
+          if(acResult){
+            var acBlob=new Blob([acResult.buffer],{type:acResult.mimeType});
+            setAttestedCopyURL(URL.createObjectURL(acBlob));
+            setAttestedCopyName(acResult.filename);
+          }
+        }
+      }catch(acEx){console.warn("Attested copy generation:",acEx.message)}
+    }
   } else if(resp.status===409&&data.existing_record){
     setProofUrl("https://hipprotocol.org/proof.html?hash="+hash);
   } else {
@@ -1811,7 +2015,7 @@ setUnsealing(false);};
 // These are computed fresh each render in step 4 — acceptable since step 4 is stable.
 var embeddedBlobURL=null;
 if(embeddedDataURL){var eb=dataURLtoBytes(embeddedDataURL);embeddedBlobURL=URL.createObjectURL(new Blob([eb],{type:"image/jpeg"}))}
-else if(embeddedBytes){embeddedBlobURL=URL.createObjectURL(new Blob([embeddedBytes],{type:"image/png"}))}
+else if(embeddedBytes){embeddedBlobURL=URL.createObjectURL(new Blob([embeddedBytes],{type:isWebPFile?"image/webp":"image/png"}))}
 var pcBlobURL=null;
 if(proofcard){pcBlobURL=URL.createObjectURL(new Blob([JSON.stringify(proofcard,null,2)],{type:"application/json"}))}
 var bundleBlobURL=null;var anchorBlobURL=null;
@@ -1848,11 +2052,11 @@ showTech&&e("div",{style:{padding:14,background:dkc,borderRadius:6,border:"1px s
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle Hash"),e(CopyHash,{value:bHash,chars:24,color:go})),
 e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{style:wizRV},proofcard.proofBundle.id)),
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
-// S21b/S34: Download section — attested image (JPEG EXIF or PNG iTXt) + Proof Card
+// S21b/S34/S41: Download section — attested image (JPEG EXIF or PNG iTXt or WebP XMP) + Proof Card
 (embeddedDataURL||embeddedBytes)&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
-ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"EXIF":"metadata chunk",".")),
-e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":"attested.png")},"↓ Save Attested "+fname),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
+ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"EXIF":isWebPFile?"XMP":"metadata chunk",".")),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":isWebPFile?"attested.webp":"attested.png")},"↓ Save Attested "+fname),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":isWebPFile?"This WebP now contains XMP metadata with: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
 e("a",{className:"hip-cta-btn",style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card")),
 e("div",{style:{display:"flex",gap:8}},
@@ -1874,8 +2078,15 @@ e("div",{style:{padding:"10px 14px",background:"rgba(255,255,255,0.03)",borderRa
 e("code",{style:{fontSize:11,color:go,fontFamily:mo,flex:1,wordBreak:"break-all"}},proofUrl),
 e("button",{style:{background:proofCopied?"rgba(74,222,128,0.1)":"none",border:"1px solid "+(proofCopied?"rgba(74,222,128,0.3)":bd),color:proofCopied?"#4ade80":t2,cursor:"pointer",fontSize:11,fontFamily:mo,padding:"4px 10px",flexShrink:0,borderRadius:4},onClick:function(){navigator.clipboard&&navigator.clipboard.writeText(proofUrl).then(function(){setProofCopied(true);setTimeout(function(){setProofCopied(false)},2000)})}},proofCopied?"Copied":"Copy")),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},"Verification is only valid at hipprotocol.org"),
-sealedAttest&&e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginTop:8,background:"rgba(74,111,165,0.12)",border:"1px solid rgba(74,111,165,0.3)",color:"#6B9FD4"}),onClick:unsealProof,disabled:unsealing},unsealing?"Unsealing…":"Unseal — Make Proof Public")))),
-e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",background:go,border:"1px solid "+go,color:"#fff"}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false);setPublishError(null)}},"Attest Another File"))}
+sealedAttest&&e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginTop:8,background:"rgba(74,111,165,0.12)",border:"1px solid rgba(74,111,165,0.3)",color:"#6B9FD4"}),onClick:unsealProof,disabled:unsealing},unsealing?"Unsealing…":"Unseal — Make Proof Public"),
+// S41: Save Attested Copy — image with full proof metadata embedded
+attestedCopyURL&&attestedCopyName&&e("div",{style:{marginTop:12,padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)"}},
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:"#4ade80",marginBottom:6}},"SAVE ATTESTED COPY"),
+e("div",{style:{fontSize:12,color:t2,lineHeight:1.6,marginBottom:10}},"This version has the full proof embedded — hash, credential, classification, timestamp, signature, and proof link. Any HIP tool or metadata reader can verify it."),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box",background:"#16a34a",border:"1px solid #16a34a",color:"#fff"}),href:attestedCopyURL,download:attestedCopyName},"↓ Save "+attestedCopyName),
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Replaces your original. The proof data is inside the file's "+(isJpg||isWebPFile?"XMP metadata":"iTXt chunk")+"."))
+))),
+e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",background:go,border:"1px solid "+go,color:"#fff"}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setIsWebPFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false);setPublishError(null);setAttestedCopyURL(null);setAttestedCopyName(null)}},"Attest Another File"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
@@ -1883,10 +2094,10 @@ e("p",{style:{fontSize:14,color:t2}},"Select a file. Its fingerprint is computed
 e("div",{style:{border:"2px dashed "+(dragging?"rgba(74,222,128,0.6)":bd),borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:dragging?"rgba(74,222,128,0.04)":"transparent",transition:"border-color 0.15s, background 0.15s"},onClick:function(){fref.current&&fref.current.click()},onDragOver:function(ev){ev.preventDefault();ev.stopPropagation()},onDragEnter:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(true)},onDragLeave:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(false)},onDrop:dropFile},
 e("input",{ref:fref,type:"file",style:{display:"none"},onChange:pickFile}),
 e("span",{style:{color:dragging?"#4ade80":t2}},dragging?"Drop file here":"Drop a file here or click to select")),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG and PNG images get HIP metadata embedded — the attestation travels with the file."));
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG, PNG, and WebP images get HIP metadata embedded — the attestation travels with the file."));
 
 if(step===1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,canEmbed&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},isJpg?"EXIF embed":"metadata embed")),
+e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,canEmbed&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},isJpg?"EXIF embed":isWebPFile?"XMP embed":"metadata embed")),
 e("div",{style:wizRL},"Content Fingerprint"),e(CopyHash,{value:hash,chars:24,color:go}),
 canEmbed&&e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Final hash will be computed after HIP metadata is embedded.")),
 e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
