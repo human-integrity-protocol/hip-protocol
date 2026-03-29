@@ -6,12 +6,18 @@
 <title>HIP — Human Integrity Protocol</title>
 <meta name="description" content="Cryptographic attestation protocol for human-origin content. Verify that creative work is human-made — permanently, publicly, without any institution's permission.">
 <meta property="og:title" content="HIP — Human Integrity Protocol">
-<meta property="og:description" content="Cryptographic attestation protocol for human-origin content. Charter, specifications, and tools.">
+<meta property="og:description" content="Cryptographic proof of human-origin content. Permanent, open, no institution required.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://hipprotocol.org">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://hipprotocol.org/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="HIP — Human Integrity Protocol. Cryptographic proof of human-origin content.">
+<meta property="og:site_name" content="Human Integrity Protocol">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="HIP — Human Integrity Protocol">
-<meta name="twitter:description" content="Cryptographic attestation protocol for human-origin content.">
+<meta name="twitter:description" content="Cryptographic proof of human-origin content. Permanent, open, no institution required.">
+<meta name="twitter:image" content="https://hipprotocol.org/og-image.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -562,6 +568,105 @@ function CopyHash(props) {
 
 // ============================================================
 // S20 TOOL — Tier 3 WebAuthn (S29: was Tier 2), Tier 2 Peer Vouch (S29: was Tier 3), Tier 1 info
+// S40: Quick Verify — drop a file, check registry instantly
+function QuickVerify(props) {
+  var sDrag=useState(false); var drag=sDrag[0]; var setDrag=sDrag[1];
+  var sChecking=useState(false); var checking=sChecking[0]; var setChecking=sChecking[1];
+  var sResult=useState(null); var result=sResult[0]; var setResult=sResult[1];
+  var sFileName=useState(null); var fileName=sFileName[0]; var setFileName=sFileName[1];
+  var sFileHash=useState(null); var fileHash=sFileHash[0]; var setFileHash=sFileHash[1];
+  var ref=useRef(null);
+  var compact=props&&props.compact;
+
+  var checkFile=async function(f) {
+    if(!f)return;
+    setFileName(f.name);
+    setChecking(true);
+    setResult(null);
+    setFileHash(null);
+    try {
+      var buf=await f.arrayBuffer();
+      var h=await sha256(new Uint8Array(buf));
+      setFileHash(h);
+      var resp=await fetch(HIP_WORKER_URL+"/api/proof/"+h);
+      var data=await resp.json();
+      if(resp.ok&&data.found) {
+        setResult({found:true,record:data});
+      } else {
+        setResult({found:false});
+      }
+    } catch(ex) {
+      setResult({error:ex.message});
+    }
+    setChecking(false);
+  };
+
+  var borderColor=drag?"rgba(224,90,0,0.5)":result?(result.found?"rgba(74,222,128,0.3)":result.error?"rgba(248,113,113,0.3)":"rgba(248,113,113,0.2)"):"rgba(255,255,255,0.1)";
+  var bgColor=drag?"rgba(224,90,0,0.03)":result?(result.found?"rgba(74,222,128,0.03)":"rgba(248,113,113,0.02)"):"transparent";
+
+  return e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+    !compact&&e("p",{style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:4}},"Drop any file to check if it has a HIP attestation on record."),
+    e("div",{
+      style:{border:"2px dashed "+borderColor,borderRadius:8,padding:compact?"16px":"24px 20px",textAlign:"center",cursor:"pointer",background:bgColor,transition:"border-color 0.15s, background 0.15s"},
+      onDragOver:function(ev){ev.preventDefault();setDrag(true)},
+      onDragLeave:function(){setDrag(false)},
+      onDrop:function(ev){ev.preventDefault();setDrag(false);var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];if(f)checkFile(f)},
+      onClick:function(){ref.current&&ref.current.click()}
+    },
+      e("input",{ref:ref,type:"file",style:{display:"none"},onChange:function(ev){var f=ev.target.files&&ev.target.files[0];if(f)checkFile(f)}}),
+      checking
+        ? e("span",{style:{color:t2,fontSize:13,fontFamily:mo}},"Checking registry…")
+        : fileName
+          ? e("span",{style:{color:t2,fontSize:13}},fileName+" — tap to check another file")
+          : e("span",{style:{color:t2,fontSize:compact?12:14}},compact?"Drop file to verify":"Drop a file here to check the HIP registry")
+    ),
+    // Result display
+    result&&result.found&&e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(74,222,128,0.04)",border:"1px solid rgba(74,222,128,0.15)"}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:8}},
+        e("span",{style:{fontSize:18,color:"#4ade80"}},"✓"),
+        e("div",{style:{fontFamily:mo,fontSize:12,fontWeight:600,color:"#4ade80",letterSpacing:0.5}},"ATTESTED CONTENT FOUND")
+      ),
+      e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+        e("div",null,
+          e("div",{style:{fontFamily:mo,fontSize:9,color:"#555",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},"Classification"),
+          e("div",{style:{fontSize:13,color:t1}},CLS_LABELS[result.record.classification]||result.record.classification)
+        ),
+        e("div",null,
+          e("div",{style:{fontFamily:mo,fontSize:9,color:"#555",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},"Credential Tier"),
+          e("div",{style:{fontSize:13,color:result.record.credential_tier===1?go:result.record.credential_tier===2?"#f59e0b":"#888"}},"Tier "+result.record.credential_tier)
+        ),
+        e("div",null,
+          e("div",{style:{fontFamily:mo,fontSize:9,color:"#555",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},"Attested"),
+          e("div",{style:{fontSize:12,color:t2,fontFamily:mo}},result.record.attested_at?result.record.attested_at.replace("T"," ").replace("Z"," UTC"):"—")
+        ),
+        result.record.disputed&&e("div",null,
+          e("div",{style:{fontFamily:mo,fontSize:9,color:"#f87171",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},"Disputed"),
+          e("div",{style:{fontSize:12,color:"#f87171",fontFamily:mo}},(result.record.disputes?result.record.disputes.length:0)+" dispute(s)")
+        )
+      ),
+      e("div",{style:{marginTop:10}},
+        e("a",{href:result.record.short_id?"https://hipprotocol.org/p/"+result.record.short_id:"https://hipprotocol.org/proof.html?hash="+fileHash,
+          target:"_blank",rel:"noopener",
+          style:{fontFamily:mo,fontSize:11,color:go,textDecoration:"none"}
+        },"View full proof card →")
+      )
+    ),
+    result&&!result.found&&!result.error&&e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(248,113,113,0.03)",border:"1px solid rgba(248,113,113,0.12)"}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        e("span",{style:{fontSize:16,color:"#f87171"}},"—"),
+        e("div",{style:{fontFamily:mo,fontSize:12,color:"#f87171",letterSpacing:0.5}},"NO ATTESTATION FOUND")
+      ),
+      e("div",{style:{fontSize:12,color:t2,marginTop:6,lineHeight:1.5}},"This file has no published attestation in the HIP proof registry. It may not have been attested, or the creator may not have published a proof link."),
+      fileHash&&e("div",{style:{fontFamily:mo,fontSize:10,color:"#555",marginTop:6,wordBreak:"break-all"}},"SHA-256: "+fileHash)
+    ),
+    result&&result.error&&e("div",{style:{padding:"12px 14px",borderRadius:6,background:"rgba(248,113,113,0.03)",border:"1px solid rgba(248,113,113,0.12)",fontSize:12,color:"#f87171"}},
+      "Error: "+result.error
+    )
+  );
+}
+
+var CLS_LABELS={"CompleteHumanOrigin":"Complete Human Origin","HumanOriginAssisted":"Human Origin Assisted","HumanDirectedCollaborative":"Human-Directed Collaborative"};
+
 // Replaces old AttestWizard/VerifyWizard with tabbed tool
 // ============================================================
 
@@ -1664,7 +1769,7 @@ try{
   var data;
   try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
-    setProofUrl(data.proof_url);
+    setProofUrl(data.short_url||data.proof_url);
   } else if(resp.status===409&&data.existing_record){
     setProofUrl("https://hipprotocol.org/proof.html?hash="+hash);
   } else {
@@ -1968,6 +2073,12 @@ function VerifyWizard() {
   var canVerify = mode==="proofcard" ? !!pcText : (!!bt && !!at);
 
   return e("div", {style:{display:"flex",flexDirection:"column",gap:14}},
+    // S40: Quick file check against registry
+    e("div",{style:{borderBottom:"1px solid "+bd,paddingBottom:14,marginBottom:4}},
+      e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:"#4ade80",marginBottom:6}},"QUICK VERIFY — CHECK REGISTRY"),
+      e(QuickVerify,{compact:true})
+    ),
+    e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:2}},"FULL VERIFY — PROOF CARD"),
     e("p", {style:{fontSize:14,fontWeight:400,color:t2,lineHeight:1.6}}, "Verify a HIP attestation. Two-part verification: (1) cryptographic integrity and (2) content matching."),
     // Mode toggle
     e("div", {style:{display:"flex",gap:8,marginBottom:4}},
@@ -2547,6 +2658,14 @@ function App() {
     e("section", {id:"verify",className:"hip-section",style:{borderTop:"2px solid "+rule,padding:"60px 32px",maxWidth:1000,margin:"0 auto"}},
       e(Fade, null, SL("PROTOCOL / VERIFICATION"), ST("Don\u2019t trust us. Verify it yourself."),
         P("Everything about HIP is independently verifiable using only public tools. No account. No API key. No special software.",{maxWidth:640,marginBottom:28})
+      ),
+
+      e(Fade, {delay:0.05},
+        e("div",{style:{padding:"20px 22px",border:"1px solid rgba(74,222,128,0.15)",background:"rgba(74,222,128,0.02)",marginBottom:16,borderRadius:4}},
+          e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,textTransform:"uppercase",color:"#4ade80",marginBottom:10}},"VERIFY CONTENT"),
+          e("div",{style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:12}},"Have a file? Drop it here to instantly check if it has a published HIP attestation."),
+          e(QuickVerify,{compact:true})
+        )
       ),
 
       e(Fade, {delay:0.1},

@@ -4,10 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>HIP Proof Card — Human Integrity Protocol</title>
-<meta name="description" content="Verify human-origin content attestation on the Human Integrity Protocol.">
-<meta property="og:title" content="HIP Proof Card">
-<meta property="og:description" content="Cryptographic proof of human-origin content. Verified on the Human Integrity Protocol.">
+<meta name="description" content="Verify human-origin content attestation on the Human Integrity Protocol. Independently verifiable — no trust required.">
+<meta property="og:title" content="HIP Proof Card — Verified Human-Origin Content">
+<meta property="og:description" content="Cryptographic proof of human-origin content. Independently verifiable on the Human Integrity Protocol.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://hipprotocol.org/og-proof.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="HIP Proof Card — Verified human-origin content attestation.">
+<meta property="og:site_name" content="Human Integrity Protocol">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="HIP Proof Card — Verified Human-Origin Content">
+<meta name="twitter:description" content="Cryptographic proof of human-origin content. Verify with math, not trust.">
+<meta name="twitter:image" content="https://hipprotocol.org/og-proof.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✋</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -353,6 +362,10 @@ async function renderProof(hash, record){
     html += '<div class="field" style="margin-bottom:4px"><div class="field-label">Visual Fingerprint (pHash)</div><div class="field-val mono">'+record.perceptual_hash+'</div></div>';
   }
 
+  if(record.short_id){
+    html += '<div class="field" style="margin-bottom:4px"><div class="field-label">Short Link</div><div class="field-val" style="font-size:13px"><a href="https://hipprotocol.org/p/'+record.short_id+'" style="color:#E05A00;font-family:Azeret Mono,monospace;font-size:12px">hipprotocol.org/p/'+record.short_id+'</a></div></div>';
+  }
+
   // Signature verification block
   html += '<div class="divider"></div>';
   html += '<div class="sig-block sig-pending" id="sig-status">Verifying signature…</div>';
@@ -386,15 +399,16 @@ async function renderProof(hash, record){
   }
 
   // Platform embed code
+  var embedUrl = record.short_id ? "https://hipprotocol.org/p/"+record.short_id : "https://hipprotocol.org/proof.html?hash="+hash;
   html += '<div class="embed-section">'
     +'<div class="embed-title">Platform Embed</div>'
     +'<div class="embed-desc">Add a HIP verification badge to your post, portfolio, or platform listing. Links directly to this proof card.</div>'
     +'<div class="code-block" id="embed-code">'
-    +'&lt;a href="https://hipprotocol.org/proof.html?hash='+hash+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'"&gt;\n'
+    +'&lt;a href="'+embedUrl+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'"&gt;\n'
     +'  &lt;img src="https://hipprotocol.org/badge.png" alt="HIP Verified" width="32" height="32"&gt;\n'
     +'&lt;/a&gt;'
     +'</div>'
-    +'<button class="copy-btn" id="embed-copy-btn" onclick="copyEmbed(\''+hash+'\',\''+clsLabel+'\')">Copy embed code</button>'
+    +'<button class="copy-btn" id="embed-copy-btn" onclick="copyEmbed(\''+hash+'\',\''+clsLabel+'\',\''+(record.short_id||'')+'\')">Copy embed code</button>'
     +'</div>';
 
   // Show existing disputes if any
@@ -430,6 +444,17 @@ async function renderProof(hash, record){
     +'<button class="copy-btn" style="font-size:12px;padding:8px 16px;background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.2);color:#ef4444" id="dispute-submit-btn" onclick="submitDispute(\''+hash+'\')">Submit Dispute</button>'
     +'<div id="dispute-result" style="margin-top:8px"></div>'
     +'</div>'
+    +'</div>';
+
+  // S40: Verify Another File drop zone
+  html += '<div class="verify-section" style="margin-top:16px">'
+    +'<div class="verify-title" style="color:#4ade80">Verify Another File</div>'
+    +'<div class="verify-desc">Check if any file has a published HIP attestation.</div>'
+    +'<div class="drop-zone" id="quick-verify-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleQuickVerifyDrop(event)" onclick="document.getElementById(\'quick-verify-input\').click()">'
+    +'<div class="drop-label" id="quick-verify-label">Drop any file here to check the registry</div>'
+    +'<input type="file" id="quick-verify-input" style="display:none" onchange="handleQuickVerifyFile(event)">'
+    +'</div>'
+    +'<div id="quick-verify-result"></div>'
     +'</div>';
 
   html += '<div style="text-align:center;margin-top:8px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
@@ -581,8 +606,9 @@ async function checkPHash(f, storedPHash){
 }
 
 // ── Copy embed code ──
-function copyEmbed(hash, clsLabel){
-  var code = '<a href="https://hipprotocol.org/proof/'+hash+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'">\n  <img src="https://hipprotocol.org/badge.png" alt="HIP Verified" width="32" height="32">\n</a>';
+function copyEmbed(hash, clsLabel, shortId){
+  var url = shortId ? 'https://hipprotocol.org/p/'+shortId : 'https://hipprotocol.org/proof/'+hash;
+  var code = '<a href="'+url+'" target="_blank" rel="noopener" title="HIP Verified — '+clsLabel+'">\n  <img src="https://hipprotocol.org/badge.png" alt="HIP Verified" width="32" height="32">\n</a>';
   navigator.clipboard&&navigator.clipboard.writeText(code).then(function(){
     var btn=qs("embed-copy-btn");
     if(btn){btn.textContent="Copied!";setTimeout(function(){btn.textContent="Copy embed code"},2000);}
@@ -654,6 +680,51 @@ async function submitDispute(hash){
     if(el)el.innerHTML='<div class="drop-result match-none">Error: '+ex.message+'</div>';
   }
   if(btn){btn.disabled=false;btn.textContent="Submit Dispute"}
+}
+
+// ── S40: Quick Verify Another File ──
+async function quickVerifyFile(f){
+  if(!f)return;
+  var lbl=qs("quick-verify-label");
+  var el=qs("quick-verify-result");
+  if(lbl)lbl.textContent="Checking: "+f.name+"…";
+  if(el)el.innerHTML='<div class="drop-result sig-pending">Computing hash and checking registry…</div>';
+  try{
+    var buf=await f.arrayBuffer();
+    var h=await sha256(new Uint8Array(buf));
+    var resp=await fetch(WORKER_URL+"/api/proof/"+h);
+    var data=await resp.json();
+    if(resp.ok&&data.found){
+      var cls=CLS_LABELS[data.classification]||data.classification;
+      var tierCls=data.credential_tier===1?"tier-1":data.credential_tier===2?"tier-2":"tier-3";
+      var link=data.short_id?"https://hipprotocol.org/p/"+data.short_id:"https://hipprotocol.org/proof.html?hash="+h;
+      el.innerHTML='<div class="drop-result match-exact">'
+        +'<strong>✓ Attested content found</strong><br>'
+        +'<span style="font-size:12px;opacity:0.9">'+cls+' · <span class="'+tierCls+'">Tier '+data.credential_tier+'</span>'
+        +' · '+fmtDate(data.attested_at)+'</span><br>'
+        +'<a href="'+link+'" style="font-size:11px;color:#E05A00;margin-top:6px;display:inline-block">View proof card →</a>'
+        +'</div>';
+    } else {
+      el.innerHTML='<div class="drop-result match-none">'
+        +'<strong>No attestation found</strong><br>'
+        +'<span style="font-size:11px;opacity:0.7">SHA-256: '+h+'</span>'
+        +'</div>';
+    }
+    if(lbl)lbl.textContent=f.name+" — tap to check another";
+  }catch(ex){
+    if(el)el.innerHTML='<div class="drop-result match-none">Error: '+ex.message+'</div>';
+    if(lbl)lbl.textContent="Drop any file here to check the registry";
+  }
+}
+function handleQuickVerifyDrop(ev){
+  ev.preventDefault();
+  qs("quick-verify-zone").classList.remove("drag-over");
+  var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];
+  if(f)quickVerifyFile(f);
+}
+function handleQuickVerifyFile(ev){
+  var f=ev.target.files&&ev.target.files[0];
+  if(f)quickVerifyFile(f);
 }
 
 // ── Boot ──
