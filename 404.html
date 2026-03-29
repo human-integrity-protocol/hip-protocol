@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HIP — Human Integrity Protocol</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<script>
+(function(){
+  var path = window.location.pathname;
+  // /p/ short links → resolve via Cloudflare worker
+  if (/^\/p\/[A-Za-z0-9]{4,16}$/.test(path)) {
+    window.location.replace('https://hip-tier1-worker.hipprotocol.workers.dev' + path);
+    return;
+  }
+  // /proof/ hash links → redirect to proof.html
+  var m = path.match(/^\/proof\/([0-9a-fA-F]{64})$/);
+  if (m) {
+    window.location.replace('https://hipprotocol.org/proof.html?hash=' + m[1].toLowerCase());
+    return;
+  }
+  // Otherwise show 404
+  document.addEventListener('DOMContentLoaded', function(){
+    document.getElementById('c').style.display = 'flex';
+  });
+})();
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0A0A0A;font-family:'Space Grotesk',system-ui,sans-serif;color:#E8E8E0;min-height:100vh}
+#c{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}
+h1{font-size:72px;font-weight:300;color:#333;margin-bottom:8px}
+p{font-size:15px;color:#666;line-height:1.7;max-width:440px;margin-bottom:24px}
+a{color:#E05A00;text-decoration:none}
+a:hover{text-decoration:underline}
+.back{font-size:13px;color:#555}
+</style>
+</head>
+<body>
+<div id="c">
+  <h1>404</h1>
+  <p>This page doesn't exist on the Human Integrity Protocol site.</p>
+  <a class="back" href="https://hipprotocol.org">← hipprotocol.org</a>
+</div>
+</body>
+</html>
