@@ -1660,7 +1660,9 @@ try{
     protocol_version:"1.2"
   };
   var resp=await fetch(HIP_WORKER_URL+"/register-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  var data=await resp.json();
+  var text=await resp.text();
+  var data;
+  try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
     setProofUrl(data.proof_url);
   } else if(resp.status===409&&data.existing_record){
