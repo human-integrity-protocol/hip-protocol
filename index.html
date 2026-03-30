@@ -2056,6 +2056,8 @@ var pbs=useState(false);var publishing=pbs[0];var setPublishing=pbs[1];
 var pes=useState(null);var publishError=pes[0];var setPublishError=pes[1];
 var pcs=useState(false);var proofCopied=pcs[0];var setProofCopied=pcs[1];
 var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
+// S43: Bundle/Anchor expander state
+var bas=useState(false);var showBundleAnchor=bas[0];var setShowBundleAnchor=bas[1];
 // S43: Badge overlay state
 var bgs=useState(false);var badgeEnabled=bgs[0];var setBadgeEnabled=bgs[1];
 var bcs=useState("br");var badgeCorner=bcs[0];var setBadgeCorner=bcs[1];
@@ -2380,11 +2382,11 @@ ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your
 e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":isWebPFile?"attested.webp":"attested.png")},"↓ Save Attested "+fname),
 e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":isWebPFile?"This WebP now contains XMP metadata with: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
-e("a",{className:"hip-cta-btn",style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card")),
-e("div",{style:{display:"flex",gap:8}},
+e("a",{className:"hip-cta-btn",style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card"),
+e("button",{onClick:function(){setShowBundleAnchor(!showBundleAnchor)},style:{background:"none",border:"none",color:t2,cursor:"pointer",fontSize:10,fontFamily:mo,padding:"6px 0",marginTop:6,width:"100%",textAlign:"center",letterSpacing:0.5}},showBundleAnchor?"▾ Hide Bundle & Anchor files":"▸ Bundle & Anchor files"),
+showBundleAnchor&&e("div",{style:{display:"flex",gap:8,marginTop:6}},
 e("a",{className:"hip-cta-btn",style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:bundleBlobURL,download:"HIP_Bundle.json"},"↓ Bundle"),
-e("a",{className:"hip-cta-btn",style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor")),
-e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:2,textAlign:"center"}},"Tip: right-click any download link and choose \"Save As\" to pick a save location."),
+e("a",{className:"hip-cta-btn",style:Object.assign({},btnDl,{flex:1,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:anchorBlobURL,download:"HIP_Anchor.json"},"↓ Anchor"))),
 e("div",{style:{borderTop:"1px solid "+bd,marginTop:14,paddingTop:14}},
 e("div",{style:{marginBottom:14}},
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:8}},"Public Proof Link"),
