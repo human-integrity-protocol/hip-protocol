@@ -2063,6 +2063,14 @@ var bms=useState("auto");var badgeMode=bms[0];var setBadgeMode=bms[1];
 var bss=useState(4);var badgeSize=bss[0];var setBadgeSize=bss[1];
 var bos=useState(35);var badgeOpacity=bos[0];var setBadgeOpacity=bos[1];
 var bmgs=useState(2);var badgeMargin=bmgs[0];var setBadgeMargin=bmgs[1];
+var bft=useState(false);var badgeFineTune=bft[0];var setBadgeFineTune=bft[1];
+var badgeRef=useRef(null);
+// S43: Auto-scroll badge preview into view when enabled
+useEffect(function(){
+  if(badgeEnabled&&badgeRef.current){
+    setTimeout(function(){badgeRef.current&&badgeRef.current.scrollIntoView({behavior:"smooth",block:"nearest"})},100);
+  }
+},[badgeEnabled]);
 
 // S34/S41/S42: convenience — does this file support HIP metadata embedding?
 var canEmbedImage = isJpg || isPngFile || isWebPFile;
@@ -2425,7 +2433,7 @@ e("input",{type:"checkbox",checked:badgeEnabled,readOnly:true,style:{marginTop:2
 e("div",null,
 e("div",{style:{fontSize:13,color:t1,fontWeight:500,marginBottom:2}},"Add verification badge"),
 e("div",{style:{fontSize:11,color:t2,lineHeight:1.5}},"Composite a small HIP badge into your image. Cosmetic only — the real proof is in the embedded cryptographic metadata. This just lets viewers see up front the image is HIP-attested."))),
-badgeEnabled&&e("div",{style:{marginTop:12}},
+badgeEnabled&&e("div",{ref:badgeRef,style:{marginTop:12}},
 // Warning
 e("div",{style:{padding:"8px 12px",background:"rgba(250,204,21,0.06)",border:"1px solid rgba(250,204,21,0.2)",borderRadius:6,marginBottom:12}},
 e("div",{style:{fontSize:11,color:"#facc15",lineHeight:1.6}},e("strong",null,"Permanent: "),"The badge becomes part of the attested image. The content fingerprint in the ledger will be of the badged version. This cannot be changed after attestation.")),
@@ -2436,11 +2444,9 @@ e("canvas",{ref:function(cvEl){
   var img=new Image();
   img.onload=function(){
     var w=img.naturalWidth,h=img.naturalHeight;
-    // Scale canvas for preview (max 600px wide)
     var scale=Math.min(1,600/w);var cw=Math.round(w*scale),ch=Math.round(h*scale);
     cvEl.width=cw;cvEl.height=ch;
     var ctx=cvEl.getContext("2d");ctx.drawImage(img,0,0,cw,ch);
-    // Draw badge
     if(_hipBadgeLight&&_hipBadgeDark){
       var bSz=Math.round(Math.min(cw,ch)*(badgeSize/100)),m=Math.round(Math.min(cw,ch)*(badgeMargin/100));
       var bx,by;
@@ -2457,28 +2463,28 @@ e("canvas",{ref:function(cvEl){
   if(src){img.src=src}
   else if(srcBytes){var blob=new Blob([srcBytes],{type:isWebPFile?"image/webp":"image/png"});img.src=URL.createObjectURL(blob)}
 },style:{width:"100%",borderRadius:4,border:"1px solid "+bd,display:"block"}}),
-// Controls row
+// Compact controls: corner + tone on one row
 e("div",{style:{display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",marginRight:4}},"CORNER"),
 ["tl","tr","bl","br"].map(function(c){return e("button",{key:c,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeCorner===c?go:bd),borderRadius:3,background:badgeCorner===c?"rgba(74,222,128,0.06)":"transparent",color:badgeCorner===c?go:t2,cursor:"pointer",letterSpacing:1},onClick:function(){setBadgeCorner(c)}},c.toUpperCase())}),
 e("div",{style:{width:1,height:16,background:bd,margin:"0 4px"}}),
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",marginRight:4}},"TONE"),
 ["auto","light","dark"].map(function(m){return e("button",{key:m,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeMode===m?go:bd),borderRadius:3,background:badgeMode===m?"rgba(74,222,128,0.06)":"transparent",color:badgeMode===m?go:t2,cursor:"pointer",textTransform:"capitalize"},onClick:function(){setBadgeMode(m)}},m)})),
-// S43: Size slider
-e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:8}},
+// Fine-tune expander
+e("button",{onClick:function(){setBadgeFineTune(!badgeFineTune)},style:{background:"none",border:"none",color:t2,cursor:"pointer",fontSize:10,fontFamily:mo,padding:"6px 0",marginTop:4,letterSpacing:1}},badgeFineTune?"▾ HIDE SIZE / OPACITY / MARGIN":"▸ FINE-TUNE SIZE / OPACITY / MARGIN"),
+badgeFineTune&&e("div",{style:{marginTop:4}},
+e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:4}},
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"SIZE"),
 e("input",{type:"range",min:2,max:12,step:0.5,value:badgeSize,onChange:function(ev){setBadgeSize(parseFloat(ev.target.value))},style:{flex:1,accentColor:go}}),
 e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeSize+"%")),
-// S43: Opacity slider
 e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:4}},
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"OPACITY"),
 e("input",{type:"range",min:10,max:90,step:5,value:badgeOpacity,onChange:function(ev){setBadgeOpacity(parseInt(ev.target.value))},style:{flex:1,accentColor:go}}),
 e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeOpacity+"%")),
-// S43: Margin slider
 e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:4}},
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"MARGIN"),
 e("input",{type:"range",min:1,max:8,step:0.5,value:badgeMargin,onChange:function(ev){setBadgeMargin(parseFloat(ev.target.value))},style:{flex:1,accentColor:go}}),
-e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeMargin+"%")))),
+e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeMargin+"%"))))),
 // S37: Sealed attestation option — opt-in, unchecked by default
 e("div",{style:{marginTop:8,padding:"10px 14px",border:"1px solid "+bd,borderRadius:6,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},onClick:function(){setSealedAttest(!sealedAttest)}},
 e("input",{type:"checkbox",checked:sealedAttest,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
