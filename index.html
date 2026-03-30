@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,shrink-to-fit=no">
+<style>html,body{overflow-x:hidden;width:100%;-webkit-text-size-adjust:100%;}*{box-sizing:border-box;}</style>
 <title>HIP — Human Integrity Protocol</title>
 <meta name="description" content="Cryptographic attestation protocol for human-origin content. Verify that creative work is human-made — permanently, publicly, without any institution's permission.">
 <meta property="og:title" content="HIP — Human Integrity Protocol">
@@ -2067,6 +2068,13 @@ var bos=useState(35);var badgeOpacity=bos[0];var setBadgeOpacity=bos[1];
 var bmgs=useState(2);var badgeMargin=bmgs[0];var setBadgeMargin=bmgs[1];
 var bft=useState(false);var badgeFineTune=bft[0];var setBadgeFineTune=bft[1];
 var badgeRef=useRef(null);
+var proofCardRef=useRef(null);
+// S43: Auto-scroll proof card to top of viewport when Step 4 renders
+useEffect(function(){
+  if(step===4&&proofCardRef.current){
+    setTimeout(function(){proofCardRef.current&&proofCardRef.current.scrollIntoView({behavior:"smooth",block:"start"})},150);
+  }
+},[step]);
 // S43: Auto-scroll badge preview into view when enabled
 useEffect(function(){
   if(badgeEnabled&&badgeRef.current){
@@ -2358,7 +2366,7 @@ e("button",{style:btnSm,onClick:function(){setStep(0);setHash(null);setFname(nul
 if(step===4&&proofcard){
 var clsN={"CompleteHumanOrigin":"Complete Human Origin","HumanOriginAssisted":"Human Origin Assisted","HumanDirectedCollaborative":"Human-Directed Collaborative"}[proofcard.proofBundle.credentialSubject.classification]||cls;
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("div",{style:{padding:18,background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
+e("div",{ref:proofCardRef,style:{padding:18,background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}},
 e("div",{style:{display:"flex",alignItems:"center",gap:8}},e(Ico,{name:"chart",size:18,color:go}),e("span",{style:{fontFamily:mo,fontSize:13,letterSpacing:1,color:go}},"HIP Proof Card")),
 e("div",{style:{fontSize:11,fontFamily:mo,padding:"3px 10px",background:"rgba(74,222,128,0.08)",color:"#4ade80",borderRadius:20,border:"1px solid rgba(74,222,128,0.2)",fontWeight:600,textTransform:"uppercase"}},"VERIFIED")),
