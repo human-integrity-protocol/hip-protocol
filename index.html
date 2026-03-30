@@ -2060,7 +2060,9 @@ var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
 var bgs=useState(false);var badgeEnabled=bgs[0];var setBadgeEnabled=bgs[1];
 var bcs=useState("br");var badgeCorner=bcs[0];var setBadgeCorner=bcs[1];
 var bms=useState("auto");var badgeMode=bms[0];var setBadgeMode=bms[1];
-var HIP_BADGE_SIZE=4,HIP_BADGE_OPACITY=0.35,HIP_BADGE_MARGIN=2;
+var bss=useState(4);var badgeSize=bss[0];var setBadgeSize=bss[1];
+var bos=useState(35);var badgeOpacity=bos[0];var setBadgeOpacity=bos[1];
+var bmgs=useState(2);var badgeMargin=bmgs[0];var setBadgeMargin=bmgs[1];
 
 // S34/S41/S42: convenience — does this file support HIP metadata embedding?
 var canEmbedImage = isJpg || isPngFile || isWebPFile;
@@ -2128,7 +2130,7 @@ var pcFilename="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")
 // S43: Badge overlay — composite badge into image before metadata embed
 if(badgeEnabled&&canEmbedImage&&_hipBadgeLight&&_hipBadgeDark){
   try{
-    var badgeCfg={corner:badgeCorner,mode:badgeMode,size:HIP_BADGE_SIZE,opacity:HIP_BADGE_OPACITY,margin:HIP_BADGE_MARGIN};
+    var badgeCfg={corner:badgeCorner,mode:badgeMode,size:badgeSize,opacity:badgeOpacity/100,margin:badgeMargin};
     var bImg=new Image();
     var bSrc;
     if(rawDataURL){bSrc=rawDataURL}
@@ -2422,7 +2424,7 @@ e("div",{style:{display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},
 e("input",{type:"checkbox",checked:badgeEnabled,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
 e("div",null,
 e("div",{style:{fontSize:13,color:t1,fontWeight:500,marginBottom:2}},"Add verification badge"),
-e("div",{style:{fontSize:11,color:t2,lineHeight:1.5}},"Composites a small HIP badge into your image. Cosmetic only — the real proof is cryptographic metadata."))),
+e("div",{style:{fontSize:11,color:t2,lineHeight:1.5}},"Composite a small HIP badge into your image. Cosmetic only — the real proof is in the embedded cryptographic metadata. This just lets viewers see up front the image is HIP-attested."))),
 badgeEnabled&&e("div",{style:{marginTop:12}},
 // Warning
 e("div",{style:{padding:"8px 12px",background:"rgba(250,204,21,0.06)",border:"1px solid rgba(250,204,21,0.2)",borderRadius:6,marginBottom:12}},
@@ -2440,7 +2442,7 @@ e("canvas",{ref:function(cvEl){
     var ctx=cvEl.getContext("2d");ctx.drawImage(img,0,0,cw,ch);
     // Draw badge
     if(_hipBadgeLight&&_hipBadgeDark){
-      var bSz=Math.round(Math.min(cw,ch)*(HIP_BADGE_SIZE/100)),m=Math.round(Math.min(cw,ch)*(HIP_BADGE_MARGIN/100));
+      var bSz=Math.round(Math.min(cw,ch)*(badgeSize/100)),m=Math.round(Math.min(cw,ch)*(badgeMargin/100));
       var bx,by;
       switch(badgeCorner){case"tl":bx=m;by=m;break;case"tr":bx=cw-bSz-m;by=m;break;case"bl":bx=m;by=ch-bSz-m;break;default:bx=cw-bSz-m;by=ch-bSz-m;}
       var badge;
@@ -2449,7 +2451,7 @@ e("canvas",{ref:function(cvEl){
       else{var id=ctx.getImageData(Math.max(0,bx),Math.max(0,by),Math.max(1,bSz),Math.max(1,bSz)).data,sum=0,ct=0;
         for(var i=0;i<id.length;i+=4){sum+=id[i]*0.299+id[i+1]*0.587+id[i+2]*0.114;ct++}
         badge=(ct>0&&sum/ct>128)?_hipBadgeDark:_hipBadgeLight;}
-      ctx.globalAlpha=HIP_BADGE_OPACITY;ctx.drawImage(badge,bx,by,bSz,bSz);ctx.globalAlpha=1;
+      ctx.globalAlpha=badgeOpacity/100;ctx.drawImage(badge,bx,by,bSz,bSz);ctx.globalAlpha=1;
     }
   };
   if(src){img.src=src}
@@ -2461,7 +2463,22 @@ e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform
 ["tl","tr","bl","br"].map(function(c){return e("button",{key:c,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeCorner===c?go:bd),borderRadius:3,background:badgeCorner===c?"rgba(74,222,128,0.06)":"transparent",color:badgeCorner===c?go:t2,cursor:"pointer",letterSpacing:1},onClick:function(){setBadgeCorner(c)}},c.toUpperCase())}),
 e("div",{style:{width:1,height:16,background:bd,margin:"0 4px"}}),
 e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",marginRight:4}},"TONE"),
-["auto","light","dark"].map(function(m){return e("button",{key:m,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeMode===m?go:bd),borderRadius:3,background:badgeMode===m?"rgba(74,222,128,0.06)":"transparent",color:badgeMode===m?go:t2,cursor:"pointer",textTransform:"capitalize"},onClick:function(){setBadgeMode(m)}},m)})))),
+["auto","light","dark"].map(function(m){return e("button",{key:m,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeMode===m?go:bd),borderRadius:3,background:badgeMode===m?"rgba(74,222,128,0.06)":"transparent",color:badgeMode===m?go:t2,cursor:"pointer",textTransform:"capitalize"},onClick:function(){setBadgeMode(m)}},m)})),
+// S43: Size slider
+e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:8}},
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"SIZE"),
+e("input",{type:"range",min:2,max:12,step:0.5,value:badgeSize,onChange:function(ev){setBadgeSize(parseFloat(ev.target.value))},style:{flex:1,accentColor:go}}),
+e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeSize+"%")),
+// S43: Opacity slider
+e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:4}},
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"OPACITY"),
+e("input",{type:"range",min:10,max:90,step:5,value:badgeOpacity,onChange:function(ev){setBadgeOpacity(parseInt(ev.target.value))},style:{flex:1,accentColor:go}}),
+e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeOpacity+"%")),
+// S43: Margin slider
+e("div",{style:{display:"flex",alignItems:"center",gap:8,marginTop:4}},
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",minWidth:52}},"MARGIN"),
+e("input",{type:"range",min:1,max:8,step:0.5,value:badgeMargin,onChange:function(ev){setBadgeMargin(parseFloat(ev.target.value))},style:{flex:1,accentColor:go}}),
+e("span",{style:{fontSize:11,color:go,fontFamily:mo,minWidth:32,textAlign:"right"}},badgeMargin+"%")))),
 // S37: Sealed attestation option — opt-in, unchecked by default
 e("div",{style:{marginTop:8,padding:"10px 14px",border:"1px solid "+bd,borderRadius:6,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},onClick:function(){setSealedAttest(!sealedAttest)}},
 e("input",{type:"checkbox",checked:sealedAttest,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
