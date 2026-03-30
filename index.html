@@ -2381,11 +2381,11 @@ e("div",{style:{borderTop:"1px solid "+bd,marginTop:14,paddingTop:14}},
 e("div",{style:{marginBottom:14}},
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:8}},"Public Proof Link"),
 !proofUrl?e("div",null,
-e("div",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:10}},"Get a shareable link anyone can use to verify your work"+(pHash?" — includes visual fingerprint for screenshot matching":"")+"."),
+e("div",{style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:10}},"Get a shareable link anyone can use to verify your work"+(pHash?" — includes visual fingerprint for screenshot matching":"")+"."+(canEmbed?" Publishing also unlocks your Save Attested Copy — a version of your file with the full proof embedded in its metadata.":"")),
 sealedAttest&&ToolAlert("info","Sealed — timestamp registered, details stay private until you unseal."),
 e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:4,background:go,border:"1px solid "+go,color:"#fff"}),onClick:publishProof,disabled:publishing},publishing?"Publishing...":"Publish Proof Link"),
 publishError&&e("div",{style:{fontSize:12,color:"#ef4444",fontFamily:mo,textAlign:"center",marginTop:4,marginBottom:4}},publishError),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,textAlign:"center"}},"Optional. Your local Proof Card works without this."))
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,textAlign:"center"}},canEmbed?"Recommended. Also generates your Save Attested Copy download.":"Optional. Your local Proof Card works without this."))
 :e("div",null,
 ToolAlert("success",e("span",null,e("strong",null,sealedAttest?"Sealed proof registered. ":"Proof published. "),"Share this link alongside your work.")),
 e("div",{style:{padding:"10px 14px",background:"rgba(255,255,255,0.03)",borderRadius:6,border:"1px solid "+bd,marginBottom:6,display:"flex",alignItems:"center",gap:8}},
