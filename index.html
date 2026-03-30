@@ -38,6 +38,8 @@ em{font-style:italic}
 .hip-nav-link:hover{color:#E8E8E0!important;text-decoration:none!important}
 .hip-cta-btn{transition:filter 0.15s,box-shadow 0.15s!important}
 .hip-cta-btn:hover{filter:brightness(1.15)!important;box-shadow:0 0 16px rgba(224,90,0,0.3)!important;text-decoration:none!important;opacity:1!important}
+.hip-nav-btn{transition:none!important;cursor:pointer}
+.hip-nav-btn:hover{background:#E05A00!important;color:#fff!important;border-color:#E05A00!important;filter:none!important;box-shadow:none!important;opacity:1!important}
 .hip-verify-card{transition:border-color 0.15s,background 0.15s!important}
 .hip-verify-card:hover{border-color:#E05A00!important;background:rgba(224,90,0,0.04)!important;text-decoration:none!important;opacity:1!important}
 .hip-footer-link{transition:color 0.15s!important}
@@ -111,6 +113,37 @@ var G = {
 var hex = function(b) { return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,"0")}).join("") };
 var unhex = function(h) { var b = new Uint8Array(h.length/2); for(var i=0;i<h.length;i+=2) b[i/2]=parseInt(h.substr(i,2),16); return b };
 var sha256 = async function(d) { var buf = typeof d==="string" ? new TextEncoder().encode(d) : d; return hex(await crypto.subtle.digest("SHA-256",buf)) };
+
+// S43: HIP verification badge overlay — base64 PNG (200x200, black silhouette)
+var HIP_BADGE_B64 = "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";
+// S43: Prepare light (white) and dark (black) badge canvases
+var _hipBadgeLight=null,_hipBadgeDark=null;
+(function(){
+  var img=new Image();img.src="data:image/png;base64,"+HIP_BADGE_B64;
+  img.onload=function(){
+    var sz=img.width;
+    var dc=document.createElement("canvas");dc.width=sz;dc.height=sz;dc.getContext("2d").drawImage(img,0,0);_hipBadgeDark=dc;
+    var lc=document.createElement("canvas");lc.width=sz;lc.height=sz;var lx=lc.getContext("2d");lx.drawImage(img,0,0);
+    var id=lx.getImageData(0,0,sz,sz),d=id.data;for(var i=0;i<d.length;i+=4){d[i]=255-d[i];d[i+1]=255-d[i+1];d[i+2]=255-d[i+2]}
+    lx.putImageData(id,0,0);_hipBadgeLight=lc;
+  };
+})();
+// S43: Composite badge onto image canvas, returns canvas. src=Image or canvas, cfg={corner,mode,size,opacity,margin}
+function hipBadgeComposite(src,w,h,cfg){
+  var cv=document.createElement("canvas");cv.width=w;cv.height=h;var ctx=cv.getContext("2d");
+  ctx.drawImage(src,0,0,w,h);
+  var bSz=Math.round(Math.min(w,h)*(cfg.size/100)),m=Math.round(Math.min(w,h)*(cfg.margin/100));
+  var x,y;
+  switch(cfg.corner){case"tl":x=m;y=m;break;case"tr":x=w-bSz-m;y=m;break;case"bl":x=m;y=h-bSz-m;break;default:x=w-bSz-m;y=h-bSz-m;}
+  var badge;
+  if(cfg.mode==="light"){badge=_hipBadgeLight}
+  else if(cfg.mode==="dark"){badge=_hipBadgeDark}
+  else{var id=ctx.getImageData(Math.max(0,x),Math.max(0,y),Math.max(1,bSz),Math.max(1,bSz)).data,sum=0,ct=0;
+    for(var i=0;i<id.length;i+=4){sum+=id[i]*0.299+id[i+1]*0.587+id[i+2]*0.114;ct++}
+    badge=(ct>0&&sum/ct>128)?_hipBadgeDark:_hipBadgeLight;}
+  ctx.globalAlpha=cfg.opacity;ctx.drawImage(badge,x,y,bSz,bSz);ctx.globalAlpha=1;
+  return cv;
+}
 
 // ── S37: Perceptual hash (DCT-based, 64-bit) ──
 // Computes a perceptual fingerprint of an image that is robust to
@@ -582,6 +615,137 @@ return{buffer:rb,filename:fn,mimeType:mime,format:fmt};
 return{embed:embedImage,detectFormat:detectFmt};
 })();
 
+// ── S42: HipFileEmbed — universal post-attestation metadata embedding ──
+// Extends HipImageEmbed to support PDF, Office (DOCX/XLSX/PPTX), MP3, FLAC, WAV, MP4/MOV, AVI.
+// Image formats delegate to HipImageEmbed. All client-side.
+var HipFileEmbed=(function(){
+var CLS_L={CompleteHumanOrigin:"Complete Human Origin",HumanOriginAssisted:"Human Origin Assisted",HumanDirectedCollaborative:"Human-Directed Collaborative"};
+function sB(s){return new TextEncoder().encode(s)}
+function u32l(n){return new Uint8Array([n&0xFF,(n>>>8)&0xFF,(n>>>16)&0xFF,(n>>>24)&0xFF])}
+function u32b(n){return new Uint8Array([(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF])}
+function bJSON(m){var pu=m.short_url||("https://hipprotocol.org/proof.html?hash="+m.content_hash);
+return JSON.stringify({protocol:"HIP",version:m.protocol_version||"1.2",content_hash:m.content_hash,credential_id:m.credential_id,classification:m.classification,classification_label:CLS_L[m.classification]||m.classification,attested_at:m.attested_at,signature:m.signature,proof_url:pu})}
+function detectFmt(buf,fn){var u=new Uint8Array(buf,0,Math.min(buf.byteLength,16));
+if(u[0]===0xFF&&u[1]===0xD8&&u[2]===0xFF)return"jpeg";if(u[0]===0x89&&u[1]===0x50&&u[2]===0x4E&&u[3]===0x47)return"png";
+if(u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46&&u[8]===0x57&&u[9]===0x45&&u[10]===0x42&&u[11]===0x50)return"webp";
+if(u[0]===0x25&&u[1]===0x50&&u[2]===0x44&&u[3]===0x46)return"pdf";
+if(u[0]===0x50&&u[1]===0x4B&&u[2]===0x03&&u[3]===0x04){var ext=fn?fn.toLowerCase().split(".").pop():"";if(ext==="docx"||ext==="xlsx"||ext==="pptx")return"ooxml";return"zip"}
+if(u[0]===0x49&&u[1]===0x44&&u[2]===0x33)return"mp3";if(u[0]===0xFF&&(u[1]&0xE0)===0xE0)return"mp3";
+if(u[0]===0x66&&u[1]===0x4C&&u[2]===0x61&&u[3]===0x43)return"flac";
+if(u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46&&u[8]===0x57&&u[9]===0x41&&u[10]===0x56&&u[11]===0x45)return"wav";
+if(buf.byteLength>8){var ft=String.fromCharCode(u[4],u[5],u[6],u[7]);if(ft==="ftyp")return"mp4"}
+if(fn){var ext2=fn.toLowerCase().split(".").pop();if(ext2==="mp4"||ext2==="mov"||ext2==="m4v"||ext2==="m4a")return"mp4";if(ext2==="avi")return"avi"}
+if(u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46&&u[8]===0x41&&u[9]===0x56&&u[10]===0x49)return"avi";
+return null}
+// PDF: incremental update with HIP Info dict entries
+function embedPDF(buf,meta){var src=new Uint8Array(buf);var cl=CLS_L[meta.classification]||meta.classification;var pu=meta.short_url||("https://hipprotocol.org/proof.html?hash="+meta.content_hash);
+var esc=function(s){return s.replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)")};
+var text=new TextDecoder("latin1").decode(src);var startxrefMatch=text.match(/startxref\s+(\d+)\s*%%EOF/g);var lastSxr=0;
+if(startxrefMatch){var last=startxrefMatch[startxrefMatch.length-1];var m=last.match(/startxref\s+(\d+)/);if(m)lastSxr=parseInt(m[1])}
+var maxObj=0;var objM=text.matchAll(/(\d+)\s+\d+\s+obj/g);for(var om of objM){var on=parseInt(om[1]);if(on>maxObj)maxObj=on}
+var nn=maxObj+1;var no=nn+" 0 obj\n<< /Title ("+esc("HIP Attested: "+cl+" | Proof: "+pu)+")\n /Creator (HIP Protocol - hipprotocol.org) /Producer (HIP File Embed)\n";
+no+=" /HIPProtocol (HIP) /HIPVersion ("+(meta.protocol_version||"1.2")+") /HIPContentHash ("+esc(meta.content_hash)+") /HIPCredentialID ("+esc(meta.credential_id)+")\n";
+no+=" /HIPClassification ("+esc(meta.classification)+") /HIPClassificationLabel ("+esc(cl)+") /HIPAttestedAt ("+esc(meta.attested_at)+")\n";
+no+=" /HIPSignature ("+esc(meta.signature)+") /HIPProofURL ("+esc(pu)+")\n>>\nendobj\n\n";
+var noOff=src.length;var xr="xref\n"+nn+" 1\n"+noOff.toString().padStart(10,"0")+" 00000 n \ntrailer\n<< /Info "+nn+" 0 R /Prev "+lastSxr+" >>\nstartxref\n"+(noOff+sB(no).length)+"\n%%EOF\n";
+var ab=sB(no+xr);var result=new Uint8Array(src.length+ab.length);result.set(src,0);result.set(ab,src.length);return result.buffer}
+// OOXML: add docProps/custom.xml with HIP properties
+async function embedOOXML(buf,meta){var bytes=new Uint8Array(buf);var cl=CLS_L[meta.classification]||meta.classification;var pu=meta.short_url||("https://hipprotocol.org/proof.html?hash="+meta.content_hash);
+var cx='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">\n';
+var pid=2;var props=[["HIP:Protocol","HIP"],["HIP:Version",meta.protocol_version||"1.2"],["HIP:ContentHash",meta.content_hash],["HIP:CredentialID",meta.credential_id],["HIP:Classification",meta.classification],["HIP:ClassificationLabel",cl],["HIP:AttestedAt",meta.attested_at],["HIP:Signature",meta.signature],["HIP:ProofURL",pu]];
+for(var pi=0;pi<props.length;pi++){cx+='<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="'+pid+'" name="'+props[pi][0]+'"><vt:lpwstr>'+props[pi][1]+'</vt:lpwstr></property>\n';pid++}
+cx+='</Properties>';var cb=sB(cx);var cfn=sB("docProps/custom.xml");
+var dv=new DataView(buf);var eocdPos=-1;
+for(var i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){if(bytes[i]===0x50&&bytes[i+1]===0x4B&&bytes[i+2]===0x05&&bytes[i+3]===0x06){eocdPos=i;break}}
+if(eocdPos<0)throw new Error("Not a valid ZIP");var cdOff=dv.getUint32(eocdPos+16,true);var ne=dv.getUint16(eocdPos+10,true);
+var cdE=[];var pos=cdOff;for(var e=0;e<ne&&pos+46<=bytes.length;e++){var fnl=dv.getUint16(pos+28,true);var el=dv.getUint16(pos+30,true);var cl2=dv.getUint16(pos+32,true);var es=46+fnl+el+cl2;
+var efn=new TextDecoder().decode(bytes.subarray(pos+46,pos+46+fnl));if(efn!=="docProps/custom.xml")cdE.push({data:bytes.slice(pos,pos+es)});pos+=es}
+var ccrc=_pngCrcTable?crc32Buf(cb):0;var lh=new Uint8Array(30+cfn.length);lh[0]=0x50;lh[1]=0x4B;lh[2]=0x03;lh[3]=0x04;lh[4]=0x14;
+lh.set(u32l(ccrc),14);lh.set(u32l(cb.length),18);lh.set(u32l(cb.length),22);lh[26]=cfn.length&0xFF;lh[27]=(cfn.length>>8)&0xFF;lh.set(cfn,30);
+var nlo=cdOff;var cde=new Uint8Array(46+cfn.length);cde[0]=0x50;cde[1]=0x4B;cde[2]=0x01;cde[3]=0x02;cde[4]=0x14;cde[6]=0x14;
+cde.set(u32l(ccrc),16);cde.set(u32l(cb.length),20);cde.set(u32l(cb.length),24);cde[28]=cfn.length&0xFF;cde[29]=(cfn.length>>8)&0xFF;cde.set(u32l(nlo),42);cde.set(cfn,46);
+var parts=[];parts.push(bytes.slice(0,cdOff));parts.push(lh);parts.push(cb);var ncdOff=cdOff+lh.length+cb.length;
+for(var ci=0;ci<cdE.length;ci++)parts.push(cdE[ci].data);parts.push(cde);
+var nne=cdE.length+1;var ncdSize=0;for(var cdi=0;cdi<cdE.length;cdi++)ncdSize+=cdE[cdi].data.length;ncdSize+=cde.length;
+var eocd=new Uint8Array(22);eocd[0]=0x50;eocd[1]=0x4B;eocd[2]=0x05;eocd[3]=0x06;eocd[8]=nne&0xFF;eocd[9]=(nne>>8)&0xFF;eocd[10]=nne&0xFF;eocd[11]=(nne>>8)&0xFF;
+eocd.set(u32l(ncdSize),12);eocd.set(u32l(ncdOff),16);parts.push(eocd);
+var tl=0;for(var p=0;p<parts.length;p++)tl+=parts[p].length;var result=new Uint8Array(tl);var off=0;for(var p2=0;p2<parts.length;p2++){result.set(parts[p2],off);off+=parts[p2].length}return result.buffer}
+function crc32Buf(data){if(!_pngCrcTable){_pngCrcTable=new Uint32Array(256);for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);_pngCrcTable[n]=c}}
+var crc=0xFFFFFFFF;for(var i=0;i<data.length;i++)crc=_pngCrcTable[(crc^data[i])&0xFF]^(crc>>>8);return(crc^0xFFFFFFFF)>>>0}
+// MP3: ID3v2 TXXX frame
+function embedMP3(buf,meta){var src=new Uint8Array(buf);var hj=bJSON(meta);var desc=sB("HIP:Proof");var val=sB(hj);
+var fd=new Uint8Array(1+desc.length+1+val.length);fd[0]=0x03;fd.set(desc,1);fd[1+desc.length]=0;fd.set(val,1+desc.length+1);
+var fs=fd.length;var fr=new Uint8Array(10+fs);fr[0]=0x54;fr[1]=0x58;fr[2]=0x58;fr[3]=0x58;fr[4]=(fs>>>24)&0xFF;fr[5]=(fs>>>16)&0xFF;fr[6]=(fs>>>8)&0xFF;fr[7]=fs&0xFF;fr.set(fd,10);
+if(src[0]===0x49&&src[1]===0x44&&src[2]===0x33){var es=(src[6]<<21)|(src[7]<<14)|(src[8]<<7)|src[9];var he=10+es;
+var ct=rmID3Frame(src.subarray(10,he),"TXXX","HIP:Proof");var nc=new Uint8Array(ct.length+fr.length);nc.set(ct,0);nc.set(fr,ct.length);
+var ns=nc.length;var nh=new Uint8Array(10);nh[0]=0x49;nh[1]=0x44;nh[2]=0x33;nh[3]=src[3];nh[4]=src[4];nh[5]=src[5];
+nh[6]=(ns>>21)&0x7F;nh[7]=(ns>>14)&0x7F;nh[8]=(ns>>7)&0x7F;nh[9]=ns&0x7F;
+var r=new Uint8Array(10+ns+(src.length-he));r.set(nh,0);r.set(nc,10);r.set(src.subarray(he),10+ns);return r.buffer;
+}else{var ts=fr.length;var h=new Uint8Array(10);h[0]=0x49;h[1]=0x44;h[2]=0x33;h[3]=0x03;h[6]=(ts>>21)&0x7F;h[7]=(ts>>14)&0x7F;h[8]=(ts>>7)&0x7F;h[9]=ts&0x7F;
+var r=new Uint8Array(10+ts+src.length);r.set(h,0);r.set(fr,10);r.set(src,10+ts);return r.buffer}}
+function rmID3Frame(td,fid,desc){var parts=[];var p=0;while(p+10<=td.length){if(td[p]===0)break;
+var fi=String.fromCharCode(td[p],td[p+1],td[p+2],td[p+3]);var fs=(td[p+4]<<24)|(td[p+5]<<16)|(td[p+6]<<8)|td[p+7];
+if(fs<=0||p+10+fs>td.length)break;var skip=false;if(fi===fid&&desc){var ds=p+10;var enc=td[ds];var de=ds+1;
+while(de<ds+fs&&td[de]!==0)de++;var d=new TextDecoder(enc===3?"utf-8":"latin1").decode(td.subarray(ds+1,de));if(d===desc)skip=true}
+if(!skip)parts.push(td.slice(p,p+10+fs));p+=10+fs}
+var tl=0;for(var i=0;i<parts.length;i++)tl+=parts[i].length;var r=new Uint8Array(tl);var o=0;for(var j=0;j<parts.length;j++){r.set(parts[j],o);o+=parts[j].length}return r}
+// FLAC: Vorbis Comment
+function embedFLAC(buf,meta){var src=new Uint8Array(buf);if(src[0]!==0x66||src[1]!==0x4C)return buf;var hj=bJSON(meta);var cs=sB("HIP_PROOF="+hj);
+var p=4;var blocks=[];var vci=-1;while(p+4<=src.length){var hdr=src[p];var isL=(hdr&0x80)!==0;var bt=hdr&0x7F;var bs=(src[p+1]<<16)|(src[p+2]<<8)|src[p+3];
+blocks.push({type:bt,isLast:isL,data:src.subarray(p+4,p+4+bs)});if(bt===4)vci=blocks.length-1;p+=4+bs;if(isL)break}var aS=p;
+if(vci>=0){var vd=blocks[vci].data;var vDV=new DataView(vd.buffer,vd.byteOffset,vd.byteLength);var vp=0;var vl=vDV.getUint32(vp,true);vp+=4;var vs=vd.subarray(vp,vp+vl);vp+=vl;
+var nc=vDV.getUint32(vp,true);vp+=4;var coms=[];for(var ci=0;ci<nc&&vp+4<=vd.length;ci++){var cl=vDV.getUint32(vp,true);vp+=4;if(vp+cl>vd.length)break;
+var c=new TextDecoder().decode(vd.subarray(vp,vp+cl));vp+=cl;if(!c.toUpperCase().startsWith("HIP_PROOF="))coms.push(sB(c))}coms.push(cs);
+var nvs=4+vl+4;for(var k=0;k<coms.length;k++)nvs+=4+coms[k].length;var nv=new Uint8Array(nvs);var nDV=new DataView(nv.buffer);var np=0;
+nDV.setUint32(np,vl,true);np+=4;nv.set(vs,np);np+=vl;nDV.setUint32(np,coms.length,true);np+=4;
+for(var ki=0;ki<coms.length;ki++){nDV.setUint32(np,coms[ki].length,true);np+=4;nv.set(coms[ki],np);np+=coms[ki].length}
+blocks[vci].data=nv;
+}else{var vn=sB("HIP Protocol");var nvs=4+vn.length+4+4+cs.length;var nv=new Uint8Array(nvs);var nDV=new DataView(nv.buffer);var np=0;
+nDV.setUint32(np,vn.length,true);np+=4;nv.set(vn,np);np+=vn.length;nDV.setUint32(np,1,true);np+=4;nDV.setUint32(np,cs.length,true);np+=4;nv.set(cs,np);
+blocks.splice(blocks.length>0?blocks.length-1:0,0,{type:4,isLast:false,data:nv})}
+var parts=[src.subarray(0,4)];for(var bi=0;bi<blocks.length;bi++){var b=blocks[bi];var bh=new Uint8Array(4);
+bh[0]=b.type|(bi===blocks.length-1?0x80:0x00);bh[1]=(b.data.length>>16)&0xFF;bh[2]=(b.data.length>>8)&0xFF;bh[3]=b.data.length&0xFF;parts.push(bh);parts.push(b.data)}
+parts.push(src.subarray(aS));var tl=0;for(var pi=0;pi<parts.length;pi++)tl+=parts[pi].length;var r=new Uint8Array(tl);var o=0;for(var p2=0;p2<parts.length;p2++){r.set(parts[p2],o);o+=parts[p2].length}return r.buffer}
+// WAV/AVI: RIFF LIST/INFO ICMT chunk
+function embedRIFF(buf,meta){var src=new Uint8Array(buf);var hj=bJSON(meta);var cb=sB(hj);var cfcc=sB("ICMT");var lt=sB("INFO");
+var ies=8+cb.length+(cb.length&1);var lds=4+ies;var lc=new Uint8Array(8+lds);lc[0]=0x4C;lc[1]=0x49;lc[2]=0x53;lc[3]=0x54;lc.set(u32l(lds),4);lc.set(lt,8);lc.set(cfcc,12);lc.set(u32l(cb.length),16);lc.set(cb,20);
+var rs=src[4]|(src[5]<<8)|(src[6]<<16)|(src[7]<<24);var re=Math.min(8+rs,src.length);
+var parts=[src.slice(0,12)];var p=12;while(p+8<=re){var fc=String.fromCharCode(src[p],src[p+1],src[p+2],src[p+3]);var sz=src[p+4]|(src[p+5]<<8)|(src[p+6]<<16)|(src[p+7]<<24);var ps=sz+(sz&1);
+if(p+8+sz>re)break;if(fc==="LIST"&&p+12<=re){var lt2=String.fromCharCode(src[p+8],src[p+9],src[p+10],src[p+11]);
+if(lt2==="INFO"){var ch=new TextDecoder("latin1").decode(src.subarray(p+8,p+8+sz));if(ch.indexOf("HIP")>=0){p+=8+ps;continue}}}
+parts.push(src.slice(p,p+8+ps));p+=8+ps}parts.push(lc);
+var tl=0;for(var pi=0;pi<parts.length;pi++)tl+=parts[pi].length;var r=new Uint8Array(tl);var o=0;for(var p2=0;p2<parts.length;p2++){r.set(parts[p2],o);o+=parts[p2].length}
+var nrs=r.length-8;r[4]=nrs&0xFF;r[5]=(nrs>>8)&0xFF;r[6]=(nrs>>16)&0xFF;r[7]=(nrs>>24)&0xFF;return r.buffer}
+// MP4: HIPd atom in moov/udta
+function embedMP4(buf,meta){var src=new Uint8Array(buf);var jb=sB(bJSON(meta));var ha=new Uint8Array(8+jb.length);var as=8+jb.length;
+ha[0]=(as>>>24)&0xFF;ha[1]=(as>>>16)&0xFF;ha[2]=(as>>>8)&0xFF;ha[3]=as&0xFF;ha[4]=0x48;ha[5]=0x49;ha[6]=0x50;ha[7]=0x64;ha.set(jb,8);
+var dv=new DataView(buf);var mp=-1,ms=0,p=0;while(p+8<=src.length){var sz=dv.getUint32(p);var tp=String.fromCharCode(src[p+4],src[p+5],src[p+6],src[p+7]);if(sz<8)break;if(tp==="moov"){mp=p;ms=sz;break}p+=sz}
+if(mp<0){var r=new Uint8Array(src.length+ha.length);r.set(src,0);r.set(ha,src.length);return r.buffer}
+var me=mp+ms;var up=-1,us=0,mp2=mp+8;while(mp2+8<=me){var mz=dv.getUint32(mp2);var mt=String.fromCharCode(src[mp2+4],src[mp2+5],src[mp2+6],src[mp2+7]);if(mz<8)break;if(mt==="udta"){up=mp2;us=mz;break}mp2+=mz}
+if(up>=0){var ue=up+us;var uParts=[];var up2=up+8;while(up2+8<=ue){var uz=dv.getUint32(up2);var ut=String.fromCharCode(src[up2+4],src[up2+5],src[up2+6],src[up2+7]);if(uz<8)break;if(ut!=="HIPd")uParts.push(src.slice(up2,up2+uz));up2+=uz}
+uParts.push(ha);var nuc=0;for(var ui=0;ui<uParts.length;ui++)nuc+=uParts[ui].length;var nus=8+nuc;var nu=new Uint8Array(nus);nu[0]=(nus>>>24)&0xFF;nu[1]=(nus>>>16)&0xFF;nu[2]=(nus>>>8)&0xFF;nu[3]=nus&0xFF;nu[4]=0x75;nu[5]=0x64;nu[6]=0x74;nu[7]=0x61;
+var uo=8;for(var ui2=0;ui2<uParts.length;ui2++){nu.set(uParts[ui2],uo);uo+=uParts[ui2].length}
+var sd=nus-us;var r=new Uint8Array(src.length+sd);r.set(src.subarray(0,up),0);r.set(nu,up);r.set(src.subarray(up+us),up+nus);
+var nms=ms+sd;r[mp]=(nms>>>24)&0xFF;r[mp+1]=(nms>>>16)&0xFF;r[mp+2]=(nms>>>8)&0xFF;r[mp+3]=nms&0xFF;return r.buffer;
+}else{var nus=8+ha.length;var nu=new Uint8Array(nus);nu[0]=(nus>>>24)&0xFF;nu[1]=(nus>>>16)&0xFF;nu[2]=(nus>>>8)&0xFF;nu[3]=nus&0xFF;nu[4]=0x75;nu[5]=0x64;nu[6]=0x74;nu[7]=0x61;nu.set(ha,8);
+var r=new Uint8Array(src.length+nus);r.set(src.subarray(0,me),0);r.set(nu,me);r.set(src.subarray(me),me+nus);
+var nms=ms+nus;r[mp]=(nms>>>24)&0xFF;r[mp+1]=(nms>>>16)&0xFF;r[mp+2]=(nms>>>8)&0xFF;r[mp+3]=nms&0xFF;return r.buffer}}
+// Filename and MIME helpers
+function mkFn(fn,fmt){if(fn){var ld=fn.lastIndexOf(".");var b=ld>0?fn.substring(0,ld):fn;var ext=ld>0?fn.substring(ld):"";return b+"_hip"+ext}return"attested_hip.bin"}
+function getMime(fmt,fn){var m={jpeg:"image/jpeg",png:"image/png",webp:"image/webp",pdf:"application/pdf",mp3:"audio/mpeg",flac:"audio/flac",wav:"audio/wav",mp4:"video/mp4",avi:"video/x-msvideo"};
+if(m[fmt])return m[fmt];var ext=fn?fn.toLowerCase().split(".").pop():"";var me={docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document",xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",mov:"video/quicktime",m4a:"audio/mp4"};return me[ext]||"application/octet-stream"}
+function embed(buffer,meta,fn){var fmt=detectFmt(buffer,fn);if(!fmt)return null;var rb;
+switch(fmt){case"jpeg":case"png":case"webp":if(typeof HipImageEmbed!=="undefined")return HipImageEmbed.embed(buffer,meta,fn);return null;
+case"pdf":rb=embedPDF(buffer,meta);break;case"mp3":rb=embedMP3(buffer,meta);break;case"flac":rb=embedFLAC(buffer,meta);break;
+case"wav":case"avi":rb=embedRIFF(buffer,meta);break;case"mp4":rb=embedMP4(buffer,meta);break;
+case"ooxml":return null;default:return null}
+return{buffer:rb,filename:mkFn(fn,fmt),mimeType:getMime(fmt,fn),format:fmt}}
+async function embedAsync(buffer,meta,fn){var fmt=detectFmt(buffer,fn);if(!fmt)return null;
+if(fmt==="ooxml"){var rb=await embedOOXML(buffer,meta);return{buffer:rb,filename:mkFn(fn,fmt),mimeType:getMime(fmt,fn),format:fmt}}
+return embed(buffer,meta,fn)}
+function isSupported(buffer,fn){var fmt=detectFmt(buffer,fn);return["jpeg","png","webp","pdf","ooxml","mp3","flac","wav","mp4","avi"].indexOf(fmt)>=0}
+return{embed:embed,embedAsync:embedAsync,isSupported:isSupported,detectFormat:detectFmt}})();
+
 // ── Scroll fade ──
 function useVis(th) {
   th = th || 0.1;
@@ -732,6 +896,10 @@ function QuickVerify(props) {
   var sResult=useState(null); var result=sResult[0]; var setResult=sResult[1];
   var sFileName=useState(null); var fileName=sFileName[0]; var setFileName=sFileName[1];
   var sFileHash=useState(null); var fileHash=sFileHash[0]; var setFileHash=sFileHash[1];
+  // S42: metadata extraction state
+  var sEmbeddedHip=useState(null); var embeddedHip=sEmbeddedHip[0]; var setEmbeddedHip=sEmbeddedHip[1];
+  var sFileMeta=useState(null); var fileMeta=sFileMeta[0]; var setFileMeta=sFileMeta[1];
+  var sFileMetaType=useState(null); var fileMetaType=sFileMetaType[0]; var setFileMetaType=sFileMetaType[1];
   var ref=useRef(null);
   var compact=props&&props.compact;
 
@@ -741,10 +909,53 @@ function QuickVerify(props) {
     setChecking(true);
     setResult(null);
     setFileHash(null);
+    setEmbeddedHip(null);
+    setFileMeta(null);
+    setFileMetaType(null);
     try {
       var buf=await f.arrayBuffer();
       var h=await sha256(new Uint8Array(buf));
       setFileHash(h);
+
+      // S42: Extract embedded HIP metadata + file-type-specific metadata
+      try{if(typeof HipImageEmbed!=="undefined"){var hip=HipImageEmbed.extract?HipImageEmbed.extract(buf):null;if(hip)setEmbeddedHip(hip)}}catch(ex){}
+      // Camera EXIF for JPEG
+      var ext=f.name?f.name.toLowerCase().split(".").pop():"";
+      if((ext==="jpg"||ext==="jpeg")&&typeof piexif!=="undefined"){
+        try{
+          var bytes=new Uint8Array(buf);var bin="";var cs=8192;for(var i=0;i<bytes.length;i+=cs){var chunk=bytes.subarray(i,Math.min(i+cs,bytes.length));bin+=String.fromCharCode.apply(null,chunk)}
+          var du="data:image/jpeg;base64,"+btoa(bin);var exifObj=piexif.load(du);if(exifObj){
+            var cam={};var z=exifObj["0th"]||{};var ex2=exifObj["Exif"]||{};var gps=exifObj["GPS"]||{};
+            if(z[piexif.ImageIFD.Make])cam.make=z[piexif.ImageIFD.Make].replace(/\0/g,"").trim();
+            if(z[piexif.ImageIFD.Model])cam.model=z[piexif.ImageIFD.Model].replace(/\0/g,"").trim();
+            if(ex2[piexif.ExifIFD.LensModel])cam.lens=ex2[piexif.ExifIFD.LensModel].replace(/\0/g,"").trim();
+            if(ex2[piexif.ExifIFD.FocalLength]){var fl=ex2[piexif.ExifIFD.FocalLength];cam.focalLength=(fl[0]/fl[1])+"mm"}
+            if(ex2[piexif.ExifIFD.FNumber]){var fn2=ex2[piexif.ExifIFD.FNumber];cam.aperture="f/"+(fn2[0]/fn2[1])}
+            if(ex2[piexif.ExifIFD.ExposureTime]){var et=ex2[piexif.ExifIFD.ExposureTime];cam.shutter=et[0]<et[1]?et[0]+"/"+et[1]+"s":(et[0]/et[1])+"s"}
+            if(ex2[piexif.ExifIFD.ISOSpeedRatings])cam.iso="ISO "+ex2[piexif.ExifIFD.ISOSpeedRatings];
+            if(ex2[piexif.ExifIFD.SceneType]){var st=ex2[piexif.ExifIFD.SceneType];var sv=typeof st==="string"?st.charCodeAt(0):(st instanceof Uint8Array?st[0]:st);if(sv===1)cam.sceneType="Directly photographed"}
+            if(ex2[piexif.ExifIFD.DateTimeOriginal])cam.dateOriginal=ex2[piexif.ExifIFD.DateTimeOriginal].replace(/\0/g,"");
+            cam.hasGPS=!!(gps[piexif.GPSIFD.GPSLatitude]&&gps[piexif.GPSIFD.GPSLongitude]);
+            if(cam.make||cam.model||cam.focalLength||cam.aperture){setFileMeta(cam);setFileMetaType("camera")}
+          }
+        }catch(ex3){}
+      }
+      // PDF metadata
+      if(ext==="pdf"){try{
+        var pdfBytes=new Uint8Array(buf);var hs=Math.min(pdfBytes.length,8192);var ts=Math.min(pdfBytes.length,16384);var tStart=Math.max(0,pdfBytes.length-ts);
+        var fs=new TextDecoder("latin1").decode(pdfBytes.subarray(0,hs))+new TextDecoder("latin1").decode(pdfBytes.subarray(tStart));
+        var pf=function(key){var re=new RegExp("/"+key+"\\s*\\(([^)]*(?:\\\\.[^)]*)*)\\)");var m=fs.match(re);return m?m[1].replace(/[\x00-\x1f]/g,"").trim():null};
+        var pi2={title:pf("Title"),author:pf("Author"),creator:pf("Creator"),producer:pf("Producer")};
+        var cd=pf("CreationDate");if(cd){var dm=cd.match(/D:(\d{4})(\d{2})?(\d{2})?/);if(dm)pi2.creationDate=dm[1]+"-"+(dm[2]||"01")+"-"+(dm[3]||"01")}
+        if(pi2.title||pi2.author||pi2.creator||pi2.producer){setFileMeta(pi2);setFileMetaType("pdf")}
+      }catch(ex4){}}
+      // Audio
+      if(ext==="mp3"||ext==="flac"||ext==="wav"||ext==="ogg"||ext==="m4a"){setFileMetaType("audio")}
+      // Video
+      if(ext==="mp4"||ext==="mov"||ext==="mkv"||ext==="avi"||ext==="webm"){setFileMetaType("video")}
+      // Office
+      if(ext==="docx"||ext==="xlsx"||ext==="pptx"){setFileMetaType("office")}
+
       var resp=await fetch(HIP_WORKER_URL+"/api/proof/"+h);
       var data=await resp.json();
       if(resp.ok&&data.found) {
@@ -761,8 +972,45 @@ function QuickVerify(props) {
   var borderColor=drag?"rgba(224,90,0,0.5)":result?(result.found?"rgba(74,222,128,0.3)":result.error?"rgba(248,113,113,0.3)":"rgba(248,113,113,0.2)"):"rgba(255,255,255,0.1)";
   var bgColor=drag?"rgba(224,90,0,0.03)":result?(result.found?"rgba(74,222,128,0.03)":"rgba(248,113,113,0.02)"):"transparent";
 
+  // S42: Metadata panel renderer (React elements instead of HTML strings)
+  var metaPanel=null;
+  if(fileMeta&&fileMetaType==="camera"){
+    var camLine=[];
+    if(fileMeta.make&&fileMeta.model){camLine.push(fileMeta.model.toLowerCase().indexOf(fileMeta.make.toLowerCase())===0?fileMeta.model:fileMeta.make+" "+fileMeta.model)}
+    else if(fileMeta.model)camLine.push(fileMeta.model);
+    if(fileMeta.lens)camLine.push(fileMeta.lens);
+    var settings=[];if(fileMeta.focalLength)settings.push(fileMeta.focalLength);if(fileMeta.aperture)settings.push(fileMeta.aperture);if(fileMeta.shutter)settings.push(fileMeta.shutter);if(fileMeta.iso)settings.push(fileMeta.iso);
+    var details=[];if(fileMeta.sceneType)details.push(fileMeta.sceneType);if(fileMeta.hasGPS)details.push("GPS present");if(fileMeta.dateOriginal)details.push(fileMeta.dateOriginal);
+    metaPanel=e("div",{style:{marginTop:8,padding:"10px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid rgba(255,255,255,0.06)"}},
+      e("div",{style:{fontFamily:mo,fontSize:9,letterSpacing:1.5,textTransform:"uppercase",color:"#60a5fa",marginBottom:6}},"📷 CAMERA METADATA"),
+      camLine.length>0&&e("div",{style:{fontSize:12,color:t1,fontWeight:500,marginBottom:3}},camLine.join(" · ")),
+      settings.length>0&&e("div",{style:{fontFamily:mo,fontSize:10,color:t2,marginBottom:3}},settings.join(" · ")),
+      details.length>0&&e("div",{style:{fontSize:10,color:"#666"}},details.join(" · ")),
+      e("div",{style:{fontSize:9,color:"#555",marginTop:4,fontStyle:"italic"}},"EXIF is informational — it can be edited and is not a guarantee of origin."));
+  }
+  if(fileMeta&&fileMetaType==="pdf"){
+    var rows=[];if(fileMeta.title)rows.push("Title: "+fileMeta.title);if(fileMeta.author)rows.push("Author: "+fileMeta.author);
+    if(fileMeta.creator)rows.push("Creator: "+fileMeta.creator);if(fileMeta.producer)rows.push("Producer: "+fileMeta.producer);if(fileMeta.creationDate)rows.push("Created: "+fileMeta.creationDate);
+    metaPanel=e("div",{style:{marginTop:8,padding:"10px 12px",background:"rgba(255,255,255,0.02)",borderRadius:6,border:"1px solid rgba(255,255,255,0.06)"}},
+      e("div",{style:{fontFamily:mo,fontSize:9,letterSpacing:1.5,textTransform:"uppercase",color:"#60a5fa",marginBottom:6}},"📄 PDF METADATA"),
+      rows.map(function(r,i){return e("div",{key:i,style:{fontFamily:mo,fontSize:10,color:t2,lineHeight:1.6}},r)}),
+      e("div",{style:{fontSize:9,color:"#555",marginTop:4,fontStyle:"italic"}},"PDF metadata is informational — it can be edited and is not a guarantee of authorship."));
+  }
+  // Embedded HIP panel
+  var hipPanel=null;
+  if(embeddedHip){
+    var hcl=CLS_LABELS[embeddedHip.classification]||embeddedHip.classification_label||embeddedHip.classification||"Unknown";
+    var hRows=[];if(embeddedHip.credential_id)hRows.push("Credential: "+embeddedHip.credential_id.substring(0,16)+"…");
+    if(embeddedHip.attested_at)try{hRows.push("Attested: "+new Date(embeddedHip.attested_at).toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric"}))}catch(ex){}
+    hipPanel=e("div",{style:{marginTop:8,padding:"10px 12px",background:"rgba(96,165,250,0.04)",borderRadius:6,border:"1px solid rgba(96,165,250,0.15)"}},
+      e("div",{style:{fontFamily:mo,fontSize:9,letterSpacing:1.5,textTransform:"uppercase",color:"#60a5fa",marginBottom:6}},"🔏 EMBEDDED HIP PROOF DATA"),
+      e("div",{style:{fontSize:12,color:t1,fontWeight:500,marginBottom:3}},hcl),
+      hRows.map(function(r,i){return e("div",{key:i,style:{fontFamily:mo,fontSize:10,color:t2,lineHeight:1.6}},r)}),
+      embeddedHip.proof_url&&e("a",{href:embeddedHip.proof_url,target:"_blank",rel:"noopener",style:{fontFamily:mo,fontSize:10,color:go,textDecoration:"none",marginTop:4,display:"inline-block"}},"View proof card →"));
+  }
+
   return e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
-    !compact&&e("p",{style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:4}},"Drop any file to check if it has a HIP attestation on record."),
+    !compact&&e("p",{style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:4}},"Drop any file to check if it has a HIP attestation on record. Images, PDFs, and other files are also scanned for embedded metadata."),
     e("div",{
       style:{border:"2px dashed "+borderColor,borderRadius:8,padding:compact?"16px":"24px 20px",textAlign:"center",cursor:"pointer",background:bgColor,transition:"border-color 0.15s, background 0.15s"},
       onDragOver:function(ev){ev.preventDefault();setDrag(true)},
@@ -772,10 +1020,14 @@ function QuickVerify(props) {
     },
       e("input",{ref:ref,type:"file",style:{display:"none"},onChange:function(ev){var f=ev.target.files&&ev.target.files[0];if(f)checkFile(f)}}),
       checking
-        ? e("span",{style:{color:t2,fontSize:13,fontFamily:mo}},"Checking registry…")
+        ? e("span",{style:{color:t2,fontSize:13,fontFamily:mo}},"Analyzing file…")
         : fileName
-          ? e("span",{style:{color:t2,fontSize:13}},fileName+" — tap to check another file")
-          : e("span",{style:{color:t2,fontSize:compact?12:14}},compact?"Drop file to verify":"Drop a file here to check the HIP registry")
+          ? e("div",null,
+              e("span",{style:{color:t2,fontSize:13}},fileName+" — tap to check another"),
+              e("div",{style:{fontSize:compact?9:10,color:"#555",fontFamily:mo,marginTop:4}},compact?"Also scans for embedded metadata":"Also extracts metadata from images, PDFs, Office docs, audio, and video"))
+          : e("div",null,
+              e("span",{style:{color:t2,fontSize:compact?12:14}},compact?"Drop file to verify":"Drop a file here to check the HIP registry"),
+              e("div",{style:{fontSize:compact?9:10,color:"#555",fontFamily:mo,marginTop:4}},compact?"Also scans for embedded metadata":"Also extracts metadata from images, PDFs, Office docs, audio, and video"))
     ),
     // Result display
     result&&result.found&&e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(74,222,128,0.04)",border:"1px solid rgba(74,222,128,0.15)"}},
@@ -818,7 +1070,11 @@ function QuickVerify(props) {
     ),
     result&&result.error&&e("div",{style:{padding:"12px 14px",borderRadius:6,background:"rgba(248,113,113,0.03)",border:"1px solid rgba(248,113,113,0.12)",fontSize:12,color:"#f87171"}},
       "Error: "+result.error
-    )
+    ),
+    // S42: Embedded HIP metadata panel
+    hipPanel,
+    // S42: File-type-specific metadata panel
+    metaPanel
   );
 }
 
@@ -1800,9 +2056,16 @@ var pbs=useState(false);var publishing=pbs[0];var setPublishing=pbs[1];
 var pes=useState(null);var publishError=pes[0];var setPublishError=pes[1];
 var pcs=useState(false);var proofCopied=pcs[0];var setProofCopied=pcs[1];
 var uns=useState(false);var unsealing=uns[0];var setUnsealing=uns[1];
+// S43: Badge overlay state
+var bgs=useState(false);var badgeEnabled=bgs[0];var setBadgeEnabled=bgs[1];
+var bcs=useState("br");var badgeCorner=bcs[0];var setBadgeCorner=bcs[1];
+var bms=useState("auto");var badgeMode=bms[0];var setBadgeMode=bms[1];
+var HIP_BADGE_SIZE=4,HIP_BADGE_OPACITY=0.35,HIP_BADGE_MARGIN=2;
 
-// S34/S41: convenience — does this file support HIP metadata embedding?
-var canEmbed = isJpg || isPngFile || isWebPFile;
+// S34/S41/S42: convenience — does this file support HIP metadata embedding?
+var canEmbedImage = isJpg || isPngFile || isWebPFile;
+// S42: canEmbed now includes all file types (PDF, Office, audio, video)
+var canEmbed = canEmbedImage || (rawBytes && typeof HipFileEmbed !== "undefined" && HipFileEmbed.isSupported(rawBytes.buffer, fname));
 
 if(!cred)return e("p",{style:{fontSize:14,color:t2}},"Get your credential first (Credential tab), then come here to attest.");
 
@@ -1811,7 +2074,7 @@ var dgs=useState(false);var dragging=dgs[0];var setDragging=dgs[1];
 
 // S35: Core file handler — accepts a File object directly
 var handleFile=async function(f){if(!f)return;
-setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setProofUrl(null);setProofCopied(false);setAttestedCopyURL(null);setAttestedCopyName(null);
+setFname(f.name);setExistingHip(null);setEmbeddedDataURL(null);setRawDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setProofUrl(null);setProofCopied(false);setAttestedCopyURL(null);setAttestedCopyName(null);setBadgeEnabled(false);
 var jpeg=isJpeg(f.name)&&HAS_PIEXIF;setIsJpg(jpeg);
 var png=isPng(f.name);setIsPngFile(png);
 var webpF=isWebP(f.name);setIsWebPFile(webpF);
@@ -1841,7 +2104,10 @@ if(jpeg){
   var ph=await computePHash(f,f.name);setPHash(ph);
   setStep(1);
 } else {
-  setHash(await sha256(new Uint8Array(await f.arrayBuffer())));setStep(1);
+  // S42: Store raw bytes for all files — enables post-attestation embedding for PDF, Office, audio, video
+  var ab=await f.arrayBuffer();var bytes=new Uint8Array(ab);
+  setRawBytes(bytes);
+  setHash(await sha256(bytes));setStep(1);
 }};
 var pickFile=function(ev){var f=ev.target.files&&ev.target.files[0];handleFile(f)};
 var dropFile=function(ev){ev.preventDefault();ev.stopPropagation();setDragging(false);var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];handleFile(f)};
@@ -1858,6 +2124,45 @@ try{await waLiveness(cred.webauthn.credentialId);ld="device-attested";setLv("don
 // S34: Also for PNG files, embed HIP metadata in iTXt chunk
 var finalHash=hash;
 var pcFilename="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";
+
+// S43: Badge overlay — composite badge into image before metadata embed
+if(badgeEnabled&&canEmbedImage&&_hipBadgeLight&&_hipBadgeDark){
+  try{
+    var badgeCfg={corner:badgeCorner,mode:badgeMode,size:HIP_BADGE_SIZE,opacity:HIP_BADGE_OPACITY,margin:HIP_BADGE_MARGIN};
+    var bImg=new Image();
+    var bSrc;
+    if(rawDataURL){bSrc=rawDataURL}
+    else if(rawBytes){var bb=new Blob([rawBytes],{type:isWebPFile?"image/webp":"image/png"});bSrc=URL.createObjectURL(bb)}
+    if(bSrc){
+      await new Promise(function(resolve){
+        bImg.onload=function(){
+          var bcv=hipBadgeComposite(bImg,bImg.naturalWidth,bImg.naturalHeight,badgeCfg);
+          if(isJpg){
+            // Convert canvas back to JPEG dataURL and replace rawDataURL
+            var badgedDU=bcv.toDataURL("image/jpeg",0.95);
+            setRawDataURL(badgedDU);rawDataURL=badgedDU;
+            // Recompute base hash on badged image
+          } else {
+            // PNG or WebP: get bytes from canvas
+            bcv.toBlob(function(blob){
+              var reader=new FileReader();
+              reader.onload=function(){
+                var badgedBytes=new Uint8Array(reader.result);
+                setRawBytes(badgedBytes);rawBytes=badgedBytes;
+                resolve();
+              };
+              reader.readAsArrayBuffer(blob);
+            },isWebPFile?"image/webp":"image/png");
+            return; // resolve called in toBlob callback
+          }
+          resolve();
+        };
+        bImg.src=bSrc;
+      });
+    }
+  }catch(bex){console.warn("Badge composite:",bex.message)}
+}
+
 if(isJpg&&rawDataURL){
   try{
     var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
@@ -1954,7 +2259,7 @@ try{
   try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
     setProofUrl(data.short_url||data.proof_url);
-    // S41: Generate attested image copy with full proof metadata embedded
+    // S41/S42: Generate attested copy with full proof metadata embedded
     if(canEmbed){
       try{
         var sourceBytes=null;
@@ -1965,7 +2270,14 @@ try{
         if(sourceBytes){
           var acMeta={content_hash:hash,credential_id:cred.credentialId,classification:classification,
             attested_at:attestedAt,short_url:data.short_url||null,signature:sig,protocol_version:"1.2"};
-          var acResult=HipImageEmbed.embed(sourceBytes,acMeta,fname);
+          // S42: Use HipFileEmbed for all formats, fall back to HipImageEmbed for images
+          var acResult=null;
+          if(canEmbedImage && typeof HipImageEmbed !== "undefined"){
+            acResult=HipImageEmbed.embed(sourceBytes,acMeta,fname);
+          }
+          if(!acResult && typeof HipFileEmbed !== "undefined"){
+            acResult=await HipFileEmbed.embedAsync(sourceBytes,acMeta,fname);
+          }
           if(acResult){
             var acBlob=new Blob([acResult.buffer],{type:acResult.mimeType});
             setAttestedCopyURL(URL.createObjectURL(acBlob));
@@ -2084,9 +2396,9 @@ attestedCopyURL&&attestedCopyName&&e("div",{style:{marginTop:12,padding:"14px 16
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:"#4ade80",marginBottom:6}},"SAVE ATTESTED COPY"),
 e("div",{style:{fontSize:12,color:t2,lineHeight:1.6,marginBottom:10}},"This version has the full proof embedded — hash, credential, classification, timestamp, signature, and proof link. Any HIP tool or metadata reader can verify it."),
 e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box",background:"#16a34a",border:"1px solid #16a34a",color:"#fff"}),href:attestedCopyURL,download:attestedCopyName},"↓ Save "+attestedCopyName),
-e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Replaces your original. The proof data is inside the file's "+(isJpg||isWebPFile?"XMP metadata":"iTXt chunk")+"."))
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,marginTop:4}},"Replaces your original. The proof data is embedded in the file's metadata."))
 ))),
-e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",background:go,border:"1px solid "+go,color:"#fff"}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setIsWebPFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false);setPublishError(null);setAttestedCopyURL(null);setAttestedCopyName(null)}},"Attest Another File"))}
+e("button",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",background:go,border:"1px solid "+go,color:"#fff"}),onClick:function(){setStep(0);setHash(null);setFname(null);setCls(null);setEditorial("");setProofcard(null);setBHash(null);setLv("idle");setShowTech(false);setIsJpg(false);setIsPngFile(false);setIsWebPFile(false);setExistingHip(null);setRawDataURL(null);setEmbeddedDataURL(null);setRawBytes(null);setEmbeddedBytes(null);setPHash(null);setSealedAttest(false);setProofUrl(null);setProofCopied(false);setUnsealing(false);setPublishError(null);setAttestedCopyURL(null);setAttestedCopyName(null);setBadgeEnabled(false)}},"Attest Another File"))}
 
 if(step<1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 cred.tier===3&&ToolAlert("info","Your device will ask for a biometric check when you attest."),
@@ -2094,7 +2406,7 @@ e("p",{style:{fontSize:14,color:t2}},"Select a file. Its fingerprint is computed
 e("div",{style:{border:"2px dashed "+(dragging?"rgba(74,222,128,0.6)":bd),borderRadius:8,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:dragging?"rgba(74,222,128,0.04)":"transparent",transition:"border-color 0.15s, background 0.15s"},onClick:function(){fref.current&&fref.current.click()},onDragOver:function(ev){ev.preventDefault();ev.stopPropagation()},onDragEnter:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(true)},onDragLeave:function(ev){ev.preventDefault();ev.stopPropagation();setDragging(false)},onDrop:dropFile},
 e("input",{ref:fref,type:"file",style:{display:"none"},onChange:pickFile}),
 e("span",{style:{color:dragging?"#4ade80":t2}},dragging?"Drop file here":"Drop a file here or click to select")),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"JPEG, PNG, and WebP images get HIP metadata embedded — the attestation travels with the file."));
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5,marginTop:4}},"Images, PDFs, Office docs, audio, and video files get HIP metadata embedded — the attestation travels with the file."));
 
 if(step===1)return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("div",{style:wizResult},e("div",{style:wizRL},"File"),e("div",{style:{color:t1,fontSize:13,fontWeight:600}},fname,canEmbed&&e("span",{style:{fontSize:10,color:go,fontFamily:mo,marginLeft:8}},isJpg?"EXIF embed":isWebPFile?"XMP embed":"metadata embed")),
@@ -2104,6 +2416,52 @@ e("p",{style:{fontSize:14,color:t2}},"How did you make this?"),
 cats.map(function(c){return e("button",{key:c[0],style:{display:"block",width:"100%",textAlign:"left",padding:"12px 16px",border:"1px solid "+(cls===c[0]?go:bd),borderRadius:6,background:cls===c[0]?gg:"transparent",color:t1,fontSize:13,fontFamily:sans,cursor:"pointer",marginBottom:4},onClick:function(){setCls(c[0])}},
 e("span",{style:{fontFamily:mo,color:go,fontWeight:600,marginRight:8}},c[1])," ",c[2])}),
 cls&&e("button",{style:btnG,onClick:function(){setStep(2)}},"Next →"),
+// S43: Badge overlay option — images only, with live preview on actual file
+canEmbedImage&&cls&&e("div",{style:{marginTop:8,padding:"12px 14px",border:"1px solid "+bd,borderRadius:6}},
+e("div",{style:{display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},onClick:function(){setBadgeEnabled(!badgeEnabled)}},
+e("input",{type:"checkbox",checked:badgeEnabled,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
+e("div",null,
+e("div",{style:{fontSize:13,color:t1,fontWeight:500,marginBottom:2}},"Add verification badge"),
+e("div",{style:{fontSize:11,color:t2,lineHeight:1.5}},"Composites a small HIP badge into your image. Cosmetic only — the real proof is cryptographic metadata."))),
+badgeEnabled&&e("div",{style:{marginTop:12}},
+// Warning
+e("div",{style:{padding:"8px 12px",background:"rgba(250,204,21,0.06)",border:"1px solid rgba(250,204,21,0.2)",borderRadius:6,marginBottom:12}},
+e("div",{style:{fontSize:11,color:"#facc15",lineHeight:1.6}},e("strong",null,"Permanent: "),"The badge becomes part of the attested image. The content fingerprint in the ledger will be of the badged version. This cannot be changed after attestation.")),
+// Live preview canvas
+e("canvas",{ref:function(cvEl){
+  if(!cvEl)return;
+  var src=rawDataURL||null;var srcBytes=rawBytes||null;
+  var img=new Image();
+  img.onload=function(){
+    var w=img.naturalWidth,h=img.naturalHeight;
+    // Scale canvas for preview (max 600px wide)
+    var scale=Math.min(1,600/w);var cw=Math.round(w*scale),ch=Math.round(h*scale);
+    cvEl.width=cw;cvEl.height=ch;
+    var ctx=cvEl.getContext("2d");ctx.drawImage(img,0,0,cw,ch);
+    // Draw badge
+    if(_hipBadgeLight&&_hipBadgeDark){
+      var bSz=Math.round(Math.min(cw,ch)*(HIP_BADGE_SIZE/100)),m=Math.round(Math.min(cw,ch)*(HIP_BADGE_MARGIN/100));
+      var bx,by;
+      switch(badgeCorner){case"tl":bx=m;by=m;break;case"tr":bx=cw-bSz-m;by=m;break;case"bl":bx=m;by=ch-bSz-m;break;default:bx=cw-bSz-m;by=ch-bSz-m;}
+      var badge;
+      if(badgeMode==="light"){badge=_hipBadgeLight}
+      else if(badgeMode==="dark"){badge=_hipBadgeDark}
+      else{var id=ctx.getImageData(Math.max(0,bx),Math.max(0,by),Math.max(1,bSz),Math.max(1,bSz)).data,sum=0,ct=0;
+        for(var i=0;i<id.length;i+=4){sum+=id[i]*0.299+id[i+1]*0.587+id[i+2]*0.114;ct++}
+        badge=(ct>0&&sum/ct>128)?_hipBadgeDark:_hipBadgeLight;}
+      ctx.globalAlpha=HIP_BADGE_OPACITY;ctx.drawImage(badge,bx,by,bSz,bSz);ctx.globalAlpha=1;
+    }
+  };
+  if(src){img.src=src}
+  else if(srcBytes){var blob=new Blob([srcBytes],{type:isWebPFile?"image/webp":"image/png"});img.src=URL.createObjectURL(blob)}
+},style:{width:"100%",borderRadius:4,border:"1px solid "+bd,display:"block"}}),
+// Controls row
+e("div",{style:{display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",marginRight:4}},"CORNER"),
+["tl","tr","bl","br"].map(function(c){return e("button",{key:c,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeCorner===c?go:bd),borderRadius:3,background:badgeCorner===c?"rgba(74,222,128,0.06)":"transparent",color:badgeCorner===c?go:t2,cursor:"pointer",letterSpacing:1},onClick:function(){setBadgeCorner(c)}},c.toUpperCase())}),
+e("div",{style:{width:1,height:16,background:bd,margin:"0 4px"}}),
+e("div",{style:{fontSize:10,color:t2,fontFamily:mo,letterSpacing:1,textTransform:"uppercase",marginRight:4}},"TONE"),
+["auto","light","dark"].map(function(m){return e("button",{key:m,style:{padding:"3px 8px",fontSize:10,fontFamily:mo,border:"1px solid "+(badgeMode===m?go:bd),borderRadius:3,background:badgeMode===m?"rgba(74,222,128,0.06)":"transparent",color:badgeMode===m?go:t2,cursor:"pointer",textTransform:"capitalize"},onClick:function(){setBadgeMode(m)}},m)})))),
 // S37: Sealed attestation option — opt-in, unchecked by default
 e("div",{style:{marginTop:8,padding:"10px 14px",border:"1px solid "+bd,borderRadius:6,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"},onClick:function(){setSealedAttest(!sealedAttest)}},
 e("input",{type:"checkbox",checked:sealedAttest,readOnly:true,style:{marginTop:2,accentColor:go,cursor:"pointer",flexShrink:0}}),
@@ -2443,7 +2801,7 @@ function App() {
   // ── Nav button (static — orange border, black bg, white text) ──
   function NavBtn(props) {
     return e("button",{
-      className:"hip-cta-btn",
+      className:"hip-nav-btn",
       style:{fontFamily:mo,fontSize:12,fontWeight:500,padding:"10px 22px",cursor:"pointer",textAlign:"center",
         border:"1px solid "+go,background:dk,color:t1,width:"100%",display:"block"},
       onClick:props.onClick
