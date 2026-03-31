@@ -1536,6 +1536,23 @@ d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["v
 wrapSetCred(d);setErr(null)}catch(ex){setErr("Couldn't load this credential file. It may be corrupted or from an incompatible version. Try downloading a fresh backup.")}};
 
 if(cred){
+// S45: If upgrade mode is active, show upgrade panel instead of credential display
+if(mode==="upgrade-t1"){
+return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e("div",{style:{padding:18,border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,background:"rgba(74,222,128,0.02)"}},
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:"#4ade80",marginBottom:10,textTransform:"uppercase"}},"UPGRADE TO TIER 1"),
+e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Upgrade your Tier "+(cred?cred.tier:"")+" credential to Tier 1 by verifying your government ID. Your existing credential stays the same — same ID, same keys, same attestation history. Only the tier level and trust score change."),
+e("div",{style:{display:"flex",flexDirection:"column",gap:10,marginBottom:16}},
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Trust history preserved")," — your attestation count, credential age, and behavioral score carry forward.")),
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Same credential ID")," — your existing Proof Cards and attestations remain linked to this credential.")),
+e("div",{style:{display:"flex",gap:10,alignItems:"flex-start"}},e("div",{style:{width:24,height:24,borderRadius:"50%",background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#4ade80",fontWeight:700,flexShrink:0}},"✓"),e("div",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Higher tier_base")," — your trust score's base component increases from "+(cred&&cred.tier===3?"10 to 40":cred&&cred.tier===2?"25 to 40":"its current value to 40"),".")))),
+ToolAlert("info",e("span",null,e("strong",null,"How it works: "),"You'll be redirected to hipverify.org to verify your government ID ($1 one-time fee). After verification, hipverify.org sends the upgrade confirmation back here. No new keys are generated — your credential keeps its existing identity.")),
+e("a",{href:"https://hipverify.org?mode=upgrade&cred="+encodeURIComponent(cred?cred.credentialId:""),target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:8})},"Go to hipverify.org to Upgrade →")))}
+if(mode==="upgrade-t2"){
+return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updatedCred){wrapSetCred(updatedCred);setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 // S21: Biometric confirmation banner (shows immediately after biometric creation)
