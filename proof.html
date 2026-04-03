@@ -478,8 +478,18 @@ async function verifySignature(record, hash){
     return;
   }
 
-  // Reconstruct canonical string
-  var canonStr = [
+  // Reconstruct canonical string — try HIPKit format first, then legacy
+  // HIPKit format (S49+): hash|credential_id|classification|attested_at|protocol_version
+  // Legacy format: hash|perceptual_hash|credential_id|attested_at|classification
+  var canonStrHIPKit = [
+    hash,
+    record.credential_id,
+    record.classification,
+    record.attested_at,
+    record.protocol_version || "1.2"
+  ].join("|");
+
+  var canonStrLegacy = [
     hash,
     record.perceptual_hash || "NULL",
     record.credential_id,
@@ -497,20 +507,25 @@ async function verifySignature(record, hash){
       return;
     }
 
-    // Attempt Ed25519 signature verification
-    var verified = await verifyEd25519(record.public_key, canonStr, record.signature);
+    // Try HIPKit format first, then legacy
+    var verified = await verifyEd25519(record.public_key, canonStrHIPKit, record.signature);
+    var usedCanon = canonStrHIPKit;
+    if(verified !== true){
+      verified = await verifyEd25519(record.public_key, canonStrLegacy, record.signature);
+      usedCanon = canonStrLegacy;
+    }
 
     if(verified === true){
       el.className="sig-block sig-ok";
       el.innerHTML="<strong>✓ Signature verified</strong> — Ed25519 signature cryptographically verified in your browser."
         +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Public key: <code style='font-family:Azeret Mono,monospace'>"+record.public_key.substring(0,24)+"…</code></div>"
-        +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>"
+        +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed: <code style='font-family:Azeret Mono,monospace'>"+usedCanon.substring(0,80)+"…</code></div>"
         +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Key binding: SHA-256(public_key) = credential_id ✓</div>";
       return;
     } else if(verified === false){
       el.className="sig-block sig-fail";
       el.innerHTML="<strong>⚠ Signature invalid</strong> — the Ed25519 signature does not match the public key and canonical data. This record may be tampered with."
-        +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>";
+        +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStrHIPKit.substring(0,80)+"…</code></div>";
       return;
     }
     // verified === null means browser doesn't support Ed25519 — fall through to format check
@@ -525,7 +540,7 @@ async function verifySignature(record, hash){
   el.className="sig-block sig-pending";
   el.innerHTML="<strong>⚡ Signature present</strong> — "+reason
     +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Credential: <code style='font-family:Azeret Mono,monospace'>"+record.credential_id.substring(0,24)+"…</code></div>"
-    +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStr.substring(0,80)+"…</code></div>"
+    +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed string: <code style='font-family:Azeret Mono,monospace'>"+canonStrHIPKit.substring(0,80)+"…</code></div>"
     +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>This page is served from hipprotocol.org. A fake page at any other domain cannot produce a valid record from HIP's registry.</div>";
 }
 

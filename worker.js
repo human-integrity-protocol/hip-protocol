@@ -32,6 +32,8 @@
 //   GET  /proof/:hash        — Retrieve a proof record (S37)
 //   POST /unseal-proof       — Unseal a sealed proof record (S38)
 //   POST /dispute-proof      — File a dispute against a proof record (S38)
+//   GET  /p/:shortId         — Resolve short proof link → dynamic OG HTML or JSON (S40+S41)
+//   POST /api/proof/batch    — Batch proof lookup for browser extension (S43)
 //
 // KV key patterns:
 //   session:{sid}        — Didit session data (1h TTL)
@@ -46,6 +48,7 @@
 //   proof:{content_hash} — Public proof registry record (permanent) (S37)
 //   prate:{cred_hash}    — Proof registration rate limit (24h TTL) (S37)
 //   drate:{cred_id}      — Dispute filing rate limit (24h TTL) (S38)
+//   short:{short_id}     — Short link reverse lookup → content_hash (permanent) (S40)
 // ============================================================
 
 const DIDIT_API = "https://verification.didit.me";
@@ -54,14 +57,16 @@ const CORS_ORIGIN = "https://hipprotocol.org";
 // ── Helpers ──
 
 function corsHeaders(origin) {
-  // Allow hipprotocol.org, hipverify.org, and localhost for dev
+  // Allow hipprotocol.org, hipverify.org, browser extensions, and localhost for dev
   const allowed = origin && (
     origin === "https://hipprotocol.org" ||
     origin === "http://hipprotocol.org" ||
     origin === "https://hipverify.org" ||
     origin === "http://hipverify.org" ||
     origin.startsWith("http://localhost") ||
-    origin.startsWith("http://127.0.0.1")
+    origin.startsWith("http://127.0.0.1") ||
+    origin.startsWith("chrome-extension://") ||
+    origin.startsWith("moz-extension://")
   );
   return {
     "Access-Control-Allow-Origin": allowed ? origin : CORS_ORIGIN,
@@ -89,6 +94,63 @@ async function hmacSHA256(key, data) {
   );
   const sig = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// S40: Generate 8-char base62 short ID for proof links
+// ~218 trillion combinations — collision-safe for proof-scale usage
+function generateShortId() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  let id = "";
+  for (let i = 0; i < 8; i++) id += chars[bytes[i] % 62];
+  return id;
+}
+
+// S41: Build dynamic OG HTML page for proof short links
+// Social crawlers get rich metadata; browsers get a full proof viewer
+function buildProofOGPage(record, shortId, contentHash) {
+  const CLS_LABELS = {
+    CompleteHumanOrigin: "Complete Human Origin",
+    HumanOriginAssisted: "Human Origin Assisted",
+    HumanDirectedCollaborative: "Human-Directed Collaborative",
+  };
+  const clsLabel = CLS_LABELS[record.classification] || record.classification;
+  const tierLabel = "Tier " + (record.credential_tier || "?");
+  const dateStr = record.attested_at ? new Date(record.attested_at).toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric"
+  }) : "Unknown";
+  const proofUrl = "https://hipprotocol.org/p/" + shortId;
+  const fullUrl = "https://hipprotocol.org/proof.html?hash=" + contentHash;
+  const title = "HIP Proof — " + clsLabel;
+  const description = tierLabel + " attestation · " + dateStr + " · Human Integrity Protocol";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<meta name="description" content="${description}">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${description}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${proofUrl}">
+<meta property="og:image" content="https://hipprotocol.org/og-proof.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="HIP Proof Card — ${clsLabel}">
+<meta property="og:site_name" content="Human Integrity Protocol">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${title}">
+<meta name="twitter:description" content="${description}">
+<meta name="twitter:image" content="https://hipprotocol.org/og-proof.png">
+<meta http-equiv="refresh" content="0;url=${fullUrl}">
+<link rel="canonical" href="${proofUrl}">
+</head>
+<body>
+<p>Redirecting to <a href="${fullUrl}">proof card</a>...</p>
+</body>
+</html>`;
 }
 
 // Verify Didit webhook signature (X-Signature-V2 recommended method)
@@ -1394,6 +1456,18 @@ async function handleRegisterProof(request, env) {
 
   // ── Write proof record ──
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  // S40: Generate unique 8-char short ID with collision check (5 attempts)
+  let short_id = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateShortId();
+    const existing_short = await env.DEDUP_KV.get(`short:${candidate}`);
+    if (!existing_short) {
+      short_id = candidate;
+      break;
+    }
+  }
+
   const proofRecord = {
     content_hash,
     perceptual_hash: perceptual_hash || null,
@@ -1406,9 +1480,15 @@ async function handleRegisterProof(request, env) {
     signature,
     sealed: sealed === true,
     protocol_version: protocol_version || "1.2",
+    short_id: short_id,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S40: Store reverse lookup for short link resolution
+  if (short_id) {
+    await env.DEDUP_KV.put(`short:${short_id}`, content_hash);
+  }
 
   // Increment rate limit counter (24h TTL)
   await env.DEDUP_KV.put(rateKey, JSON.stringify({
@@ -1416,12 +1496,132 @@ async function handleRegisterProof(request, env) {
     last_registration: now,
   }), { expirationTtl: 86400 });
 
+  const short_url = short_id ? `https://hipprotocol.org/p/${short_id}` : null;
+
   return jsonResponse({
     success: true,
     content_hash,
     registered_at: now,
     proof_url: `https://hipprotocol.org/proof.html?hash=${content_hash}`,
+    short_id,
+    short_url,
     sealed: proofRecord.sealed,
+  }, 200, origin);
+}
+
+// S43: POST /api/proof/batch — Batch proof lookup for browser extension.
+// Accepts up to 50 SHA-256 hashes and optional pHashes.
+// Returns found/not-found for each, plus pHash near-matches.
+// Body: { hashes: ["abc...","def...",...], phashes: {"abc...":"hexphash",...} }
+
+function pHashHammingDistance(a, b) {
+  if (!a || !b || a.length !== b.length) return 64;
+  let dist = 0;
+  for (let i = 0; i < a.length; i++) {
+    const xor = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    dist += [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4][xor];
+  }
+  return dist;
+}
+
+async function handleBatchProof(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  let body;
+  try { body = await request.json(); } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { hashes, phashes } = body;
+  if (!hashes || !Array.isArray(hashes) || hashes.length === 0) {
+    return jsonResponse({ error: "hashes array required" }, 400, origin);
+  }
+  if (hashes.length > 50) {
+    return jsonResponse({ error: "Maximum 50 hashes per batch" }, 400, origin);
+  }
+
+  const results = {};
+
+  // Look up all hashes in parallel
+  const lookups = hashes.map(async (h) => {
+    const hash = (h || "").toLowerCase().trim();
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      results[hash] = { found: false, error: "invalid_hash" };
+      return;
+    }
+    const raw = await env.DEDUP_KV.get(`proof:${hash}`);
+    if (!raw) {
+      results[hash] = { found: false };
+      return;
+    }
+    const record = JSON.parse(raw);
+    if (record.sealed) {
+      results[hash] = { found: true, sealed: true, registered_at: record.registered_at };
+    } else {
+      results[hash] = {
+        found: true,
+        classification: record.classification,
+        credential_tier: record.credential_tier,
+        attested_at: record.attested_at,
+        short_id: record.short_id || null,
+        perceptual_hash: record.perceptual_hash || null,
+      };
+    }
+  });
+
+  await Promise.all(lookups);
+
+  // S43: pHash near-match search for hashes that weren't found by SHA-256.
+  // This handles social media re-encoding where exact hash changes but visual
+  // content is preserved. We scan recent proofs that have perceptual hashes.
+  // Note: This is a brute-force scan of unfound hashes against found pHashes
+  // in this batch + a KV list scan. For Phase 1, we do a simpler approach:
+  // compare provided pHashes against pHashes of found results in this batch,
+  // plus check a dedicated pHash index if we build one later.
+  //
+  // Phase 1 approach: The caller provides pHashes for their images. We check
+  // all proof records already fetched in this batch for pHash proximity.
+  // This won't find matches outside the batch, but it's zero-cost.
+  // Phase 2 will add a pHash index for global search.
+
+  const pHashMatches = {};
+  if (phashes && typeof phashes === "object") {
+    // Collect all known pHashes from found results
+    const knownPHashes = [];
+    for (const [hash, result] of Object.entries(results)) {
+      if (result.found && result.perceptual_hash) {
+        knownPHashes.push({ hash, phash: result.perceptual_hash, result });
+      }
+    }
+
+    // For each unfound hash that has a pHash, check similarity against all known
+    for (const [hash, clientPHash] of Object.entries(phashes)) {
+      const h = hash.toLowerCase().trim();
+      if (results[h] && results[h].found) continue; // already found by SHA-256
+
+      for (const known of knownPHashes) {
+        const dist = pHashHammingDistance(clientPHash.toLowerCase(), known.phash.toLowerCase());
+        const similarity = Math.round((1 - dist / 64) * 100);
+        if (similarity >= 85) { // 85% threshold for "likely match"
+          if (!pHashMatches[h] || similarity > pHashMatches[h].similarity) {
+            pHashMatches[h] = {
+              match_type: "perceptual",
+              similarity,
+              matched_hash: known.hash,
+              classification: known.result.classification,
+              credential_tier: known.result.credential_tier,
+              attested_at: known.result.attested_at,
+              short_id: known.result.short_id,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return jsonResponse({
+    results,
+    phash_matches: Object.keys(pHashMatches).length > 0 ? pHashMatches : undefined,
   }, 200, origin);
 }
 
@@ -1539,11 +1739,15 @@ async function handleUnsealProof(request, env) {
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(record));
 
+  const short_url = record.short_id ? `https://hipprotocol.org/p/${record.short_id}` : null;
+
   return jsonResponse({
     success: true,
     content_hash,
     unsealed_at: record.unsealed_at,
     proof_url: `https://hipprotocol.org/proof.html?hash=${content_hash}`,
+    short_id: record.short_id || null,
+    short_url,
   }, 200, origin);
 }
 
@@ -1762,11 +1966,79 @@ export default {
       });
     }
 
+    // S43: Batch proof lookup for browser extension
+    if (method === "POST" && path === "/api/proof/batch") {
+      return handleBatchProof(request, env);
+    }
+
     // Direct JSON API endpoint for proof data (used by proof.html fetch)
     if (method === "GET" && path.startsWith("/api/proof/")) {
       const contentHash = path.replace("/api/proof/", "").toLowerCase().trim();
       if (!contentHash) return jsonResponse({ error: "Missing content hash" }, 400);
       return handleGetProof(contentHash, request, env);
+    }
+
+    // S40+S41: Short proof link resolution with dynamic OG tags
+    if (method === "GET" && path.startsWith("/p/")) {
+      const shortId = path.replace("/p/", "").trim();
+      if (!shortId || shortId.length < 4 || shortId.length > 16) {
+        return jsonResponse({ error: "Invalid short ID" }, 400);
+      }
+
+      // Resolve short ID to content hash via KV reverse lookup
+      const contentHash = await env.DEDUP_KV.get(`short:${shortId}`);
+      if (!contentHash) {
+        return jsonResponse({ error: "Short link not found", short_id: shortId }, 404);
+      }
+
+      // Check if caller wants JSON (API/programmatic access)
+      const accept = request.headers.get("Accept") || "";
+      if (accept.includes("application/json")) {
+        // Return proof data as JSON
+        const proofRaw = await env.DEDUP_KV.get(`proof:${contentHash}`);
+        if (!proofRaw) {
+          return jsonResponse({ error: "Proof record not found", content_hash: contentHash }, 404);
+        }
+        const record = JSON.parse(proofRaw);
+        if (record.sealed) {
+          return jsonResponse({
+            found: true, content_hash: contentHash, sealed: true,
+            registered_at: record.registered_at, short_id: shortId,
+            message: "This proof record is sealed by its creator.",
+          }, 200, request.headers.get("Origin") || CORS_ORIGIN);
+        }
+        return jsonResponse({
+          found: true, ...record, short_id: shortId,
+        }, 200, request.headers.get("Origin") || CORS_ORIGIN);
+      }
+
+      // S41: Serve HTML page with dynamic OG tags for social crawlers
+      // Then meta-refresh redirect to proof.html for human viewers
+      const proofRaw = await env.DEDUP_KV.get(`proof:${contentHash}`);
+      if (proofRaw) {
+        const record = JSON.parse(proofRaw);
+        if (!record.sealed) {
+          // Full dynamic OG page with proof metadata
+          const html = buildProofOGPage(record, shortId, contentHash);
+          return new Response(html, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html;charset=UTF-8",
+              "Cache-Control": "public, max-age=3600",
+              ...corsHeaders(request.headers.get("Origin") || CORS_ORIGIN),
+            },
+          });
+        }
+      }
+
+      // Sealed or missing record: simple redirect (no OG preview for sealed proofs)
+      return new Response(null, {
+        status: 302,
+        headers: {
+          "Location": `https://hipprotocol.org/proof.html?hash=${contentHash}`,
+          ...corsHeaders(request.headers.get("Origin") || CORS_ORIGIN),
+        },
+      });
     }
 
     return jsonResponse({ error: "Not found" }, 404);
