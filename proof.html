@@ -351,6 +351,11 @@ async function renderProof(hash, record){
     +'</div>';
 
   html += '<div class="divider"></div>';
+
+  if(record.file_name){
+    html += '<div class="field" style="margin-bottom:12px"><div class="field-label">File Name</div><div class="field-val" style="font-size:14px;font-weight:500">'+escHtml(record.file_name)+'</div></div>';
+  }
+
   html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Content Hash (SHA-256)</div><div class="field-val mono">'+hash+'</div></div>';
   html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Credential ID</div><div class="field-val mono">'+record.credential_id+'</div></div>';
 
