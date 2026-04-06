@@ -57,14 +57,12 @@ const CORS_ORIGIN = "https://hipprotocol.org";
 // ── Helpers ──
 
 function corsHeaders(origin) {
-  // Allow hipprotocol.org, hipverify.org, hipkit.net, browser extensions, and localhost for dev
+  // Allow hipprotocol.org, hipverify.org, browser extensions, and localhost for dev
   const allowed = origin && (
     origin === "https://hipprotocol.org" ||
     origin === "http://hipprotocol.org" ||
     origin === "https://hipverify.org" ||
     origin === "http://hipverify.org" ||
-    origin === "https://hipkit.net" ||
-    origin === "http://hipkit.net" ||
     origin.startsWith("http://localhost") ||
     origin.startsWith("http://127.0.0.1") ||
     origin.startsWith("chrome-extension://") ||
