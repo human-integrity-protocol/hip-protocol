@@ -352,6 +352,13 @@ async function renderProof(hash, record){
 
   html += '<div class="divider"></div>';
 
+  if(record.thumbnail){
+    html += '<div style="text-align:center;margin-bottom:16px">'
+      +'<img src="'+record.thumbnail+'" alt="Content preview" style="max-width:300px;max-height:300px;border-radius:8px;border:1px solid rgba(255,255,255,.08)">'
+      +'<div style="font-size:11px;color:#777;margin-top:8px;font-style:italic">Preview is for visual reference — the content hash below is the verified identifier.</div>'
+      +'</div>';
+  }
+
   if(record.file_name){
     html += '<div class="field" style="margin-bottom:12px"><div class="field-label">File Name</div><div class="field-val" style="font-size:14px;font-weight:500">'+escHtml(record.file_name)+'</div></div>';
   }
