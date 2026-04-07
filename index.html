@@ -1134,6 +1134,19 @@ props.label||"Drop your file here, or tap to browse")}
 // ============================================================
 var HIP_CRED_KEY = "hip_credential_v1";
 
+// S64: Build import URL for syncing credential to other HIP sites
+function buildSyncUrl(cred, site) {
+  var obj = Object.assign({}, cred);
+  delete obj._priv; delete obj._pub;
+  var json = JSON.stringify(obj);
+  var bytes = new TextEncoder().encode(json);
+  var binary = ""; for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  var encoded = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  if (site === "hipkit") return "https://hipkit.net/app.html#hip-import=" + encoded;
+  if (site === "hipverify") return "https://hipverify.org#hip-import=" + encoded;
+  return "https://hipprotocol.org#hip-import=" + encoded;
+}
+
 function saveCredToStorage(cred) {
   try {
     var obj = Object.assign({}, cred);
@@ -1204,6 +1217,7 @@ var HIP_CRYPTO_ERR = "";
 })();
 
 var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "error"
+var HIP_PENDING_IMPORT = null; // S64: holds incoming credential during conflict resolution
 (function checkHipImport() {
   try {
     var hash = window.location.hash;
@@ -1228,6 +1242,7 @@ var HIP_IMPORT_RESULT = null; // null | "imported" | "exists" | "invalid" | "err
         HIP_IMPORT_RESULT = "imported"; // same cred, treat as success
       } else {
         HIP_IMPORT_RESULT = "exists"; // different cred, don't overwrite
+        HIP_PENDING_IMPORT = cred; // S64: store for user to accept
       }
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
       return;
@@ -1416,6 +1431,8 @@ var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
 // S27: QR transfer state
 var qrs=useState(null);var qrState=qrs[0];var setQrState=qrs[1];
 var qrRef=useRef(null);
+// S64: Superseded credential detection
+var sss=useState(null);var supersededBy=sss[0];var setSupersededBy=sss[1];
 
 useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
@@ -1471,6 +1488,15 @@ var wrapSetCred = function(c) {
   setCred(c);
   if(c) { saveCredToStorage(c); } else { clearCredStorage(); }
 };
+
+// S64: Check if credential is superseded when it loads
+useEffect(function(){
+  if(!cred || !cred.credentialId) { setSupersededBy(null); return; }
+  fetch(HIP_WORKER_URL+"/trust/"+cred.credentialId).then(function(r){ return r.ok?r.json():null }).then(function(d){
+    if(d && d.superseded_by) setSupersededBy(d.superseded_by);
+    else setSupersededBy(null);
+  }).catch(function(){ setSupersededBy(null); });
+},[cred ? cred.credentialId : null]);
 
 var doT3Bio=async function(){
   // S25: Check crypto capability before attempting Ed25519 operations
@@ -1572,11 +1598,21 @@ HIP_UPGRADE_RESULT==="upgraded"&&ToolAlert("success",e("span",null,"Your credent
 HIP_UPGRADE_RESULT==="mismatch"&&ToolAlert("danger","A tier upgrade was detected but the credential ID doesn't match the one saved in this browser. Make sure you're using the same browser where your credential is stored."),
 cred.recoveredFrom&&!HIP_IMPORT_RESULT&&ToolAlert("success",e("span",null,"Your credential was ",e("strong",null,"recovered via re-verification"),". Trust history has been migrated. Your old credential (",e(CopyHash,{value:cred.recoveredFrom,chars:12,fontSize:12}),") is superseded.")),
 autoLoaded&&!HIP_IMPORT_RESULT&&!cred.recoveredFrom&&ToolAlert("info","Your credential was saved in this browser and loaded automatically. You can start attesting right away."),
+// S64: Superseded credential warning
+supersededBy&&ToolAlert("danger",e("span",null,e("strong",null,"⚠ This credential has been superseded.")," You recovered or upgraded your credential, so this old one can no longer create attestations. ",e("br"),"Your current credential starts with: ",e("code",{style:{fontSize:11}},supersededBy.substring(0,16)+"…"),e("div",{style:{marginTop:8}},e("button",{style:{fontFamily:mo,fontSize:12,padding:"8px 16px",background:"#dc2626",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){clearCredStorage();wrapSetCred(null);setSupersededBy(null)}},"Remove old credential")))),
 e("div",{style:wizResult},e("div",{style:wizRL},"Credential ID"),e(CopyHash,{value:cred.credentialId,chars:20}),
 e("div",{style:wizRL},"Public Key"),e(CopyHash,{value:cred.publicKey,chars:20}),
 e("div",{style:wizRL},"Pathway"),e("code",{style:wizRV},cred.pathway||"—"),
 e("div",{style:wizRL},"Saved"),e("code",{style:wizRV},"This browser ("+window.location.hostname+")")),
 e("button",{style:btnDl,onClick:function(){var obj=Object.assign({},cred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+cred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy"),
+// S64: Sync to other HIP sites
+e("div",{style:{marginTop:8}},
+e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}},"SYNC TO OTHER HIP SITES"),
+e("div",{style:{fontSize:12,color:t2,lineHeight:1.5,marginBottom:8}},"Your credential is stored per-site. Open these links to sync it to your other HIP sites in this browser."),
+e("div",{style:{display:"flex",flexDirection:"column",gap:6}},
+e("button",{style:Object.assign({},btnDl,{width:"100%",textAlign:"left"}),onClick:function(){var url=buildSyncUrl(cred,"hipkit");window.open(url,"_blank")}},"🔗 Open HIPKit with this credential"),
+e("button",{style:Object.assign({},btnDl,{width:"100%",textAlign:"left"}),onClick:function(){var url=buildSyncUrl(cred,"hipverify");window.open(url,"_blank")}},"🔗 Open hipverify.org with this credential"))),
 // S34: Upgrade button — show for Tier 2 and Tier 3 credentials
 cred.tier>1&&e("div",{style:{marginTop:4}},
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
@@ -1599,7 +1635,7 @@ e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you'
 err&&ToolAlert("danger",err),
 // S25: Persistent crypto-unavailable warning
 HIP_CRYPTO_OK===false&&!err&&ToolAlert("danger",e("span",null,e("strong",null,"Crypto not available: "),"Your browser doesn't support Ed25519 cryptography needed for HIP credentials. ",e("br"),e("br"),"If you're using DuckDuckGo browser, tap the ",e("strong",null,"shield icon")," in the address bar and disable protections for this site, then reload. Otherwise, try Chrome, Firefox, Safari 17+, or Edge.")),
-HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer from hipverify.org was detected, but you ",e("strong",null,"already have a different credential")," in this browser. Retire your existing credential first if you want to import the new one.")),
+HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer was detected, but you ",e("strong",null,"already have a different credential")," in this browser. ",e("br"),e("br"),"Replacing will disconnect you from your current portfolio, credits, and trust score on this site.",HIP_PENDING_IMPORT&&e("div",{style:{marginTop:10,display:"flex",gap:8}},e("button",{style:Object.assign({},btnSm,{flex:1}),onClick:function(){HIP_PENDING_IMPORT=null;HIP_IMPORT_RESULT=null;props.forceUpdate?props.forceUpdate():window.location.reload()}},"Keep Current"),e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"10px 16px",background:go,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){if(!HIP_PENDING_IMPORT)return;localStorage.setItem(HIP_CRED_KEY,JSON.stringify(HIP_PENDING_IMPORT));try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:HIP_PENDING_IMPORT.credentialId,tier:HIP_PENDING_IMPORT.tier})})}catch(te){}HIP_IMPORT_RESULT="imported";HIP_PENDING_IMPORT=null;window.location.reload()}},"Replace with Incoming")))),
 HIP_IMPORT_RESULT==="invalid"&&ToolAlert("danger","A credential transfer link was detected but the data was invalid or corrupted."),
 HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing the credential transfer link. Try downloading a backup from hipverify.org and importing it manually."),
 
@@ -1651,7 +1687,15 @@ e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — no cost"))),
 e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Face ID, Touch ID, or Windows Hello — instant, no cost, lower starting trust"))),
+e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Trial tier — 50 attestation limit, trust score capped at 20. Good for trying HIP."))),
+// S64: Credential explainer
+e("div",{style:{padding:"14px 18px",background:"rgba(0,0,0,0.02)",borderRadius:8,fontSize:12,color:t2,lineHeight:1.7,marginTop:4}},
+e("details",null,
+e("summary",{style:{cursor:"pointer",fontWeight:600,color:t1,marginBottom:6}},"How credentials work"),
+e("p",null,"Your HIP credential is an Ed25519 key pair generated in your browser. The private key never leaves your device. When you attest a file, your browser signs the content hash, creating a tamper-proof proof of authorship."),
+e("p",{style:{marginTop:6}},e("strong",null,"One credential per human.")," Tier 1 uses government ID with liveness detection for the highest trust. Tier 2 requires a peer vouch from a Tier 1 holder (limited to 1 vouch per voucher per month). Tier 3 is a trial — capped at 50 attestations and a trust score of 20."),
+e("p",{style:{marginTop:6}},e("strong",null,"Your credential is stored per-site")," in localStorage. Use the sync buttons in the credential panel to share it across hipkit.net, hipprotocol.org, and hipverify.org. Always download a backup file."),
+e("p",{style:{marginTop:6}},e("strong",null,"Trust scores")," are computed server-side from your tier, account age, volume, and consistency. Higher tiers earn higher trust. Tier 3 is capped at 20. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →")))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
 e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
