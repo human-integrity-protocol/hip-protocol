@@ -1708,8 +1708,8 @@ e("p",{style:{marginTop:6}},e("strong",null,"Trust scores")," are computed serve
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
 e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
-e("button",{onClick:function(){setMode("qr")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px dashed "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans,marginTop:8}},
-e("span",{style:{fontSize:20,flexShrink:0}},"📱"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Import via QR Code"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Scan a code on this screen with your phone to transfer"))),
+e("button",{onClick:function(){startQRScannerHP(doImport,setErr)},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:"transparent",color:t2,border:"1px dashed "+bd,borderRadius:8,cursor:"pointer",fontFamily:sans,marginTop:8}},
+e("span",{style:{fontSize:20,flexShrink:0}},"📲"),e("div",null,e("div",{style:{fontSize:14,fontWeight:600,color:t1}},"Scan QR Code to Import"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Open camera and scan a credential QR from another device"))),
 // S33: Recover credential section
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Lost Your Credential?"),
@@ -3529,6 +3529,143 @@ try {
     + '<p style="margin-bottom:24px;line-height:1.6;font-size:13px;opacity:0.6">Error: ' + (ex.message || 'Unknown') + '</p>'
     + '<a href="https://hipprotocol.org" style="color:#E05A00" onclick="location.reload();return false">Reload Page</a>'
     + '</div>';
+}
+</script>
+
+<!-- S66: QR Camera Scanner overlay -->
+<div id="qrScanOverlayHP" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,0.92);flex-direction:column;align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:400px;text-align:center">
+    <div style="font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:2px;color:#E05A00;margin-bottom:16px;text-transform:uppercase">SCAN CREDENTIAL QR CODE</div>
+    <div style="position:relative;width:100%;aspect-ratio:1;border-radius:16px;overflow:hidden;border:2px solid #E05A00;background:#000">
+      <video id="qrVideoHP" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
+      <canvas id="qrCanvasHP" style="display:none"></canvas>
+      <div style="position:absolute;inset:0;pointer-events:none">
+        <div style="position:absolute;top:15%;left:15%;right:15%;bottom:15%;border:2px solid rgba(224,90,0,0.5);border-radius:12px"></div>
+      </div>
+    </div>
+    <div id="qrScanStatusHP" style="margin-top:14px;font-size:13px;color:#ccc;line-height:1.5">Point your camera at the QR code…</div>
+    <button onclick="stopQRScannerHP()" style="margin-top:16px;padding:12px 32px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:8px;font-size:14px;cursor:pointer;font-family:'DM Sans',sans-serif">Cancel</button>
+  </div>
+</div>
+
+<script>
+// S66: QR Camera Scanner for hipprotocol.org
+var _qrStreamHP = null;
+var _qrAnimFrameHP = null;
+var _jsQRLoadedHP = false;
+var _qrImportCallbackHP = null;
+var _qrErrCallbackHP = null;
+
+function _loadJsQRHP() {
+  if (_jsQRLoadedHP && window.jsQR) return Promise.resolve();
+  return new Promise(function(resolve, reject) {
+    var s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js";
+    s.onload = function() { _jsQRLoadedHP = true; resolve(); };
+    s.onerror = function() { reject(new Error("Failed to load QR scanner library.")); };
+    document.head.appendChild(s);
+  });
+}
+
+function startQRScannerHP(importFn, errFn) {
+  _qrImportCallbackHP = importFn;
+  _qrErrCallbackHP = errFn;
+  var overlay = document.getElementById("qrScanOverlayHP");
+  var statusEl = document.getElementById("qrScanStatusHP");
+  overlay.style.display = "flex";
+  statusEl.textContent = "Starting camera…";
+
+  _loadJsQRHP().then(function() {
+    return navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 640 } }
+    });
+  }).then(function(stream) {
+    _qrStreamHP = stream;
+    var video = document.getElementById("qrVideoHP");
+    video.srcObject = stream;
+    video.onloadedmetadata = function() {
+      video.play();
+      statusEl.textContent = "Point your camera at the QR code…";
+      _scanQRFrameHP();
+    };
+  }).catch(function(err) {
+    statusEl.textContent = "Camera access denied or not available. " + (err.message || "");
+  });
+}
+
+function _scanQRFrameHP() {
+  var video = document.getElementById("qrVideoHP");
+  var canvas = document.getElementById("qrCanvasHP");
+  if (!video || !canvas || !_qrStreamHP) return;
+  if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+    _qrAnimFrameHP = requestAnimationFrame(_scanQRFrameHP);
+    return;
+  }
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  var ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  var code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "dontInvert" });
+  if (code && code.data) {
+    _handleQRResultHP(code.data);
+    return;
+  }
+  _qrAnimFrameHP = requestAnimationFrame(_scanQRFrameHP);
+}
+
+function _handleQRResultHP(data) {
+  var statusEl = document.getElementById("qrScanStatusHP");
+  var importIdx = data.indexOf("#hip-import=");
+  if (importIdx === -1) {
+    statusEl.innerHTML = '<span style="color:#f87171">Not a HIP credential QR code.</span> Keep scanning…';
+    setTimeout(function() { _scanQRFrameHP(); }, 1500);
+    return;
+  }
+  var payload = data.substring(importIdx + "#hip-import=".length);
+  if (!payload) {
+    statusEl.innerHTML = '<span style="color:#f87171">Empty credential payload.</span> Keep scanning…';
+    setTimeout(function() { _scanQRFrameHP(); }, 1500);
+    return;
+  }
+  statusEl.innerHTML = '<span style="color:#34d399">✓ Credential QR code detected! Importing…</span>';
+  stopQRScannerHP();
+
+  try {
+    // Base64url decode
+    var b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4 !== 0) b64 += "=";
+    var binary = atob(b64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    var json = new TextDecoder().decode(bytes);
+    var credObj = JSON.parse(json);
+
+    if (!credObj || credObj.version !== "hip-credential-v1" || !credObj.credentialId || !credObj.publicKey || !credObj.privateKey) {
+      throw new Error("Invalid credential data.");
+    }
+
+    // Use the existing import function (handles conflict detection etc.)
+    if (_qrImportCallbackHP) {
+      _qrImportCallbackHP(credObj, null);
+    }
+  } catch (ex) {
+    if (_qrErrCallbackHP) {
+      _qrErrCallbackHP("QR import failed: " + (ex.message || "Could not decode credential."));
+    }
+  }
+}
+
+function stopQRScannerHP() {
+  if (_qrAnimFrameHP) { cancelAnimationFrame(_qrAnimFrameHP); _qrAnimFrameHP = null; }
+  if (_qrStreamHP) {
+    _qrStreamHP.getTracks().forEach(function(t) { t.stop(); });
+    _qrStreamHP = null;
+  }
+  var video = document.getElementById("qrVideoHP");
+  if (video) video.srcObject = null;
+  var overlay = document.getElementById("qrScanOverlayHP");
+  if (overlay) overlay.style.display = "none";
 }
 </script>
 </body>
