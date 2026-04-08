@@ -1626,7 +1626,16 @@ cred.tier===2&&e("button",{onClick:function(){setMode("upgrade-t1")},style:{widt
 e(Ico,{name:"building",size:16,color:"#4ade80"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 1"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Government ID verification · $1 one-time · trust history preserved"))))),
 // S34: Show upgrade status if credential was upgraded
 cred.upgradedFrom&&ToolAlert("success",e("span",null,"This credential was ",e("strong",null,"upgraded from Tier "+cred.upgradedFrom)," on ",new Date(cred.upgradedAt).toLocaleDateString(),". Your trust history was preserved — attestation count, credential age, and trust score all carried forward.")),
-ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")))}
+ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")),
+// S65: Credential explainer (accessible to logged-in users)
+e("div",{style:{padding:"14px 18px",background:"rgba(0,0,0,0.02)",borderRadius:8,fontSize:12,color:t2,lineHeight:1.7,marginTop:4}},
+e("details",null,
+e("summary",{style:{cursor:"pointer",fontWeight:600,color:t1,marginBottom:6}},"How credentials work"),
+e("p",null,"Your HIP credential is an Ed25519 key pair generated in your browser. The private key never leaves your device. When you attest a file, your browser signs the content hash, creating a tamper-proof proof of authorship."),
+e("p",{style:{marginTop:6}},e("strong",null,"One credential per human.")," Tier 1 uses government ID with liveness detection for the highest trust. Tier 2 requires a peer vouch from a Tier 1 holder (limited to 1 vouch per voucher per month). Tier 3 is a trial — capped at 50 attestations and a trust score of 20."),
+e("p",{style:{marginTop:6}},e("strong",null,"Your credential is stored per-site")," in localStorage. Use the sync buttons above to share it across hipkit.net, hipprotocol.org, and hipverify.org. Always download a backup file."),
+e("p",{style:{marginTop:6}},e("strong",null,"Trust scores")," are computed server-side from your tier, account age, volume, and consistency. Higher tiers earn higher trust. Tier 3 is capped at 20. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →"))))
+)}
 
 // S25: retireMode useState moved to top of CredPanel (hook ordering fix)
 
@@ -3149,12 +3158,12 @@ function App() {
           e("div",{style:{marginTop:24,padding:"28px 24px",border:"1px solid "+rule,background:dk}},
             e("h3",{style:{fontFamily:serif,fontSize:18,fontWeight:600,marginBottom:12}},"Where you start is not where you\u2019re stuck."),
             e("p",{style:{fontFamily:sans,fontSize:14,fontWeight:400,color:t2,lineHeight:1.75,marginBottom:18}},
-              "Every credential earns a ",e("strong",{style:{color:t1}},"Trust Score")," \u2014 a public number (0\u2013100) measuring the protocol\u2019s confidence in the credential, built through consistent, honest use. A Tier 3 credential used honestly for two years can build significant standing. The tier is a head start, not a ceiling."
+              "Every credential earns a ",e("strong",{style:{color:t1}},"Trust Score")," \u2014 a public number (0\u2013100) measuring the protocol\u2019s confidence in the credential, built through consistent, honest use. Tier 3 is a trial tier with a trust ceiling of 20 \u2014 upgrade to Tier 1 or Tier 2 to unlock your full potential."
             ),
             EqGrid(3,"hip-grid-3",
               [{l:"Earn through use",d:"Every honest attestation adds to your credential\u2019s history. Device-verified attestations earn the most. The protocol rewards consistency, not volume."},
                {l:"Upgrade anytime",d:"A Tier 3 creator can upgrade to Tier 2 (peer vouch from a Tier 1 holder) or Tier 1 (government ID) at any time. Your behavioral history carries forward \u2014 nothing is lost."},
-               {l:"Same ceiling for everyone",d:"The maximum Trust Score is the same regardless of starting tier. HIP does not permanently discount the human who started without institutional backing."}
+               {l:"Higher tiers, higher ceiling",d:"Tier 3 trust is capped at 20 \u2014 enough to try HIP, but upgrading to Tier 1 or 2 removes the cap. HIP rewards identity commitment, not just activity."}
               ].map(function(p,i) {
                 return e("div",{key:i,style:{padding:"16px 18px",background:"rgba(255,255,255,0.02)",borderLeft:"1px solid "+rule}},
                   e("div",{style:{fontFamily:mo,fontSize:12,fontWeight:500,color:go,marginBottom:6,letterSpacing:0.5}},p.l),
