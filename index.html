@@ -2872,6 +2872,10 @@ function App() {
       setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("t1");
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
     }
+    // S65: Auto-open credential tab when arriving via #hip-import= sync link
+    if (HIP_IMPORT_RESULT) {
+      setToolOpen("attest"); setToolTab("credential");
+    }
     return function() { window.removeEventListener("scroll",h); clearInterval(t) };
   }, []);
 
