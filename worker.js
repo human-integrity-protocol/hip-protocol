@@ -762,6 +762,11 @@ async function handleTier3Register(request, env) {
 // S29: Worker-computed Trust Score (0-100) for every credential.
 // Formula: tier_base + age_bonus + volume_bonus + consistency_bonus + liveness_bonus
 // S90 #23b: T3 provisional ceiling per HP-SPEC-v1_3. Async to read declaration KV.
+// S92 #23 Step-2a: dual-field output — emits `trust_index` (0-1000 per HP-SPEC-v1_3)
+//   alongside legacy `score` (0-100 per HP-SPEC-v1_2). IW/BS split synthesized from
+//   the legacy breakdown (audit-faithful for the dual-field window; native per-signal
+//   BS accumulation lands with #23 Step-2b). T3 read-time clamp moved off legacy
+//   `score` and onto `trust_index` at the spec constant 60.
 
 async function computeTrustScore(record, env) {
   // Tier base points
@@ -784,19 +789,38 @@ async function computeTrustScore(record, env) {
     : 0;
   const livenessBonus = livenessRate * 15;
 
-  let score = Math.min(Math.round(tierBase + ageBonus + volumeBonus + consistencyBonus + livenessBonus), 100);
+  const score = Math.min(Math.round(tierBase + ageBonus + volumeBonus + consistencyBonus + livenessBonus), 100);
 
-  // S90 #23b: T3 provisional ceiling (removed on Guardian declaration).
-  // Clamp value is 20 on current 0-100 scale; bumps to 60 at #23 cutover.
-  // Translator note: when scale flips to 0-1000, change 20 -> 60.
+  // S92 #23 Step-2a: v1_3 IW/BS/TI synthesis (translator-estimate, not per-signal replay).
+  // IW: spec-authoritative starting values from HP-SPEC-v1_3 §TI (no PHI decay — prospective only).
+  // BS: (legacy_score - tierBase) × 10 — scales the legacy bonus sum into the 0-1000 space.
+  // TI: min(1000, IW + BS) with T3 read-time clamp at 60 (constant per HP-SPEC-v1_3 §T3 Provisional Ceiling).
+  const issuance_weight = record.tier === 1 ? 400 : record.tier === 2 ? 50 : 10;
+  const behavioral_score = Math.max(0, Math.round((score - tierBase) * 10));
+  let trust_index = Math.min(1000, issuance_weight + behavioral_score);
+
+  // S92 #23 Step-2a: T3 provisional ceiling — clamp is now on trust_index at 60
+  // (was: legacy score clamped to 20). Legacy `score` is no longer clamped here;
+  // accept the drift — matches spec-faithful read-time semantics.
   if (record.tier === 3 && env) {
     const declarationActive = await env.DEDUP_KV.get("governance:t3_ceiling_declaration");
     if (!declarationActive) {
-      score = Math.min(score, 20);
+      trust_index = Math.min(trust_index, 60);
     }
   }
 
-  return { score, tierBase, ageBonus: Math.round(ageBonus * 10) / 10, volumeBonus: Math.round(volumeBonus * 10) / 10, consistencyBonus: Math.round(consistencyBonus * 10) / 10, livenessBonus: Math.round(livenessBonus * 10) / 10, livenessRate: Math.round(livenessRate * 1000) / 1000 };
+  return {
+    score,              // legacy 0-100, same formula, drives trust_score_legacy
+    trust_index,        // 0-1000, new primary
+    issuance_weight,    // 0-400
+    behavioral_score,   // 0-600
+    tierBase,
+    ageBonus: Math.round(ageBonus * 10) / 10,
+    volumeBonus: Math.round(volumeBonus * 10) / 10,
+    consistencyBonus: Math.round(consistencyBonus * 10) / 10,
+    livenessBonus: Math.round(livenessBonus * 10) / 10,
+    livenessRate: Math.round(livenessRate * 1000) / 1000,
+  };
 }
 
 // POST /trust/initialize — Called during credential creation
@@ -827,6 +851,10 @@ async function handleTrustInitialize(request, env) {
     const ts = await computeTrustScore(record, env);
     return jsonResponse({
       credential_id: credential_id,
+      // S92 #23 Step-2a: dual-field response. trust_score retained as crash-shield
+      // for unmigrated frontends; trust_score_legacy is the forward-compatible name.
+      trust_index: ts.trust_index,
+      trust_score_legacy: ts.score,
       trust_score: ts.score,
       message: "Trust record already exists",
     }, 200, origin);
@@ -848,12 +876,16 @@ async function handleTrustInitialize(request, env) {
   }
 
   const ts = await computeTrustScore(record, env);
+  // S92 #23 Step-2a: dual-write trust_index alongside trust_score to KV.
   record.trust_score = ts.score;
+  record.trust_index = ts.trust_index;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
 
   return jsonResponse({
     credential_id: credential_id,
+    trust_index: ts.trust_index,
+    trust_score_legacy: ts.score,
     trust_score: ts.score,
     tier: tier,
     initialized: true,
@@ -909,12 +941,16 @@ async function handleAttestRegister(request, env) {
 
   // Recompute trust score
   const ts = await computeTrustScore(record, env);
+  // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
   record.trust_score = ts.score;
+  record.trust_index = ts.trust_index;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
 
   return jsonResponse({
     credential_id: credential_id,
+    trust_index: ts.trust_index,
+    trust_score_legacy: ts.score,
     trust_score: ts.score,
     attestation_count: record.attestation_count,
     score_breakdown: {
@@ -946,14 +982,18 @@ async function handleTrustQuery(credentialId, request, env) {
   const record = JSON.parse(raw);
   const ts = await computeTrustScore(record, env);
 
-  // Recompute in case of age drift since last update
+  // Recompute in case of age drift since last update (local only; not persisted)
   record.trust_score = ts.score;
+  record.trust_index = ts.trust_index;
 
   const ageDays = Math.floor((Date.now() - new Date(record.first_seen).getTime()) / (1000 * 60 * 60 * 24));
 
   return jsonResponse({
     credential_id: credentialId,
     tier: record.tier,
+    // S92 #23 Step-2a: dual-field response.
+    trust_index: ts.trust_index,
+    trust_score_legacy: ts.score,
     trust_score: ts.score,
     attestation_count: record.attestation_count,
     credential_age_days: ageDays,
@@ -1076,6 +1116,9 @@ async function handleRecoverCredential(request, env) {
       old_credential_id: old_credential_id,
       new_credential_id: new_credential_id,
       trust_migrated: trustMigration.migrated,
+      // S92 #23 Step-2a: dual-field response.
+      trust_index: trustMigration.trust_index,
+      trust_score_legacy: trustMigration.trust_score,
       trust_score: trustMigration.trust_score,
     }, 200, origin);
   }
@@ -1133,6 +1176,9 @@ async function handleRecoverCredential(request, env) {
       old_credential_id: old_credential_id,
       new_credential_id: new_credential_id,
       trust_migrated: trustMigration.migrated,
+      // S92 #23 Step-2a: dual-field response.
+      trust_index: trustMigration.trust_index,
+      trust_score_legacy: trustMigration.trust_score,
       trust_score: trustMigration.trust_score,
     }, 200, origin);
   }
@@ -1227,7 +1273,9 @@ async function handleUpgradeCredential(request, env) {
     record.pathway = "government-id-didit-v1";
 
     const ts = await computeTrustScore(record, env);
+    // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
     record.trust_score = ts.score;
+    record.trust_index = ts.trust_index;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
 
@@ -1238,6 +1286,8 @@ async function handleUpgradeCredential(request, env) {
       old_tier: oldTier,
       new_tier: 1,
       trust_migrated: true,
+      trust_index: ts.trust_index,
+      trust_score_legacy: ts.score,
       trust_score: ts.score,
       score_breakdown: { tier_base: ts.tierBase, age_bonus: ts.ageBonus, volume_bonus: ts.volumeBonus, consistency_bonus: ts.consistencyBonus, liveness_bonus: ts.livenessBonus },
     }, 200, origin);
@@ -1276,7 +1326,9 @@ async function handleUpgradeCredential(request, env) {
     record.voucher_credential_id = voucher_credential_id;
 
     const ts = await computeTrustScore(record, env);
+    // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
     record.trust_score = ts.score;
+    record.trust_index = ts.trust_index;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
 
@@ -1287,6 +1339,8 @@ async function handleUpgradeCredential(request, env) {
       old_tier: oldTier,
       new_tier: 2,
       trust_migrated: true,
+      trust_index: ts.trust_index,
+      trust_score_legacy: ts.score,
       trust_score: ts.score,
       score_breakdown: { tier_base: ts.tierBase, age_bonus: ts.ageBonus, volume_bonus: ts.volumeBonus, consistency_bonus: ts.consistencyBonus, liveness_bonus: ts.livenessBonus },
     }, 200, origin);
@@ -1304,7 +1358,9 @@ async function handleUpgradeCredential(request, env) {
 async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
   const oldRaw = await env.DEDUP_KV.get(`trust:${oldCredentialId}`);
   if (!oldRaw) {
-    return { migrated: false, trust_score: 0, reason: "no_old_record" };
+    // S92 #23 Step-2a: return trust_index:0 alongside trust_score:0 for the
+    // no-old-record branch so callers can destructure uniformly.
+    return { migrated: false, trust_score: 0, trust_index: 0, reason: "no_old_record" };
   }
 
   const oldRecord = JSON.parse(oldRaw);
@@ -1327,7 +1383,9 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
   }
 
   const ts = await computeTrustScore(newRecord, env);
+  // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
   newRecord.trust_score = ts.score;
+  newRecord.trust_index = ts.trust_index;
 
   // Write new trust record
   await env.DEDUP_KV.put(`trust:${newCredentialId}`, JSON.stringify(newRecord));
@@ -1374,6 +1432,7 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
   return {
     migrated: true,
     trust_score: ts.score,
+    trust_index: ts.trust_index,
     credits_migrated: creditsMigrated,
     stripe_cust_migrated: stripeCustMigrated,
     cred_proofs_migrated: credProofsMigrated,
@@ -1578,6 +1637,20 @@ async function handleRegisterProof(request, env) {
   if (trustRecord.superseded_by) {
     return jsonResponse({
       error: "This credential has been superseded. Use your current credential to register proofs."
+    }, 403, origin);
+  }
+
+  // ── S92 #23 Step-2a: TI >= 60 attest floor (HP-SPEC-v1_3 §TI) ──
+  // Ships in same deploy as dual-field computeTrustScore — legacy x10 translation
+  // puts every live credential at >=100, so this floor screens only genuinely
+  // under-attested credentials. Fallback `?? trust_score ?? 0` handles legacy KV
+  // rows written before this deploy (their trust_score is 0-100, still well above
+  // 60 for any non-pathological credential).
+  if ((trustRecord.trust_index ?? trustRecord.trust_score ?? 0) < 60) {
+    return jsonResponse({
+      ok: false,
+      error: "trust_index_below_floor",
+      detail: `Credential TI (${trustRecord.trust_index ?? trustRecord.trust_score ?? 0}) is below the 60 attest floor. Build trust via device-liveness attestations before registering proofs.`,
     }, 403, origin);
   }
 
@@ -2252,6 +2325,17 @@ async function handleApiAttest(request, env) {
     }, 403, origin);
   }
 
+  // ── S92 #23 Step-2a: TI >= 60 attest floor (HP-SPEC-v1_3 §TI) ──
+  // Mirrors handleRegisterProof. Fallback `?? trust_score ?? 0` handles legacy
+  // KV rows written before this deploy.
+  if ((trustRecord.trust_index ?? trustRecord.trust_score ?? 0) < 60) {
+    return jsonResponse({
+      ok: false,
+      error: "trust_index_below_floor",
+      detail: `Credential TI (${trustRecord.trust_index ?? trustRecord.trust_score ?? 0}) is below the 60 attest floor. Build trust via device-liveness attestations before registering proofs.`,
+    }, 403, origin);
+  }
+
   // ── S90 #23b: T3 provisional ceiling — 50 OriginalAttestation lifetime cap ──
   // Per HP-SPEC-v1_3. Every /api/attest is an OriginalAttestation.
   // Declaration key causes the cap to no-op globally when set.
@@ -2375,7 +2459,9 @@ async function handleApiAttest(request, env) {
       (trustRecordCopy.t3_original_attestation_count || 0) + 1;
   }
   const ts = await computeTrustScore(trustRecordCopy, env);
+  // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
   trustRecordCopy.trust_score = ts.score;
+  trustRecordCopy.trust_index = ts.trust_index;
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordCopy));
 
   const short_url = short_id ? `https://hipprotocol.org/p/${short_id}` : null;
