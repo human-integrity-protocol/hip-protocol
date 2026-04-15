@@ -674,40 +674,67 @@ async function handleTier3Register(request, env) {
     return jsonResponse({ error: "Origin not allowed" }, 403, origin);
   }
 
-  // Step 4c: Parse attestationObject for audit metadata
-  // Full CBOR parsing is complex; extract what we can for audit.
-  // The attestation_object is base64-encoded CBOR. We store it for audit
-  // but do lightweight validation (the biometric gate is the real security).
+  // Step 4c: Parse attestationObject for fmt + AAGUID (S95 #33 Option A).
+  // attestation_object is base64 CBOR: a map with keys "fmt" (string), "attStmt" (map),
+  // "authData" (byte string). Dependency-free byte-level parse of the two fields we need.
   let attestationMeta = { format: "unknown", aaguid: "unknown" };
   if (attestation_object) {
     try {
-      // Extract attestation format from CBOR structure
-      // fmt is typically near the start of the CBOR map
       const attBytes = Uint8Array.from(atob(attestation_object), c => c.charCodeAt(0));
-      // Look for 'fmt' string in CBOR — lightweight extraction
-      const attStr = new TextDecoder("utf-8", { fatal: false }).decode(attBytes);
-      if (attStr.includes("packed")) attestationMeta.format = "packed";
-      else if (attStr.includes("tpm")) attestationMeta.format = "tpm";
-      else if (attStr.includes("android-key")) attestationMeta.format = "android-key";
-      else if (attStr.includes("apple")) attestationMeta.format = "apple";
-      else if (attStr.includes("none")) attestationMeta.format = "none";
 
-      // Extract AAGUID from authData (starts at byte 37 of authData, 16 bytes)
-      // authData location varies by CBOR encoding; best-effort extraction
-      // AAGUID is 16 bytes at offset 37 of authenticator data
-      if (attBytes.length > 100) {
-        // Find authData — in packed/none format, it follows the "authData" key
-        const authDataMarker = "authData";
-        const markerIdx = attStr.indexOf(authDataMarker);
-        if (markerIdx > 0) {
-          // AAGUID starts at offset 37 within authData
-          // The exact byte offset depends on CBOR encoding; skip for now
-          // and store the attestation_object hash for forensic audit
+      // fmt: CBOR marker 0x63 "fmt" (text-3 + ASCII "fmt"); next byte is a text-string
+      // header (major type 3, 0x60-0x77 for length 0..23 — all real fmt values fit).
+      for (let i = 0; i < attBytes.length - 5; i++) {
+        if (attBytes[i]===0x63 && attBytes[i+1]===0x66 && attBytes[i+2]===0x6d && attBytes[i+3]===0x74) {
+          const hdr = attBytes[i+4];
+          if (hdr >= 0x60 && hdr <= 0x77) {
+            const len = hdr - 0x60;
+            if (i + 5 + len <= attBytes.length) {
+              attestationMeta.format = new TextDecoder("utf-8", { fatal: false }).decode(attBytes.slice(i+5, i+5+len));
+            }
+          }
+          break;
         }
+      }
+
+      // AAGUID: 16 bytes at offset 37 of authData (after 32-byte rpIdHash + 1 flags + 4 signCount).
+      // Find authData key (CBOR 0x68 + ASCII "authData"), skip byte-string length header, seek +37.
+      const auKey = [0x68,0x61,0x75,0x74,0x68,0x44,0x61,0x74,0x61];
+      outer: for (let i = 0; i < attBytes.length - auKey.length - 60; i++) {
+        for (let j = 0; j < auKey.length; j++) {
+          if (attBytes[i+j] !== auKey[j]) continue outer;
+        }
+        const p = i + auKey.length;
+        const hdr = attBytes[p];
+        let dataStart = -1;
+        if (hdr >= 0x40 && hdr <= 0x57) dataStart = p + 1;      // direct length 0..23
+        else if (hdr === 0x58) dataStart = p + 2;                // 1-byte length
+        else if (hdr === 0x59) dataStart = p + 3;                // 2-byte length
+        else if (hdr === 0x5A) dataStart = p + 5;                // 4-byte length
+        if (dataStart < 0) break;
+        const aS = dataStart + 37;
+        if (aS + 16 > attBytes.length) break;
+        let hex = "";
+        for (let k = 0; k < 16; k++) hex += attBytes[aS+k].toString(16).padStart(2,"0");
+        attestationMeta.aaguid = hex;
+        break;
       }
     } catch (_) {
       // Non-critical — attestation metadata is for audit only
     }
+  }
+
+  // Step 4c-gate (S95 #33 Option A): Reject password-manager passkeys and unparseable attestations.
+  // Hardware/platform authenticators emit fmt:"packed"|"tpm"|"apple"|"android-key"|"android-safetynet".
+  // 1Password / iCloud Keychain / Bitwarden / Chrome built-in passkeys emit fmt:"none" because they
+  // don't issue device attestations. Syncing a passkey across a vault would let one human mint
+  // unlimited T3 credentials — this gate preserves T3 as a per-device credential.
+  if (attestationMeta.format === "none" || attestationMeta.format === "unknown") {
+    return jsonResponse({
+      error: "attestation_required",
+      message: "Tier 3 credentials require a hardware-attested authenticator. Password-manager passkeys (1Password, iCloud Keychain, Bitwarden, etc.) cannot be used to mint a T3 credential. Use a device with a built-in biometric sensor (Touch ID, Face ID, Windows Hello, Android fingerprint).",
+      detail: "fmt: " + attestationMeta.format,
+    }, 403, origin);
   }
 
   // Step 4d: Enforce IP rate limit
@@ -736,6 +763,7 @@ async function handleTier3Register(request, env) {
     session_id: session_id,
     ip_hash: ipHash,
     attestation_format: attestationMeta.format,
+    attestation_aaguid: attestationMeta.aaguid,
     timestamp: new Date().toISOString(),
     origin: clientData.origin,
   }), { expirationTtl: 86400 * 365 }); // 1 year
@@ -755,6 +783,7 @@ async function handleTier3Register(request, env) {
     session_id: session_id,
     timestamp: timestamp,
     attestation_format: attestationMeta.format,
+    attestation_aaguid: attestationMeta.aaguid,
   }, 200, origin);
 }
 
