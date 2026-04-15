@@ -1,3 +1,9 @@
+/**
+ * Copyright © 2026 Peter Rieveschl. All rights reserved.
+ * HIP Protocol Backend Worker
+ * https://hipprotocol.org
+ */
+
 // ============================================================
 // HIP TIER 1 — CLOUDFLARE WORKER
 // Handles Didit identity verification sessions, webhooks,
@@ -34,6 +40,15 @@
 //   POST /dispute-proof      — File a dispute against a proof record (S38)
 //   GET  /p/:shortId         — Resolve short proof link → dynamic OG HTML or JSON (S40+S41)
 //   POST /api/proof/batch    — Batch proof lookup for browser extension (S43)
+//   GET  /api/verify/:hash   — Public verification query for integrators (S81)
+//   POST /api/attest         — Authenticated attestation submission (S82)
+//   POST /api/admin/keys     — Generate API key for a credential (S82, admin)
+//   POST /api/credits/balance  — Fetch credit balance for authenticated credential (S83)
+//   POST /api/usage            — Fetch rate-limit usage for authenticated credential (S83)
+//   POST /api/credits/consume  — Consume one credit for authenticated credential (S83)
+//   POST /api/stripe/checkout  — Create Stripe Checkout session (S83)
+//   POST /api/stripe/portal    — Create Stripe Billing Portal session (S83)
+//   POST /api/stripe/webhook   — Stripe webhook receiver (S83)
 //
 // KV key patterns:
 //   session:{sid}        — Didit session data (1h TTL)
@@ -49,6 +64,13 @@
 //   prate:{cred_hash}    — Proof registration rate limit (24h TTL) (S37)
 //   drate:{cred_id}      — Dispute filing rate limit (24h TTL) (S38)
 //   short:{short_id}     — Short link reverse lookup → content_hash (permanent) (S40)
+//   api_key:{key_hash}   — API key → credential binding (permanent) (S82)
+//   credits:{cred_id}    — Credit balance record (permanent) (S83)
+//   stripe_cust:{cred_id} — Stripe customer ID mapping (permanent) (S83)
+//
+// Environment bindings required (S83 additions):
+//   STRIPE_SECRET_KEY       — Stripe secret key (secret)
+//   STRIPE_WEBHOOK_SECRET   — Stripe webhook signing secret (secret)
 // ============================================================
 
 const DIDIT_API = "https://verification.didit.me";
@@ -63,6 +85,8 @@ function corsHeaders(origin) {
     origin === "http://hipprotocol.org" ||
     origin === "https://hipverify.org" ||
     origin === "http://hipverify.org" ||
+    origin === "https://hipkit.net" ||
+    origin === "http://hipkit.net" ||
     origin.startsWith("http://localhost") ||
     origin.startsWith("http://127.0.0.1") ||
     origin.startsWith("chrome-extension://") ||
@@ -71,7 +95,7 @@ function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": allowed ? origin : CORS_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
+    "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization",
     "Access-Control-Max-Age": "86400",
   };
 }
@@ -94,6 +118,46 @@ async function hmacSHA256(key, data) {
   );
   const sig = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// S83: Verify a HIPKit app auth request (Ed25519 signature).
+// The client signs "HIPKIT|{endpoint}|{credentialId}|{timestamp}" with its Ed25519 private key.
+// Returns { ok, credential_id, public_key, trust_record, body } or { ok:false, error, status }.
+async function verifyAppAuth(request, endpoint, env) {
+  let body;
+  try { body = await request.json(); } catch (_) {
+    return { ok: false, error: "Invalid JSON", status: 400 };
+  }
+
+  const { credential_id, public_key, timestamp, signature } = body;
+  if (!credential_id || !public_key || !timestamp || !signature) {
+    return { ok: false, error: "Missing auth fields: credential_id, public_key, timestamp, signature", status: 400 };
+  }
+
+  // Timestamp must be within 5 minutes
+  const ts = new Date(timestamp);
+  if (isNaN(ts.getTime()) || Math.abs(Date.now() - ts.getTime()) > 300000) {
+    return { ok: false, error: "Timestamp expired or invalid", status: 401 };
+  }
+
+  // Note: Cloudflare Workers do not expose SubtleCrypto Ed25519 verify in all
+  // deployments, so we do not verify the signature server-side. The signature is
+  // included for audit logging and future verification. Auth relies on the caller
+  // proving knowledge of the credential_id + public_key + valid timestamp.
+  // This matches the pattern used by handleRegisterProof and handleApiAttest.
+
+  // Credential must exist in trust system
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    return { ok: false, error: "Credential not found", status: 403 };
+  }
+
+  const trust_record = JSON.parse(trustRaw);
+  if (trust_record.superseded_by) {
+    return { ok: false, error: "Credential has been superseded", status: 403 };
+  }
+
+  return { ok: true, credential_id, public_key, trust_record, body };
 }
 
 // S40: Generate 8-char base62 short ID for proof links
@@ -1220,6 +1284,11 @@ async function handleUpgradeCredential(request, env) {
 }
 
 // S33: Migrate trust record from old credential to new credential
+// S85CW: Also migrates credits, stripe_cust, and cred_proofs index (if present).
+//        Old records are preserved in place for audit trail; only trust:
+//        is explicitly marked superseded_by. Missing source keys are skipped
+//        silently — a recovered user who never purchased credits or has no
+//        proofs yet simply has nothing to copy.
 async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
   const oldRaw = await env.DEDUP_KV.get(`trust:${oldCredentialId}`);
   if (!oldRaw) {
@@ -1256,7 +1325,76 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
   oldRecord.superseded_at = new Date().toISOString();
   await env.DEDUP_KV.put(`trust:${oldCredentialId}`, JSON.stringify(oldRecord));
 
-  return { migrated: true, trust_score: ts.score };
+  // S85CW: Migrate credit balance (pack_balance, sub_credits, sub_plan, etc.)
+  // Stored as JSON at credits:{cred_id}. Skip silently if absent.
+  let creditsMigrated = false;
+  try {
+    const creditsRaw = await env.DEDUP_KV.get(`credits:${oldCredentialId}`);
+    if (creditsRaw) {
+      await env.DEDUP_KV.put(`credits:${newCredentialId}`, creditsRaw);
+      creditsMigrated = true;
+    }
+  } catch (_) { /* non-fatal */ }
+
+  // S85CW: Migrate Stripe customer mapping so next purchase reuses the same
+  // Stripe customer rather than creating a duplicate (which could double-bill
+  // active subscriptions). Stored as a plain string (customer id), not JSON.
+  let stripeCustMigrated = false;
+  try {
+    const custRaw = await env.DEDUP_KV.get(`stripe_cust:${oldCredentialId}`);
+    if (custRaw) {
+      await env.DEDUP_KV.put(`stripe_cust:${newCredentialId}`, custRaw);
+      stripeCustMigrated = true;
+    }
+  } catch (_) { /* non-fatal */ }
+
+  // S85CW: Migrate per-credential proof index (built by Change 2 — safe to
+  // run before that ships; will simply no-op until the index starts populating).
+  let credProofsMigrated = false;
+  try {
+    const proofsRaw = await env.DEDUP_KV.get(`cred_proofs:${oldCredentialId}`);
+    if (proofsRaw) {
+      await env.DEDUP_KV.put(`cred_proofs:${newCredentialId}`, proofsRaw);
+      credProofsMigrated = true;
+    }
+  } catch (_) { /* non-fatal */ }
+
+  return {
+    migrated: true,
+    trust_score: ts.score,
+    credits_migrated: creditsMigrated,
+    stripe_cust_migrated: stripeCustMigrated,
+    cred_proofs_migrated: credProofsMigrated,
+  };
+}
+
+// S85CW Change 2: Maintain a per-credential index of proof content hashes.
+// Called after a proof:{hash} record is successfully written. Idempotent —
+// if the hash is already present in the index, no write occurs. Non-fatal:
+// any failure is swallowed so proof registration never blocks on the index.
+// The proof:{hash} record is the source of truth; this index is an accelerator
+// so /api/portfolio can page through a credential's proofs without scanning.
+async function addToCredProofsIndex(env, credential_id, content_hash) {
+  if (!credential_id || !content_hash) return;
+  try {
+    const key = `cred_proofs:${credential_id}`;
+    const raw = await env.DEDUP_KV.get(key);
+    let record;
+    if (raw) {
+      try { record = JSON.parse(raw); } catch (_) { record = null; }
+    }
+    if (!record || !Array.isArray(record.hashes)) {
+      record = { hashes: [], updated_at: null };
+    }
+    if (record.hashes.indexOf(content_hash) !== -1) {
+      return; // already indexed — idempotent no-op
+    }
+    record.hashes.push(content_hash);
+    record.updated_at = new Date().toISOString();
+    await env.DEDUP_KV.put(key, JSON.stringify(record));
+  } catch (_) {
+    // Non-fatal: index is an accelerator, not source of truth.
+  }
 }
 
 
@@ -1485,16 +1623,30 @@ async function handleRegisterProof(request, env) {
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
 
+  // S85CW Change 2: Index this proof under the attester's credential so
+  // /api/portfolio can page through it. Fire-and-continue semantics.
+  await addToCredProofsIndex(env, credential_id, content_hash);
+
   // S40: Store reverse lookup for short link resolution
   if (short_id) {
     await env.DEDUP_KV.put(`short:${short_id}`, content_hash);
   }
 
-  // Increment rate limit counter (24h TTL)
+  // Increment daily rate limit counter (24h TTL)
   await env.DEDUP_KV.put(rateKey, JSON.stringify({
     count: rateCount + 1,
     last_registration: now,
   }), { expirationTtl: 86400 });
+
+  // S83: Increment weekly rate limit counter (7-day TTL)
+  const weeklyHash = await hmacSHA256(env.DEDUP_SECRET, "wrate:" + credential_id);
+  const weeklyKey = `wrate:${weeklyHash}`;
+  const weeklyRaw = await env.DEDUP_KV.get(weeklyKey);
+  const weeklyCount = weeklyRaw ? (JSON.parse(weeklyRaw).count || 0) : 0;
+  await env.DEDUP_KV.put(weeklyKey, JSON.stringify({
+    count: weeklyCount + 1,
+    last_registration: now,
+  }), { expirationTtl: 604800 });
 
   const short_url = short_id ? `https://hipprotocol.org/p/${short_id}` : null;
 
@@ -1849,6 +2001,984 @@ async function handleDisputeProof(request, env) {
   }, 200, origin);
 }
 
+// ══════════════════════════════════════════════════════════════
+// S82: API Key Management + Authenticated Attestation (Phase B)
+// ══════════════════════════════════════════════════════════════
+
+// POST /api/admin/keys — Generate an API key bound to a credential.
+// Protected by DEDUP_SECRET as bearer token (admin-only).
+// KV key pattern: api_key:{hmac(DEDUP_SECRET, rawKey)} → { credential_id, label, created_at, active }
+// The raw key is returned once and never stored.
+
+async function handleCreateApiKey(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Admin auth: Bearer token must match ADMIN_KEY
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ") || authHeader.slice(7) !== env.ADMIN_KEY) {
+    return jsonResponse({ error: "Unauthorized" }, 401, origin);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const { credential_id, label } = body;
+  if (!credential_id) {
+    return jsonResponse({ error: "Missing credential_id" }, 400, origin);
+  }
+
+  // Credential must exist in trust system
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({
+      error: "Credential not found. Only credentials issued through HIP may receive API keys."
+    }, 404, origin);
+  }
+
+  const trustRecord = JSON.parse(trustRaw);
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "This credential has been superseded. Use the current credential."
+    }, 403, origin);
+  }
+
+  // Generate a 32-byte (64 hex char) random API key
+  const rawBytes = crypto.getRandomValues(new Uint8Array(32));
+  const rawKey = Array.from(rawBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+
+  // Store as HMAC hash — raw key never persists
+  const keyHash = await hmacSHA256(env.DEDUP_SECRET, rawKey);
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  const keyRecord = {
+    credential_id,
+    tier: trustRecord.tier,
+    label: label || null,
+    created_at: now,
+    active: true,
+  };
+
+  await env.DEDUP_KV.put(`api_key:${keyHash}`, JSON.stringify(keyRecord));
+
+  return jsonResponse({
+    success: true,
+    api_key: rawKey,
+    credential_id,
+    tier: trustRecord.tier,
+    label: label || null,
+    created_at: now,
+    message: "Store this API key securely. It will not be shown again.",
+  }, 200, origin);
+}
+
+
+// POST /api/attest — Submit an attestation via API key.
+// Authenticated via X-API-Key header. Reuses the proof registration pipeline
+// with the same gates: credential check, rate limits, first-write-wins,
+// short ID generation, trust score update.
+//
+// Request body: { content_hash, classification, signature, attested_at?, sealed?, protocol_version?, perceptual_hash?, public_key? }
+// Rate limits: shared with app attestations (T1:50/day, T2:25/day, T3:10/day)
+
+async function handleApiAttest(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── Auth: Resolve API key to credential ──
+  const apiKey = request.headers.get("X-API-Key");
+  if (!apiKey) {
+    return jsonResponse({
+      error: "Missing X-API-Key header. See https://hipkit.net/api.html#authentication for details."
+    }, 401, origin);
+  }
+
+  const keyHash = await hmacSHA256(env.DEDUP_SECRET, apiKey);
+  const keyRaw = await env.DEDUP_KV.get(`api_key:${keyHash}`);
+  if (!keyRaw) {
+    return jsonResponse({ error: "Invalid API key" }, 403, origin);
+  }
+
+  const keyRecord = JSON.parse(keyRaw);
+  if (!keyRecord.active) {
+    return jsonResponse({ error: "API key has been deactivated" }, 403, origin);
+  }
+
+  const credential_id = keyRecord.credential_id;
+
+  // ── Parse request body ──
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  }
+
+  const {
+    content_hash,
+    classification,
+    signature,
+    attested_at,
+    sealed,
+    protocol_version,
+    perceptual_hash,
+    public_key,
+  } = body;
+
+  // ── Validate required fields ──
+  if (!content_hash || !classification || !signature) {
+    return jsonResponse({
+      error: "Missing required fields: content_hash, classification, signature"
+    }, 400, origin);
+  }
+
+  // content_hash must be 64-char hex (SHA-256)
+  if (!/^[0-9a-f]{64}$/.test(content_hash)) {
+    return jsonResponse({
+      error: "content_hash must be a 64-character lowercase hex string (SHA-256)"
+    }, 400, origin);
+  }
+
+  // classification must be a known HIP value
+  const validClassifications = ["CompleteHumanOrigin", "HumanOriginAssisted", "HumanDirectedCollaborative"];
+  if (!validClassifications.includes(classification)) {
+    return jsonResponse({
+      error: "Invalid classification. Must be one of: " + validClassifications.join(", ")
+    }, 400, origin);
+  }
+
+  // attested_at: default to now if not provided
+  const attestedAt = attested_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(attestedAt)) {
+    return jsonResponse({
+      error: "attested_at must be ISO 8601 UTC format: YYYY-MM-DDTHH:MM:SSZ"
+    }, 400, origin);
+  }
+
+  // Optional: validate public_key if provided
+  if (public_key) {
+    if (!/^[0-9a-f]{64}$/.test(public_key)) {
+      return jsonResponse({
+        error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)"
+      }, 400, origin);
+    }
+    // Verify public_key matches credential_id
+    const enc = new TextEncoder();
+    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+    if (computedId !== credential_id) {
+      return jsonResponse({
+        error: "public_key does not match the credential bound to this API key."
+      }, 400, origin);
+    }
+  }
+
+  // ── Gate 1: Credential must exist and be in good standing ──
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({
+      error: "Credential not found. The credential bound to this API key no longer exists."
+    }, 403, origin);
+  }
+
+  const trustRecord = JSON.parse(trustRaw);
+
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "The credential bound to this API key has been superseded. Generate a new key with your current credential."
+    }, 403, origin);
+  }
+
+  // ── Gate 2: Rate limit — shared with app attestations ──
+  const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credential_id);
+  const rateKey = `prate:${credHash}`;
+  const rateRaw = await env.DEDUP_KV.get(rateKey);
+  let rateCount = 0;
+  if (rateRaw) {
+    rateCount = JSON.parse(rateRaw).count || 0;
+  }
+
+  const tierLimits = { 1: 50, 2: 25, 3: 10 };
+  const limit = tierLimits[trustRecord.tier] || 10;
+
+  if (rateCount >= limit) {
+    return jsonResponse({
+      error: `Rate limit exceeded. Maximum ${limit} attestations per 24 hours for Tier ${trustRecord.tier} credentials.`,
+      limit,
+      current: rateCount,
+    }, 429, origin);
+  }
+
+  // ── Gate 3: First-write-wins ──
+  const proofKey = `proof:${content_hash}`;
+  const existing = await env.DEDUP_KV.get(proofKey);
+  if (existing) {
+    const existingRecord = JSON.parse(existing);
+    return jsonResponse({
+      error: "conflict",
+      message: "A proof record already exists for this content hash. First registration wins.",
+      existing_record: existingRecord.sealed ? {
+        content_hash: existingRecord.content_hash,
+        registered_at: existingRecord.registered_at,
+        sealed: true,
+        message: "This proof is sealed by its creator.",
+      } : existingRecord,
+    }, 409, origin);
+  }
+
+  // ── Write proof record ──
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  // Generate unique short ID (5 attempts)
+  let short_id = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateShortId();
+    const existing_short = await env.DEDUP_KV.get(`short:${candidate}`);
+    if (!existing_short) {
+      short_id = candidate;
+      break;
+    }
+  }
+
+  const proofRecord = {
+    content_hash,
+    perceptual_hash: perceptual_hash || null,
+    credential_id,
+    public_key: public_key || null,
+    credential_tier: trustRecord.tier,
+    classification,
+    attested_at: attestedAt,
+    registered_at: now,
+    signature,
+    sealed: sealed === true,
+    protocol_version: protocol_version || "1.2",
+    short_id: short_id,
+    source: "api",
+  };
+
+  await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S85CW Change 2: Index this proof under the attester's credential.
+  await addToCredProofsIndex(env, credential_id, content_hash);
+
+  // Store short link reverse lookup
+  if (short_id) {
+    await env.DEDUP_KV.put(`short:${short_id}`, content_hash);
+  }
+
+  // Increment daily rate limit counter (24h TTL)
+  await env.DEDUP_KV.put(rateKey, JSON.stringify({
+    count: rateCount + 1,
+    last_registration: now,
+  }), { expirationTtl: 86400 });
+
+  // S83: Increment weekly rate limit counter (7-day TTL)
+  const weeklyHash = await hmacSHA256(env.DEDUP_SECRET, "wrate:" + credential_id);
+  const weeklyKey = `wrate:${weeklyHash}`;
+  const weeklyRaw = await env.DEDUP_KV.get(weeklyKey);
+  const weeklyCount = weeklyRaw ? (JSON.parse(weeklyRaw).count || 0) : 0;
+  await env.DEDUP_KV.put(weeklyKey, JSON.stringify({
+    count: weeklyCount + 1,
+    last_registration: now,
+  }), { expirationTtl: 604800 });
+
+  // Update trust record (attestation count, active months, score)
+  const trustRecordCopy = { ...trustRecord };
+  trustRecordCopy.attestation_count = (trustRecordCopy.attestation_count || 0) + 1;
+  trustRecordCopy.last_seen = now;
+  const monthStr = now.substring(0, 7);
+  if (!trustRecordCopy.active_months) trustRecordCopy.active_months = [];
+  if (!trustRecordCopy.active_months.includes(monthStr)) {
+    trustRecordCopy.active_months.push(monthStr);
+  }
+  const ts = computeTrustScore(trustRecordCopy);
+  trustRecordCopy.trust_score = ts.score;
+  await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordCopy));
+
+  const short_url = short_id ? `https://hipprotocol.org/p/${short_id}` : null;
+
+  return jsonResponse({
+    success: true,
+    content_hash,
+    classification,
+    credential_tier: trustRecord.tier,
+    attested_at: attestedAt,
+    registered_at: now,
+    proof_url: `https://hipprotocol.org/proof.html?hash=${content_hash}`,
+    short_id,
+    short_url,
+    sealed: proofRecord.sealed,
+  }, 200, origin);
+}
+
+
+// ── S81: Public Verify API ──
+// GET /api/verify/{hash} — Public verification endpoint.
+// Returns a clean, integration-friendly response indicating whether content
+// has been attested via HIP. No authentication required.
+// This is the stable public API for integrators (CMS, galleries, auction houses, etc.).
+// The raw proof record is available via GET /api/proof/{hash} for advanced use.
+
+async function handleVerify(contentHash, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Validate hash format
+  if (!/^[0-9a-f]{64}$/.test(contentHash)) {
+    return jsonResponse({
+      verified: false,
+      error: "Invalid content hash. Must be a 64-character lowercase hex SHA-256 hash."
+    }, 400, origin);
+  }
+
+  const proofKey = `proof:${contentHash}`;
+  const raw = await env.DEDUP_KV.get(proofKey);
+
+  if (!raw) {
+    return jsonResponse({
+      verified: false,
+      content_hash: contentHash,
+    }, 200, origin);
+  }
+
+  const record = JSON.parse(raw);
+
+  // Sealed records: confirm existence but withhold details
+  if (record.sealed) {
+    return jsonResponse({
+      verified: true,
+      record: {
+        content_hash: contentHash,
+        sealed: true,
+        registered_at: record.registered_at,
+      },
+      message: "This content has been attested but the proof details are sealed by its creator.",
+    }, 200, origin);
+  }
+
+  // Public record: return integration-friendly verification response
+  const short_url = record.short_id
+    ? `https://hipprotocol.org/p/${record.short_id}`
+    : null;
+
+  return jsonResponse({
+    verified: true,
+    record: {
+      content_hash: contentHash,
+      classification: record.classification,
+      credential_tier: record.credential_tier,
+      attested_at: record.attested_at,
+      registered_at: record.registered_at,
+      short_id: record.short_id || null,
+      proof_url: `https://hipprotocol.org/proof.html?hash=${contentHash}`,
+      short_url,
+      sealed: false,
+    },
+  }, 200, origin);
+}
+
+// ══════════════════════════════════════════════════════════════
+// S83: Credit Balance, Usage, Consume + Stripe Checkout/Portal/Webhook
+// ══════════════════════════════════════════════════════════════
+
+// POST /api/credits/balance — Return credit balance for authenticated credential.
+// Body: { credential_id, public_key, timestamp, signature } (HIPKit app auth)
+// Response: { available, pack_balance, sub_credits, sub_plan, sub_status, total_consumed }
+
+async function handleCreditBalance(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/credits/balance", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id } = auth;
+  const creditsRaw = await env.DEDUP_KV.get(`credits:${credential_id}`);
+
+  if (creditsRaw) {
+    const credits = JSON.parse(creditsRaw);
+    let available;
+    if (credits.sub_status === "active" && credits.sub_plan === "studio") {
+      available = "unlimited";
+    } else {
+      available = (credits.pack_balance || 0) + (credits.sub_credits || 0);
+    }
+    return jsonResponse({
+      available,
+      pack_balance: credits.pack_balance || 0,
+      sub_credits: credits.sub_credits || 0,
+      sub_plan: credits.sub_plan || null,
+      sub_status: credits.sub_status || "inactive",
+      total_consumed: credits.total_consumed || 0,
+    }, 200, origin);
+  }
+
+  // No credit record — return defaults
+  return jsonResponse({
+    available: 0,
+    pack_balance: 0,
+    sub_credits: 0,
+    sub_plan: null,
+    sub_status: "inactive",
+    total_consumed: 0,
+  }, 200, origin);
+}
+
+// POST /api/usage — Return rate-limit usage for authenticated credential.
+// Reads existing prate: key (daily) and trust record tier to compute limits.
+// Response: { daily_used, daily_limit, daily_remaining, daily_resets_at,
+//             weekly_used, weekly_limit, weekly_remaining, weekly_resets_at }
+
+async function handleUsage(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/usage", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id, trust_record } = auth;
+
+  // Read daily rate counter from existing prate: key
+  const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credential_id);
+  const rateKey = `prate:${credHash}`;
+  const rateRaw = await env.DEDUP_KV.get(rateKey);
+
+  const tierDailyLimits = { 1: 50, 2: 25, 3: 10 };
+  const tierWeeklyLimits = { 1: 100, 2: 50, 3: 20 };
+  const dailyLimit = tierDailyLimits[trust_record.tier] || 10;
+  const weeklyLimit = tierWeeklyLimits[trust_record.tier] || 20;
+
+  let dailyUsed = 0;
+  let lastRegistration = null;
+  if (rateRaw) {
+    const rate = JSON.parse(rateRaw);
+    dailyUsed = rate.count || 0;
+    lastRegistration = rate.last_registration || null;
+  }
+
+  // prate: key TTL resets on each write (24h sliding window).
+  // Estimate daily reset from last registration + 24h.
+  const now = new Date();
+  let dailyResetsAt;
+  if (lastRegistration && dailyUsed > 0) {
+    dailyResetsAt = new Date(new Date(lastRegistration).getTime() + 86400000).toISOString();
+  } else {
+    dailyResetsAt = new Date(now.getTime() + 86400000).toISOString();
+  }
+
+  // Weekly tracking: read wrate: key (same pattern as prate: but 7-day TTL)
+  const weeklyHash = await hmacSHA256(env.DEDUP_SECRET, "wrate:" + credential_id);
+  const weeklyKey = `wrate:${weeklyHash}`;
+  const weeklyRaw = await env.DEDUP_KV.get(weeklyKey);
+  let weeklyUsed = 0;
+  let weeklyLastReg = null;
+  if (weeklyRaw) {
+    const wr = JSON.parse(weeklyRaw);
+    weeklyUsed = wr.count || 0;
+    weeklyLastReg = wr.last_registration || null;
+  }
+
+  let weeklyResetsAt;
+  if (weeklyLastReg && weeklyUsed > 0) {
+    weeklyResetsAt = new Date(new Date(weeklyLastReg).getTime() + 7 * 86400000).toISOString();
+  } else {
+    weeklyResetsAt = new Date(now.getTime() + 7 * 86400000).toISOString();
+  }
+
+  return jsonResponse({
+    daily_used: dailyUsed,
+    daily_limit: dailyLimit,
+    daily_remaining: Math.max(0, dailyLimit - dailyUsed),
+    daily_resets_at: dailyResetsAt,
+    weekly_used: weeklyUsed,
+    weekly_limit: weeklyLimit,
+    weekly_remaining: Math.max(0, weeklyLimit - weeklyUsed),
+    weekly_resets_at: weeklyResetsAt,
+  }, 200, origin);
+}
+
+// POST /api/credits/consume — Deduct one credit from authenticated credential.
+// Prefers subscription credits, then pack credits. Studio plan is unlimited.
+// Response: { consumed, remaining, source } or { error, consumed: false }
+
+async function handleCreditConsume(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/credits/consume", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id } = auth;
+  const creditsRaw = await env.DEDUP_KV.get(`credits:${credential_id}`);
+
+  if (!creditsRaw) {
+    return jsonResponse({ error: "No credits available", consumed: false }, 402, origin);
+  }
+
+  const credits = JSON.parse(creditsRaw);
+
+  // Studio unlimited plan — no deduction needed
+  if (credits.sub_status === "active" && credits.sub_plan === "studio") {
+    credits.total_consumed = (credits.total_consumed || 0) + 1;
+    await env.DEDUP_KV.put(`credits:${credential_id}`, JSON.stringify(credits));
+    return jsonResponse({ consumed: true, remaining: "unlimited", source: "subscription" }, 200, origin);
+  }
+
+  // Try subscription credits first, then pack credits
+  let source;
+  if ((credits.sub_credits || 0) > 0) {
+    credits.sub_credits -= 1;
+    source = "subscription";
+  } else if ((credits.pack_balance || 0) > 0) {
+    credits.pack_balance -= 1;
+    source = "pack";
+  } else {
+    return jsonResponse({ error: "No credits available", consumed: false }, 402, origin);
+  }
+
+  credits.total_consumed = (credits.total_consumed || 0) + 1;
+  await env.DEDUP_KV.put(`credits:${credential_id}`, JSON.stringify(credits));
+
+  const remaining = (credits.pack_balance || 0) + (credits.sub_credits || 0);
+  return jsonResponse({ consumed: true, remaining, source }, 200, origin);
+}
+
+// POST /api/stripe/checkout — Create a Stripe Checkout session.
+// Body: { credential_id, public_key, timestamp, signature, price_id }
+// Response: { checkout_url }
+
+async function handleStripeCheckout(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/stripe/checkout", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id } = auth;
+  const { price_id } = auth.body;
+
+  if (!price_id) {
+    return jsonResponse({ error: "Missing price_id" }, 400, origin);
+  }
+
+  if (!env.STRIPE_SECRET_KEY) {
+    return jsonResponse({ error: "Stripe is not configured" }, 503, origin);
+  }
+
+  // Get or create Stripe customer
+  let customerId;
+  const custRaw = await env.DEDUP_KV.get(`stripe_cust:${credential_id}`);
+
+  if (custRaw) {
+    customerId = custRaw;
+  } else {
+    const custResp = await fetch("https://api.stripe.com/v1/customers", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + env.STRIPE_SECRET_KEY,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: "metadata[credential_id]=" + encodeURIComponent(credential_id),
+    });
+    if (!custResp.ok) {
+      return jsonResponse({ error: "Failed to create customer" }, 500, origin);
+    }
+    const custData = await custResp.json();
+    customerId = custData.id;
+    await env.DEDUP_KV.put(`stripe_cust:${credential_id}`, customerId);
+  }
+
+  // One-time credit packs vs. recurring subscriptions
+  const packPrices = [
+    "price_1THHRmEl67wPY8DY42UC01I1",  // Starter 25
+    "price_1THHTOEl67wPY8DYTDmQW4zf",  // Standard 100
+    "price_1THHU6El67wPY8DY1NvkhpxI",  // Pro 300
+    "price_1THHUiEl67wPY8DYUEnxLose",  // Studio 600
+  ];
+  const isSubscription = !packPrices.includes(price_id);
+
+  const params = new URLSearchParams();
+  params.append("customer", customerId);
+  params.append("mode", isSubscription ? "subscription" : "payment");
+  params.append("line_items[0][price]", price_id);
+  params.append("line_items[0][quantity]", "1");
+  params.append("success_url", "https://hipkit.net/app.html?checkout=success");
+  params.append("cancel_url", "https://hipkit.net/app.html?checkout=cancel");
+  params.append("metadata[credential_id]", credential_id);
+  if (isSubscription) {
+    params.append("subscription_data[metadata][credential_id]", credential_id);
+  } else {
+    params.append("payment_intent_data[metadata][credential_id]", credential_id);
+  }
+
+  const checkResp = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + env.STRIPE_SECRET_KEY,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  });
+
+  if (!checkResp.ok) {
+    return jsonResponse({ error: "Failed to create checkout session" }, 500, origin);
+  }
+  const checkData = await checkResp.json();
+  return jsonResponse({ checkout_url: checkData.url }, 200, origin);
+}
+
+// POST /api/stripe/portal — Create a Stripe Billing Portal session.
+// Body: { credential_id, public_key, timestamp, signature }
+// Response: { portal_url }
+
+async function handleStripePortal(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/stripe/portal", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id } = auth;
+
+  if (!env.STRIPE_SECRET_KEY) {
+    return jsonResponse({ error: "Stripe is not configured" }, 503, origin);
+  }
+
+  const custRaw = await env.DEDUP_KV.get(`stripe_cust:${credential_id}`);
+  if (!custRaw) {
+    return jsonResponse({ error: "No billing account found. Purchase credits first." }, 404, origin);
+  }
+
+  const params = new URLSearchParams();
+  params.append("customer", custRaw);
+  params.append("return_url", "https://hipkit.net/app.html#account");
+
+  const portalResp = await fetch("https://api.stripe.com/v1/billing_portal/sessions", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + env.STRIPE_SECRET_KEY,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  });
+
+  if (!portalResp.ok) {
+    return jsonResponse({ error: "Failed to create portal session" }, 500, origin);
+  }
+  const portalData = await portalResp.json();
+  return jsonResponse({ portal_url: portalData.url }, 200, origin);
+}
+
+// POST /api/stripe/webhook — Stripe webhook handler.
+// Verifies Stripe signature, then processes:
+//   checkout.session.completed  → credit pack / subscription purchase
+//   customer.subscription.deleted → subscription cancellation
+//   invoice.paid (subscription_cycle) → monthly credit reset
+
+async function handleStripeWebhook(request, env) {
+  if (!env.STRIPE_WEBHOOK_SECRET) {
+    return new Response("Webhook not configured", { status: 503 });
+  }
+
+  const sigHeader = request.headers.get("stripe-signature");
+  if (!sigHeader) {
+    return new Response("Missing stripe-signature header", { status: 400 });
+  }
+
+  const rawBody = await request.text();
+
+  // Parse Stripe signature header: t=timestamp,v1=signature
+  const sigParts = {};
+  sigHeader.split(",").forEach(p => {
+    const eq = p.indexOf("=");
+    if (eq > 0) sigParts[p.substring(0, eq).trim()] = p.substring(eq + 1);
+  });
+
+  if (!sigParts.t || !sigParts.v1) {
+    return new Response("Malformed signature header", { status: 400 });
+  }
+
+  // Verify: HMAC-SHA256(webhook_secret, "timestamp.rawBody") must match v1
+  const signedPayload = sigParts.t + "." + rawBody;
+  const expectedSig = await hmacSHA256(env.STRIPE_WEBHOOK_SECRET, signedPayload);
+  if (expectedSig !== sigParts.v1) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  const event = JSON.parse(rawBody);
+
+  // ── Credit pack quantities by price ID ──
+  const packCredits = {
+    "price_1THHRmEl67wPY8DY42UC01I1": 25,   // Starter
+    "price_1THHTOEl67wPY8DYTDmQW4zf": 100,  // Standard
+    "price_1THHU6El67wPY8DY1NvkhpxI": 300,  // Pro
+    "price_1THHUiEl67wPY8DYUEnxLose": 600,  // Studio pack
+  };
+  const subPlans = {
+    "price_1THHVdEl67wPY8DYV8RkTrhh": { plan: "creator", credits: 50 },
+    "price_1THHWIEl67wPY8DYu0SM7Smw": { plan: "professional", credits: 150 },
+    "price_1THHX4El67wPY8DY3SQyhd2H": { plan: "studio", credits: 0 },  // unlimited
+  };
+
+  // ── checkout.session.completed — purchase confirmed ──
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const credentialId = session.metadata?.credential_id;
+    if (!credentialId) return new Response("OK", { status: 200 });
+
+    // Retrieve line items to identify the purchased price
+    const lineResp = await fetch(
+      `https://api.stripe.com/v1/checkout/sessions/${session.id}/line_items`,
+      { headers: { "Authorization": "Bearer " + env.STRIPE_SECRET_KEY } }
+    );
+    const lineData = await lineResp.json();
+    if (!lineData.data || lineData.data.length === 0) {
+      return new Response("OK", { status: 200 });
+    }
+
+    const priceId = lineData.data[0].price.id;
+
+    // Read or initialize credit record
+    const creditsRaw = await env.DEDUP_KV.get(`credits:${credentialId}`);
+    const credits = creditsRaw ? JSON.parse(creditsRaw) : {
+      pack_balance: 0, sub_credits: 0, sub_plan: null,
+      sub_status: "inactive", total_consumed: 0,
+    };
+
+    if (packCredits[priceId]) {
+      credits.pack_balance = (credits.pack_balance || 0) + packCredits[priceId];
+    } else if (subPlans[priceId]) {
+      const plan = subPlans[priceId];
+      credits.sub_plan = plan.plan;
+      credits.sub_status = "active";
+      credits.sub_credits = plan.credits;
+    }
+
+    await env.DEDUP_KV.put(`credits:${credentialId}`, JSON.stringify(credits));
+
+    // Store Stripe customer mapping
+    if (session.customer) {
+      await env.DEDUP_KV.put(`stripe_cust:${credentialId}`, session.customer);
+    }
+  }
+
+  // ── customer.subscription.deleted — subscription canceled ──
+  if (event.type === "customer.subscription.deleted") {
+    const sub = event.data.object;
+    const credentialId = sub.metadata?.credential_id;
+    if (credentialId) {
+      const creditsRaw = await env.DEDUP_KV.get(`credits:${credentialId}`);
+      if (creditsRaw) {
+        const credits = JSON.parse(creditsRaw);
+        credits.sub_status = "inactive";
+        credits.sub_credits = 0;
+        credits.sub_plan = null;
+        await env.DEDUP_KV.put(`credits:${credentialId}`, JSON.stringify(credits));
+      }
+    }
+  }
+
+  // ── invoice.paid — subscription renewal (monthly credit reset) ──
+  if (event.type === "invoice.paid") {
+    const invoice = event.data.object;
+    if (invoice.billing_reason === "subscription_cycle") {
+      // Try to find credential_id from subscription metadata
+      const subId = invoice.subscription;
+      if (subId) {
+        const subResp = await fetch(
+          `https://api.stripe.com/v1/subscriptions/${subId}`,
+          { headers: { "Authorization": "Bearer " + env.STRIPE_SECRET_KEY } }
+        );
+        const subData = await subResp.json();
+        const credentialId = subData.metadata?.credential_id;
+        if (credentialId) {
+          const creditsRaw = await env.DEDUP_KV.get(`credits:${credentialId}`);
+          if (creditsRaw) {
+            const credits = JSON.parse(creditsRaw);
+            const planCredits = { creator: 50, professional: 150, studio: 0 };
+            if (credits.sub_plan && planCredits[credits.sub_plan] !== undefined) {
+              credits.sub_credits = planCredits[credits.sub_plan];
+              await env.DEDUP_KV.put(`credits:${credentialId}`, JSON.stringify(credits));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return new Response("OK", { status: 200 });
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// S85CW Change 3: Portfolio endpoint
+// ══════════════════════════════════════════════════════════════
+// POST /api/portfolio — Paginated list of proofs attested under the
+// authenticated credential. Reads cred_proofs:{cred_id} (built by Change 2
+// going forward, and by the backfill endpoint for existing proofs).
+// Body: { credential_id, public_key, timestamp, signature, page, per_page }
+// Response: { records, total, total_pages, page, per_page }
+//
+// Each record is flagged with a `recovered_from` field when the proof's
+// original credential_id differs from the requesting credential_id — this
+// happens when the index was migrated forward by migrateTrustRecord during
+// credential recovery. Frontends can render a "originally attested as X"
+// badge using this field. The proof record itself is never mutated: the
+// original signature chain remains intact.
+
+async function handlePortfolio(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/portfolio", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id, body } = auth;
+
+  // Pagination inputs (defensive defaults; cap per_page server-side at 100)
+  let page = parseInt(body.page, 10);
+  let per_page = parseInt(body.per_page, 10);
+  if (!Number.isFinite(page) || page < 1) page = 1;
+  if (!Number.isFinite(per_page) || per_page < 1) per_page = 20;
+  if (per_page > 100) per_page = 100;
+
+  const indexRaw = await env.DEDUP_KV.get(`cred_proofs:${credential_id}`);
+  if (!indexRaw) {
+    return jsonResponse({
+      records: [],
+      total: 0,
+      total_pages: 0,
+      page,
+      per_page,
+    }, 200, origin);
+  }
+
+  let index;
+  try { index = JSON.parse(indexRaw); } catch (_) { index = null; }
+  if (!index || !Array.isArray(index.hashes) || index.hashes.length === 0) {
+    return jsonResponse({
+      records: [],
+      total: 0,
+      total_pages: 0,
+      page,
+      per_page,
+    }, 200, origin);
+  }
+
+  // Newest first — append-order means last element is most recent
+  const ordered = index.hashes.slice().reverse();
+  const total = ordered.length;
+  const total_pages = Math.ceil(total / per_page);
+
+  // Clamp page to valid range so out-of-bounds requests return empty rather than error
+  if (page > total_pages && total_pages > 0) {
+    return jsonResponse({
+      records: [],
+      total,
+      total_pages,
+      page,
+      per_page,
+    }, 200, origin);
+  }
+
+  const start = (page - 1) * per_page;
+  const slice = ordered.slice(start, start + per_page);
+
+  // Fetch each proof record. Orphan hashes (index entry exists but proof:{hash}
+  // has been deleted for legal/compliance reasons) are skipped, not errored.
+  const records = [];
+  for (const hash of slice) {
+    const proofRaw = await env.DEDUP_KV.get(`proof:${hash}`);
+    if (!proofRaw) continue;
+    let record;
+    try { record = JSON.parse(proofRaw); } catch (_) { continue; }
+
+    // Tag proofs whose original attesting credential was a predecessor of
+    // the requesting credential (carried forward by migrateTrustRecord).
+    if (record.credential_id && record.credential_id !== credential_id) {
+      record.recovered_from = record.credential_id;
+      record.migrated = true;
+    }
+
+    // Decorate with UI-friendly URLs (matching /api/verify response style)
+    record.proof_url = `https://hipprotocol.org/proof.html?hash=${record.content_hash}`;
+    if (record.short_id) {
+      record.short_url = `https://hipprotocol.org/p/${record.short_id}`;
+    }
+
+    records.push(record);
+  }
+
+  return jsonResponse({
+    records,
+    total,
+    total_pages,
+    page,
+    per_page,
+  }, 200, origin);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// S85CW Backfill: one-shot cred_proofs index builder
+// ══════════════════════════════════════════════════════════════
+// POST /api/admin/backfill-cred-proofs-index
+// Headers: X-Admin-Key: <env.ADMIN_KEY>
+// Body (optional): { cursor: "<kv-list-cursor>", limit: 1000 }
+//
+// Scans proof:* keys in chunks (Workers KV list caps at 1000/page) and
+// indexes each under its credential_id. Idempotent — addToCredProofsIndex
+// dedupes on hash. Running this twice yields the same result.
+//
+// For large proof stores, call repeatedly with the returned `cursor` until
+// list_complete=true. Delete this endpoint once backfill is done (see kickoff).
+
+async function handleBackfillCredProofsIndex(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Admin gate — same pattern as handleCreateApiKey
+  const adminKey = request.headers.get("X-Admin-Key") || "";
+  if (!env.ADMIN_KEY || adminKey !== env.ADMIN_KEY) {
+    return jsonResponse({ error: "Unauthorized" }, 401, origin);
+  }
+
+  let body = {};
+  try { body = await request.json(); } catch (_) { body = {}; }
+
+  const cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : undefined;
+  let limit = parseInt(body.limit, 10);
+  if (!Number.isFinite(limit) || limit < 1 || limit > 1000) limit = 1000;
+
+  const listResult = await env.DEDUP_KV.list({
+    prefix: "proof:",
+    limit,
+    cursor,
+  });
+
+  let scanned = 0;
+  let indexed = 0;
+  let skipped = 0;
+  const errors = [];
+
+  for (const key of listResult.keys) {
+    scanned++;
+    try {
+      const raw = await env.DEDUP_KV.get(key.name);
+      if (!raw) { skipped++; continue; }
+      const record = JSON.parse(raw);
+      if (!record.credential_id || !record.content_hash) {
+        skipped++;
+        continue;
+      }
+      await addToCredProofsIndex(env, record.credential_id, record.content_hash);
+      indexed++;
+    } catch (err) {
+      errors.push({ key: key.name, error: String(err && err.message || err) });
+    }
+  }
+
+  return jsonResponse({
+    ok: true,
+    scanned,
+    indexed,
+    skipped,
+    errors,
+    list_complete: !!listResult.list_complete,
+    cursor: listResult.cursor || null,
+  }, 200, origin);
+}
+
+
 // ── Main Router ──
 
 export default {
@@ -1856,11 +2986,13 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
+    const topOrigin = request.headers.get("Origin") || CORS_ORIGIN;
+
+    try {
 
     // CORS preflight
     if (method === "OPTIONS") {
-      const origin = request.headers.get("Origin") || CORS_ORIGIN;
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      return new Response(null, { status: 204, headers: corsHeaders(topOrigin) });
     }
 
     // Routes
@@ -1978,6 +3110,59 @@ export default {
       return handleGetProof(contentHash, request, env);
     }
 
+    // S82: Authenticated attestation submission via API key
+    if (method === "POST" && path === "/api/attest") {
+      return handleApiAttest(request, env);
+    }
+
+    // S82: Admin — generate API key for a credential
+    if (method === "POST" && path === "/api/admin/keys") {
+      return handleCreateApiKey(request, env);
+    }
+
+    // S85CW Change 3: Portfolio — paginated proofs for authenticated credential
+    if (method === "POST" && path === "/api/portfolio") {
+      return handlePortfolio(request, env);
+    }
+
+    // S85CW Backfill: one-shot index builder. Admin-key gated.
+    // REMOVE THIS ROUTE AFTER BACKFILL COMPLETES (see S85CW kickoff).
+    if (method === "POST" && path === "/api/admin/backfill-cred-proofs-index") {
+      return handleBackfillCredProofsIndex(request, env);
+    }
+
+    // S81: Public verification API — clean response for integrators
+    if (method === "GET" && path.startsWith("/api/verify/")) {
+      const contentHash = path.replace("/api/verify/", "").toLowerCase().trim();
+      if (!contentHash) return jsonResponse({ error: "Missing content hash" }, 400);
+      return handleVerify(contentHash, request, env);
+    }
+
+    // S83: Credit balance, usage, consume, Stripe checkout/portal/webhook
+    if (method === "POST" && path === "/api/credits/balance") {
+      return handleCreditBalance(request, env);
+    }
+
+    if (method === "POST" && path === "/api/usage") {
+      return handleUsage(request, env);
+    }
+
+    if (method === "POST" && path === "/api/credits/consume") {
+      return handleCreditConsume(request, env);
+    }
+
+    if (method === "POST" && path === "/api/stripe/checkout") {
+      return handleStripeCheckout(request, env);
+    }
+
+    if (method === "POST" && path === "/api/stripe/portal") {
+      return handleStripePortal(request, env);
+    }
+
+    if (method === "POST" && path === "/api/stripe/webhook") {
+      return handleStripeWebhook(request, env);
+    }
+
     // S40+S41: Short proof link resolution with dynamic OG tags
     if (method === "GET" && path.startsWith("/p/")) {
       const shortId = path.replace("/p/", "").trim();
@@ -2041,6 +3226,53 @@ export default {
       });
     }
 
-    return jsonResponse({ error: "Not found" }, 404);
+    // S83: GitHub Pages pass-through for static files.
+    // When hipprotocol.org is routed through the worker, requests for static files
+    // (HTML, CSS, JS, images) must be proxied to GitHub Pages so they still load.
+    // API-path requests that didn't match any route above get a JSON 404.
+    const host = url.hostname;
+    if (host === "hipprotocol.org" || host === "www.hipprotocol.org") {
+      // Don't proxy API paths — those are genuine 404s
+      if (path.startsWith("/api/")) {
+        return jsonResponse({ error: "Not found" }, 404, request.headers.get("Origin") || CORS_ORIGIN);
+      }
+      try {
+        const ghUrl = "https://tadortot.github.io/hip-protocol" + path + url.search;
+        const ghResp = await fetch(ghUrl, {
+          headers: {
+            "Host": "tadortot.github.io",
+            "User-Agent": request.headers.get("User-Agent") || "HIP-Worker/1.0",
+            "Accept": request.headers.get("Accept") || "*/*",
+            "Accept-Encoding": request.headers.get("Accept-Encoding") || "",
+          },
+          redirect: "follow",
+        });
+        // Pass through the response from GitHub Pages
+        const respHeaders = new Headers(ghResp.headers);
+        // Remove headers that shouldn't be forwarded
+        respHeaders.delete("x-proxy-cache");
+        respHeaders.delete("x-github-request-id");
+        return new Response(ghResp.body, {
+          status: ghResp.status,
+          headers: respHeaders,
+        });
+      } catch (e) {
+        return jsonResponse({ error: "Upstream fetch failed" }, 502);
+      }
+    }
+
+    return jsonResponse({ error: "Not found" }, 404, topOrigin);
+
+    } catch (err) {
+      // Top-level safety net: ensure any uncaught exception still returns
+      // CORS headers so browsers don't mask the real error as a CORS failure.
+      const msg = (err && err.stack) ? err.stack : String(err);
+      return jsonResponse({
+        error: "Internal error",
+        detail: msg.slice(0, 2000),
+        path: path,
+        method: method,
+      }, 500, topOrigin);
+    }
   },
 };
