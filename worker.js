@@ -1473,6 +1473,18 @@ async function handleTransferPull(code, request, env) {
 // verbatim and verified client-side by proof card viewers. This is correct: the
 // signature is a self-verifying artifact — its validity is independent of this server.
 
+// S88: Sanitize an optional display file name before storage.
+// Rules: string only; strip ASCII control chars and path separators (\\ /);
+// trim whitespace; cap at 255 chars; empty becomes null. Purely cosmetic —
+// not part of the signature payload, not trusted as authoritative.
+function sanitizeFileName(name) {
+  if (typeof name !== "string") return null;
+  let s = name.replace(/[\x00-\x1f\x7f\\\/]/g, "").trim();
+  if (!s) return null;
+  if (s.length > 255) s = s.substring(0, 255);
+  return s;
+}
+
 async function handleRegisterProof(request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
@@ -1493,7 +1505,11 @@ async function handleRegisterProof(request, env) {
     signature,
     sealed,
     protocol_version,
+    file_name,
   } = body;
+
+  // S88: Optional cosmetic display name. Not part of signature payload.
+  const sanitizedFileName = sanitizeFileName(file_name);
 
   // ── Validate required fields ──
   if (!content_hash || !credential_id || !attested_at || !classification || !signature) {
@@ -1619,6 +1635,7 @@ async function handleRegisterProof(request, env) {
     sealed: sealed === true,
     protocol_version: protocol_version || "1.2",
     short_id: short_id,
+    file_name: sanitizedFileName,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
@@ -2125,7 +2142,11 @@ async function handleApiAttest(request, env) {
     protocol_version,
     perceptual_hash,
     public_key,
+    file_name,
   } = body;
+
+  // S88: Optional cosmetic display name. Not part of signature payload.
+  const sanitizedFileName = sanitizeFileName(file_name);
 
   // ── Validate required fields ──
   if (!content_hash || !classification || !signature) {
@@ -2257,6 +2278,7 @@ async function handleApiAttest(request, env) {
     protocol_version: protocol_version || "1.2",
     short_id: short_id,
     source: "api",
+    file_name: sanitizedFileName,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
