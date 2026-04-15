@@ -761,8 +761,9 @@ async function handleTier3Register(request, env) {
 // ── Trust Score System ──
 // S29: Worker-computed Trust Score (0-100) for every credential.
 // Formula: tier_base + age_bonus + volume_bonus + consistency_bonus + liveness_bonus
+// S90 #23b: T3 provisional ceiling per HP-SPEC-v1_3. Async to read declaration KV.
 
-function computeTrustScore(record) {
+async function computeTrustScore(record, env) {
   // Tier base points
   const tierBase = record.tier === 1 ? 40 : record.tier === 2 ? 25 : 10;
 
@@ -783,7 +784,18 @@ function computeTrustScore(record) {
     : 0;
   const livenessBonus = livenessRate * 15;
 
-  const score = Math.min(Math.round(tierBase + ageBonus + volumeBonus + consistencyBonus + livenessBonus), 100);
+  let score = Math.min(Math.round(tierBase + ageBonus + volumeBonus + consistencyBonus + livenessBonus), 100);
+
+  // S90 #23b: T3 provisional ceiling (removed on Guardian declaration).
+  // Clamp value is 20 on current 0-100 scale; bumps to 60 at #23 cutover.
+  // Translator note: when scale flips to 0-1000, change 20 -> 60.
+  if (record.tier === 3 && env) {
+    const declarationActive = await env.DEDUP_KV.get("governance:t3_ceiling_declaration");
+    if (!declarationActive) {
+      score = Math.min(score, 20);
+    }
+  }
+
   return { score, tierBase, ageBonus: Math.round(ageBonus * 10) / 10, volumeBonus: Math.round(volumeBonus * 10) / 10, consistencyBonus: Math.round(consistencyBonus * 10) / 10, livenessBonus: Math.round(livenessBonus * 10) / 10, livenessRate: Math.round(livenessRate * 1000) / 1000 };
 }
 
@@ -812,7 +824,7 @@ async function handleTrustInitialize(request, env) {
   if (existing) {
     // Already exists — return current score without overwriting
     const record = JSON.parse(existing);
-    const ts = computeTrustScore(record);
+    const ts = await computeTrustScore(record, env);
     return jsonResponse({
       credential_id: credential_id,
       trust_score: ts.score,
@@ -835,7 +847,7 @@ async function handleTrustInitialize(request, env) {
     record.voucher_credential_id = voucher_credential_id;
   }
 
-  const ts = computeTrustScore(record);
+  const ts = await computeTrustScore(record, env);
   record.trust_score = ts.score;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
@@ -896,7 +908,7 @@ async function handleAttestRegister(request, env) {
   }
 
   // Recompute trust score
-  const ts = computeTrustScore(record);
+  const ts = await computeTrustScore(record, env);
   record.trust_score = ts.score;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
@@ -932,7 +944,7 @@ async function handleTrustQuery(credentialId, request, env) {
   }
 
   const record = JSON.parse(raw);
-  const ts = computeTrustScore(record);
+  const ts = await computeTrustScore(record, env);
 
   // Recompute in case of age drift since last update
   record.trust_score = ts.score;
@@ -1214,7 +1226,7 @@ async function handleUpgradeCredential(request, env) {
     record.upgraded_at = new Date().toISOString();
     record.pathway = "government-id-didit-v1";
 
-    const ts = computeTrustScore(record);
+    const ts = await computeTrustScore(record, env);
     record.trust_score = ts.score;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
@@ -1263,7 +1275,7 @@ async function handleUpgradeCredential(request, env) {
     record.upgraded_at = new Date().toISOString();
     record.voucher_credential_id = voucher_credential_id;
 
-    const ts = computeTrustScore(record);
+    const ts = await computeTrustScore(record, env);
     record.trust_score = ts.score;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
@@ -1314,7 +1326,7 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
     newRecord.voucher_credential_id = oldRecord.voucher_credential_id;
   }
 
-  const ts = computeTrustScore(newRecord);
+  const ts = await computeTrustScore(newRecord, env);
   newRecord.trust_score = ts.score;
 
   // Write new trust record
@@ -1569,6 +1581,21 @@ async function handleRegisterProof(request, env) {
     }, 403, origin);
   }
 
+  // ── S90 #23b: T3 provisional ceiling — 50 OriginalAttestation lifetime cap ──
+  // Per HP-SPEC-v1_3. Every /register-proof is an OriginalAttestation
+  // (corrections/withdrawals flow through handleDisputeProof/handleUnsealProof).
+  // Declaration key causes the cap to no-op globally when set.
+  const t3DeclarationActive = await env.DEDUP_KV.get("governance:t3_ceiling_declaration");
+  if (trustRecord.tier === 3
+      && (trustRecord.t3_original_attestation_count || 0) >= 50
+      && !t3DeclarationActive) {
+    return jsonResponse({
+      ok: false,
+      error: "t3_attestation_cap_reached",
+      detail: "Tier 3 credentials are limited to 50 original attestations until protocol-wide PFV/PHI readiness declaration."
+    }, 403, origin);
+  }
+
   // ── Gate 2: Rate limit — 50 proof registrations per credential per 24h ──
   const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credential_id);
   const rateKey = `prate:${credHash}`;
@@ -1639,6 +1666,18 @@ async function handleRegisterProof(request, env) {
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S90 #23b: Increment T3 OriginalAttestation counter on the trust record.
+  // Only applies to T3 credentials; corrections/withdrawals are exempt and
+  // don't flow through this handler. Declaration key does NOT no-op the
+  // counter itself (it continues accumulating) — only the 50-cap gate above
+  // and the read-time TI clamp in computeTrustScore are gated on it.
+  if (trustRecord.tier === 3) {
+    const trustRecordUpdated = { ...trustRecord };
+    trustRecordUpdated.t3_original_attestation_count =
+      (trustRecordUpdated.t3_original_attestation_count || 0) + 1;
+    await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordUpdated));
+  }
 
   // S85CW Change 2: Index this proof under the attester's credential so
   // /api/portfolio can page through it. Fire-and-continue semantics.
@@ -2213,6 +2252,20 @@ async function handleApiAttest(request, env) {
     }, 403, origin);
   }
 
+  // ── S90 #23b: T3 provisional ceiling — 50 OriginalAttestation lifetime cap ──
+  // Per HP-SPEC-v1_3. Every /api/attest is an OriginalAttestation.
+  // Declaration key causes the cap to no-op globally when set.
+  const t3DeclarationActive = await env.DEDUP_KV.get("governance:t3_ceiling_declaration");
+  if (trustRecord.tier === 3
+      && (trustRecord.t3_original_attestation_count || 0) >= 50
+      && !t3DeclarationActive) {
+    return jsonResponse({
+      ok: false,
+      error: "t3_attestation_cap_reached",
+      detail: "Tier 3 credentials are limited to 50 original attestations until protocol-wide PFV/PHI readiness declaration."
+    }, 403, origin);
+  }
+
   // ── Gate 2: Rate limit — shared with app attestations ──
   const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credential_id);
   const rateKey = `prate:${credHash}`;
@@ -2316,7 +2369,12 @@ async function handleApiAttest(request, env) {
   if (!trustRecordCopy.active_months.includes(monthStr)) {
     trustRecordCopy.active_months.push(monthStr);
   }
-  const ts = computeTrustScore(trustRecordCopy);
+  // S90 #23b: Increment T3 OriginalAttestation counter. Piggybacks on this write.
+  if (trustRecordCopy.tier === 3) {
+    trustRecordCopy.t3_original_attestation_count =
+      (trustRecordCopy.t3_original_attestation_count || 0) + 1;
+  }
+  const ts = await computeTrustScore(trustRecordCopy, env);
   trustRecordCopy.trust_score = ts.score;
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordCopy));
 
