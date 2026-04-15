@@ -772,20 +772,30 @@ async function computeTrustScore(record, env) {
   // Tier base points
   const tierBase = record.tier === 1 ? 40 : record.tier === 2 ? 25 : 10;
 
+  // S94 #34b: defensive normalization — guard against corrupt/partial KV records
+  // that triggered worker 1101 exceptions in S92/S93 (e.g., Dashboard-edited JSON
+  // with missing or non-string first_seen, non-numeric counters, non-array active_months).
+  const attCount = Number.isFinite(Number(record.attestation_count)) ? Math.max(0, Number(record.attestation_count)) : 0;
+  const livCount = Number.isFinite(Number(record.liveness_verified_count)) ? Math.max(0, Number(record.liveness_verified_count)) : 0;
+  const actMonths = Array.isArray(record.active_months) ? record.active_months : [];
+
   // Age bonus: max +20 over 1 year, linear
-  const ageDays = (Date.now() - new Date(record.first_seen).getTime()) / (1000 * 60 * 60 * 24);
+  const fsTime = new Date(record.first_seen).getTime();
+  const ageDays = Number.isFinite(fsTime)
+    ? Math.max(0, (Date.now() - fsTime) / (1000 * 60 * 60 * 24))
+    : 0;
   const ageBonus = Math.min(ageDays / 365 * 20, 20);
 
   // Volume bonus: max +15 at 50 attestations, linear
-  const volumeBonus = Math.min(record.attestation_count / 50 * 15, 15);
+  const volumeBonus = Math.min(attCount / 50 * 15, 15);
 
   // Consistency bonus: max +10 over 12 active months, linear
-  const activeMonths = (record.active_months || []).length;
+  const activeMonths = actMonths.length;
   const consistencyBonus = Math.min(activeMonths / 12 * 10, 10);
 
   // Liveness bonus: max +15 at 100% device-verified liveness
-  const livenessRate = record.attestation_count > 0
-    ? record.liveness_verified_count / record.attestation_count
+  const livenessRate = attCount > 0
+    ? Math.max(0, Math.min(1, livCount / attCount))
     : 0;
   const livenessBonus = livenessRate * 15;
 
@@ -1101,7 +1111,12 @@ async function handleRecoverCredential(request, env) {
     await env.DEDUP_KV.put(`dedup:${sessionData.dedupHash}`, new_credential_id);
 
     // 2. Migrate trust record
-    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env);
+    // S94 #34: tier1-reverify via Didit MUST stamp tier:1 + government-id-didit-v1
+    // pathway, regardless of predecessor tier. Fixes paid-T1-recovery-issued-T3.
+    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env, {
+      tierOverride: 1,
+      pathwayOverride: "government-id-didit-v1",
+    });
 
     // 3. Mark session as used for recovery
     sessionData.dedup = "recovered";
@@ -1160,7 +1175,11 @@ async function handleRecoverCredential(request, env) {
     // ── Perform the rotation ──
 
     // 1. Migrate trust record
-    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env);
+    // S94 #34: tier2-revouch MUST stamp tier:2 regardless of predecessor tier
+    // (hardening — same bug class as tier1-reverify; not yet observed live).
+    const trustMigration = await migrateTrustRecord(old_credential_id, new_credential_id, env, {
+      tierOverride: 2,
+    });
 
     // 2. Store voucher link in new trust record
     const newTrustRaw = await env.DEDUP_KV.get(`trust:${new_credential_id}`);
@@ -1355,7 +1374,13 @@ async function handleUpgradeCredential(request, env) {
 //        is explicitly marked superseded_by. Missing source keys are skipped
 //        silently — a recovered user who never purchased credits or has no
 //        proofs yet simply has nothing to copy.
-async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
+async function migrateTrustRecord(oldCredentialId, newCredentialId, env, options) {
+  // S94 #34: options = { tierOverride, pathwayOverride } — when the caller knows
+  // the canonical tier for the new record (e.g., tier1-reverify via Didit →
+  // tier:1 regardless of predecessor), it passes it here. Prevents bug #34
+  // where predecessors with wrong stored tier propagated forward on recovery.
+  const opts = options || {};
+
   const oldRaw = await env.DEDUP_KV.get(`trust:${oldCredentialId}`);
   if (!oldRaw) {
     // S92 #23 Step-2a: return trust_index:0 alongside trust_score:0 for the
@@ -1365,9 +1390,14 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
 
   const oldRecord = JSON.parse(oldRaw);
 
+  // S94 #34: resolve tier — caller override wins, else carry predecessor.
+  const resolvedTier = (opts.tierOverride === 1 || opts.tierOverride === 2 || opts.tierOverride === 3)
+    ? opts.tierOverride
+    : oldRecord.tier;
+
   // Create new trust record preserving history
   const newRecord = {
-    tier: oldRecord.tier,
+    tier: resolvedTier,
     first_seen: oldRecord.first_seen,     // preserve original age
     last_seen: new Date().toISOString(),
     attestation_count: oldRecord.attestation_count,
@@ -1376,6 +1406,19 @@ async function migrateTrustRecord(oldCredentialId, newCredentialId, env) {
     recovered_from: oldCredentialId,
     recovered_at: new Date().toISOString(),
   };
+
+  // S94 #34: pathway stamping (e.g., government-id-didit-v1 for Didit T1 recovery)
+  if (opts.pathwayOverride) {
+    newRecord.pathway = opts.pathwayOverride;
+  } else if (oldRecord.pathway) {
+    newRecord.pathway = oldRecord.pathway;
+  }
+
+  // S94 #34: audit stamps when tier was corrected vs predecessor
+  if (opts.tierOverride != null && opts.tierOverride !== oldRecord.tier) {
+    newRecord.tier_corrected_at = new Date().toISOString();
+    newRecord.tier_corrected_from = oldRecord.tier;
+  }
 
   // Preserve voucher link if present
   if (oldRecord.voucher_credential_id) {
