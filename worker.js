@@ -877,7 +877,10 @@ async function handleTrustInitialize(request, env) {
     return jsonResponse({ error: "Invalid tier (must be 1, 2, or 3)" }, 400, origin);
   }
 
-  // Check if already initialized
+  // Check if already initialized — must come before the tier:1 gate so that
+  // cross-site imports (hipprotocol.org #hip-import) can re-initialize an existing
+  // T1 record without needing a session_id. No escalation risk: returns existing
+  // record without overwriting.
   const existing = await env.DEDUP_KV.get(`trust:${credential_id}`);
   if (existing) {
     // Already exists — return current score without overwriting
@@ -892,6 +895,38 @@ async function handleTrustInitialize(request, env) {
       trust_score: ts.score,
       message: "Trust record already exists",
     }, 200, origin);
+  }
+
+  // S97 #34c: Tier 1 requires proven Didit session — prevent unauthenticated T1 creation.
+  // Caller must supply session_id from a completed Didit verification. We verify:
+  //   1. Session exists in KV (within 1h webhook TTL)
+  //   2. Session status is "Approved" (Didit identity check passed)
+  //   3. Session has a dedupHash (identity signals were extracted)
+  //   4. dedup:{hash} maps to this credential_id (register-dedup was called first)
+  if (tier === 1) {
+    const { session_id } = body;
+    if (!session_id) {
+      return jsonResponse({ error: "Tier 1 requires session_id from Didit verification" }, 400, origin);
+    }
+
+    const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
+    if (!sessionRaw) {
+      return jsonResponse({ error: "Session not found or expired" }, 403, origin);
+    }
+
+    const sessionData = JSON.parse(sessionRaw);
+    if (sessionData.status !== "Approved") {
+      return jsonResponse({ error: "Session not approved" }, 403, origin);
+    }
+
+    if (!sessionData.dedupHash) {
+      return jsonResponse({ error: "Session missing identity verification" }, 403, origin);
+    }
+
+    const dedupMapping = await env.DEDUP_KV.get(`dedup:${sessionData.dedupHash}`);
+    if (dedupMapping !== credential_id) {
+      return jsonResponse({ error: "Credential not linked to this identity session" }, 403, origin);
+    }
   }
 
   const now = new Date().toISOString();
