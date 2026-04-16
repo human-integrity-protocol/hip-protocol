@@ -348,15 +348,21 @@ liveness indicators apply.
 
 ---
 
-### Tier 3 — Device-Attested Issuance
+### Tier 3 — Biometric-Presence Issuance
 
-Tier 3 pathways use hardware-level biometric liveness attestation via
-the applicant's own device. The pathway establishes that a live human
-was physically present at a specific device at the moment of credential
-issuance, as attested by the device manufacturer's hardware security
-infrastructure. Tier 3 is the most accessible pathway — it requires
-no external identity documents and no existing credential holder — but
-carries the lowest initial assurance weight.
+Tier 3 pathways use biometric liveness attestation via the applicant's
+own device or synced passkey manager. The pathway establishes that a
+live human was physically present and completed a biometric check at
+the moment of credential issuance. Tier 3 claims **biometric presence**,
+not biometric uniqueness — it does not attempt to prevent one human
+from holding multiple Tier 3 credentials across devices or services.
+Sybil resistance for Tier 3 is provided by behavioral controls (Trust
+Index ceiling, lifetime attestation cap, IP rate limiting) and, when
+operational, by PFV cross-credential correlation.
+
+Tier 3 is the most accessible pathway — it requires no external
+identity documents and no existing credential holder — but carries
+the lowest initial assurance weight.
 
 **Issuance process:** The credential applicant initiates issuance through
 a HIP-conforming client application on a device capable of hardware-attested
@@ -388,26 +394,44 @@ legitimate household or shared-network scenarios.
 
 **Initial Trust Index (Tier 3):** 10 (IssuanceWeight: 10 + BehavioralScore: 0)
 
-**Rationale for low initial weight:** Device biometric attestation
-confirms that a live human was present at a device, but it does not
-establish identity. The human-accomplice attack vector — a willing
-human performing biometric checks on behalf of a credential farmer —
-is present and real. The low initial weight reflects this honest
-assessment: Tier 3 is maximally accessible but provides the least
-assurance about credential uniqueness. A Tier 3 credential holder
-who uses the protocol consistently and honestly can reach the same
-maximum TI (1000) as any Tier 1 holder through accumulated
-BehavioralScore.
+**Rationale for low initial weight:** Biometric-presence attestation
+confirms that a live human completed a biometric check, but it does
+not establish identity or uniqueness. The same human may create
+multiple Tier 3 credentials on different devices, and a willing
+human-accomplice may perform biometric checks on behalf of a
+credential farmer. The low initial weight reflects this honest
+assessment. Sybil defense at Tier 3 is structural, not issuance-gated:
+
+- **Trust Index ceiling (60):** Tier 3 credentials cannot exceed
+  TI 60 regardless of BehavioralScore, bounding the influence any
+  single Tier 3 credential can carry.
+- **Lifetime attestation cap (50):** Each Tier 3 credential is
+  limited to 50 OriginalAttestation proof registrations, bounding
+  total utility.
+- **IP rate limiting (2/24h):** Bounds credential farming velocity
+  from any single network address.
+- **PFV correlation (future):** When PFV-SPEC-v1 is operational,
+  cross-credential behavioral correlation will detect coordinated
+  Tier 3 farming. Until then, the ceiling + cap provide a
+  conservative upper bound on Tier 3 weight in the ecosystem.
+
+A Tier 3 credential holder who uses the protocol consistently and
+honestly can reach TI 60 through accumulated BehavioralScore. To
+exceed TI 60, the holder must upgrade to Tier 1 or Tier 2.
 
 **Point-of-use liveness at issuance:** The issuance process is itself a
 device-attested liveness event. No separate liveness confirmation is
 required at issuance beyond what the Tier 3 process entails.
 
-**Device binding:** A Tier 3 credential is initially bound to the device
-on which it was issued. The WebAuthn credential ID ties the attestation
-capability to the device's secure hardware. Device migration is handled
-through the portability mechanics defined in this specification,
-including the QR transfer mechanism.
+**Device or passkey binding:** A Tier 3 credential is bound to the
+device or passkey manager that performed the biometric check at
+issuance. On platforms with synced passkey infrastructure (e.g.,
+iCloud Keychain), the WebAuthn credential may be available across
+the user's synced devices — this is expected and permitted. The
+credential's attestation format (`fmt`) may be `"none"` when a
+synced passkey manager handles the ceremony rather than device-bound
+secure hardware. Cross-device portability via QR transfer remains
+available as an alternative mechanism.
 
 **Pseudonymity:** Tier 3 establishes device-level liveness, not identity.
 The ledger record confirms that Tier 3 issuance was completed; it does not
@@ -732,7 +756,7 @@ how the credential was verified:
 - "Verified via Government ID" (Tier 1 — government ID pathway)
 - "Verified via Institutional Sponsorship" (Tier 1 — institutional pathway)
 - "Verified via Peer Vouching" (Tier 2)
-- "Verified via Device Biometric" (Tier 3)
+- "Verified via Biometric Presence" (Tier 3)
 
 This is transparent, factual, and non-hierarchical in presentation.
 It tells the verifier what the protocol did to confirm a human held
@@ -1358,7 +1382,7 @@ different dimension of credential standing:
 |------|-----------|
 | Tier 1 (Government ID) | 40 |
 | Tier 2 (Peer Vouch) | 25 |
-| Tier 3 (Device Biometric) | 10 |
+| Tier 3 (Biometric Presence) | 10 |
 
 **Age Bonus:** Linear accumulation up to a maximum of **+20** points
 over the credential's first year of existence. Computed as:
@@ -1549,7 +1573,9 @@ planned extension.
 
 HP-SPEC-v1 defined Tier 2 as Device Biometric and Tier 3 as Peer Vouch.
 HP-SPEC-v1.1 swaps these assignments: Tier 2 is now Peer Vouch and
-Tier 3 is now Device Biometric. This section specifies how existing
+Tier 3 is now Biometric Presence (formerly "Device Biometric"; renamed
+in HP-SPEC-v1.2 to reflect that the pathway claims biometric presence,
+not per-device uniqueness). This section specifies how existing
 credentials issued under the v1 tier definitions are migrated.
 
 ### Migration Rule
@@ -1845,7 +1871,7 @@ lower evidence threshold. Confirmed design.
 *v1.2 adds: Post-Quantum Posture section — risk assessment by component, Ed25519 migration path,*
 *ML-DSA transition plan, cryptographic agility as first-class design requirement.*
 *v1.1 incorporates: tier reassignment (Tier 2 = Peer Vouch,
-Tier 3 = Device Biometric), revised initial weights (400/50/10), Tier 1 vouching
+Tier 3 = Biometric Presence, formerly "Device Biometric"), revised initial weights (400/50/10), Tier 1 vouching
 restriction, server-side Tier 3 registration, Trust Score specification, QR credential
 transfer, byte-level file uniqueness clarification, and credential tier migration.*
 *Derived from Document 3 (HUMAN-PROOF Scope Statement), Document 2 (Attestation

@@ -1544,7 +1544,7 @@ var regData=await regResp.json();
 
 var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
 var newCred={version:"hip-credential-v1",credentialId:cid,publicKey:pub,privateKey:b64e(privBytes),
-tier:3,pathway:"device-biometric-webauthn-v1",
+tier:3,pathway:"device-or-passkey-webauthn-v1",
 webauthn:{credentialId:waCredId,attestationObject:waAttObj,clientDataJSON:waCdj},
 issuanceProof:{type:"server-validated-webauthn-v1",sessionId:challengeData.session_id,issuanceToken:regData.issuance_token,timestamp:regData.timestamp,attestationFormat:regData.attestation_format||"unknown",userVerification:"required"},
 created:new Date().toISOString(),warning:"This file contains your private key. Store it securely.",
@@ -1639,9 +1639,9 @@ e("div",{style:{padding:"14px 18px",background:"rgba(0,0,0,0.02)",borderRadius:8
 e("details",null,
 e("summary",{style:{cursor:"pointer",fontWeight:600,color:t1,marginBottom:6}},"How credentials work"),
 e("p",null,"Your HIP credential is an Ed25519 key pair generated in your browser. The private key never leaves your device. When you attest a file, your browser signs the content hash, creating a tamper-proof proof of authorship."),
-e("p",{style:{marginTop:6}},e("strong",null,"One credential per human.")," Tier 1 uses government ID with liveness detection for the highest trust. Tier 2 requires a peer vouch from a Tier 1 holder (limited to 1 vouch per voucher per month). Tier 3 is a trial — capped at 50 attestations and a trust score of 20."),
+e("p",{style:{marginTop:6}},e("strong",null,"Tiered trust levels.")," Tier 1 uses government ID with liveness detection — one credential per human, enforced by dedup. Tier 2 requires a peer vouch from a Tier 1 holder. Tier 3 proves biometric presence (a live human was present) — capped at trust index 60 and 50 attestations."),
 e("p",{style:{marginTop:6}},e("strong",null,"Your credential is stored per-site")," in localStorage. Use the sync buttons above to share it across hipkit.net, hipprotocol.org, and hipverify.org. Always download a backup file."),
-e("p",{style:{marginTop:6}},e("strong",null,"Trust scores")," are computed server-side from your tier, account age, volume, and consistency. Higher tiers earn higher trust. Tier 3 is capped at 20. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →"))))
+e("p",{style:{marginTop:6}},e("strong",null,"Trust Index")," is computed server-side from your tier, account age, volume, and consistency (0–1000 scale). Higher tiers start with more weight. Tier 3 is capped at 60. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →"))))
 )}
 
 // S25: retireMode useState moved to top of CredPanel (hook ordering fix)
@@ -1659,7 +1659,7 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
 !mode&&!cred&&(function(){
   var saved = loadCredFromStorage();
   if(saved && saved.version === "hip-credential-v1" && !retireMode) {
-    var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Peer Vouch":saved.tier===3?"Tier 3 — Device Biometric":"Credential";
+    var sTn = saved.tier===1?"Tier 1 — Government ID":saved.tier===2?"Tier 2 — Peer Vouch":saved.tier===3?"Tier 3 — Biometric Presence":"Credential";
     return e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
       e("div",{style:{padding:"16px 18px",background:gg,border:"1px solid rgba(224,90,0,0.25)",borderRadius:8}},
         e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}},"EXISTING CREDENTIAL FOUND"),
@@ -1738,15 +1738,15 @@ e(Ico,{name:"building",size:20,color:go}),e("div",null,e("div",{style:{fontSize:
 e("button",{onClick:function(){setMode("t2")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"scale",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 2 — Peer Vouch"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"A Tier 1 credential holder vouches for you — no cost"))),
 e("button",{onClick:function(){setMode("t3")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,padding:"14px 18px",background:gg,color:go,border:"1px solid "+go,borderRadius:8,cursor:"pointer",fontFamily:sans}},
-e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Device Biometric"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Trial tier — 50 attestation limit, trust score capped at 20. Good for trying HIP."))),
+e(Ico,{name:"phone",size:20,color:go}),e("div",null,e("div",{style:{fontSize:14,fontWeight:700,color:t1}},"Tier 3 — Biometric Presence"),e("div",{style:{fontSize:11,color:t2,marginTop:2}},"Proves a live human was present — 50 attestation limit, trust index capped at 60. Good for trying HIP."))),
 // S64: Credential explainer
 e("div",{style:{padding:"14px 18px",background:"rgba(0,0,0,0.02)",borderRadius:8,fontSize:12,color:t2,lineHeight:1.7,marginTop:4}},
 e("details",null,
 e("summary",{style:{cursor:"pointer",fontWeight:600,color:t1,marginBottom:6}},"How credentials work"),
 e("p",null,"Your HIP credential is an Ed25519 key pair generated in your browser. The private key never leaves your device. When you attest a file, your browser signs the content hash, creating a tamper-proof proof of authorship."),
-e("p",{style:{marginTop:6}},e("strong",null,"One credential per human.")," Tier 1 uses government ID with liveness detection for the highest trust. Tier 2 requires a peer vouch from a Tier 1 holder (limited to 1 vouch per voucher per month). Tier 3 is a trial — capped at 50 attestations and a trust score of 20."),
+e("p",{style:{marginTop:6}},e("strong",null,"Tiered trust levels.")," Tier 1 uses government ID with liveness detection — one credential per human, enforced by dedup. Tier 2 requires a peer vouch from a Tier 1 holder. Tier 3 proves biometric presence (a live human was present) — capped at trust index 60 and 50 attestations."),
 e("p",{style:{marginTop:6}},e("strong",null,"Your credential is stored per-site")," in localStorage. Use the sync buttons in the credential panel to share it across hipkit.net, hipprotocol.org, and hipverify.org. Always download a backup file."),
-e("p",{style:{marginTop:6}},e("strong",null,"Trust scores")," are computed server-side from your tier, account age, volume, and consistency. Higher tiers earn higher trust. Tier 3 is capped at 20. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →")))),
+e("p",{style:{marginTop:6}},e("strong",null,"Trust Index")," is computed server-side from your tier, account age, volume, and consistency (0–1000 scale). Higher tiers start with more weight. Tier 3 is capped at 60. ",e("a",{href:"https://hipkit.net/learn.html",style:{color:go}},"Learn more →")))),
 e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:4}},"Load Existing Credential"),
 e(ToolDropZone,{onLoad:doImport,label:"Drop your credential file here, or tap to browse"}),
@@ -1769,7 +1769,7 @@ e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},"Tier 1 is the highest credential level. It verifies your identity against a government-issued document through an independent pathway operator. Your personal data is processed by the verification provider and never stored by HIP — only a one-way deduplication hash."),
 e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:12}},e("strong",null,"How it works:")," You'll be directed to ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," — an independent verification service that issues HIP-compatible Tier 1 credentials. Scan your government ID and complete a liveness check. Once approved, your credential is created and saved in this browser automatically."),
 e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(96,165,250,0.06)",border:"1px solid rgba(96,165,250,0.15)",color:"#60a5fa",fontSize:13,lineHeight:1.6,marginBottom:12}},e("strong",null,"Why a separate site?")," HIP is a protocol, not a business. It has no treasury and collects no money (Charter DP-7). Tier 1 verification requires a paid identity check, so it's provided by an independent pathway operator under DP-5 — just as any organization can build HIP-compatible tools without permission."),
-ToolAlert("warn",e("span",null,e("strong",null,"About the $1.00 fee:")," Verifying a government ID has real costs — there's no way around it. The verification service charges a one-time fee of $1.00 to cover identity verification processing. This is ",e("strong",null,"not a subscription")," — you pay once and your credential is yours for life. The fee goes to the pathway operator (hipverify.org), not to the HIP protocol. ",e("strong",null,"Want to try HIP first?")," Create a Tier 3 credential (device biometric) at no cost to experience the full protocol before committing.")),
+ToolAlert("warn",e("span",null,e("strong",null,"About the $1.00 fee:")," Verifying a government ID has real costs — there's no way around it. The verification service charges a one-time fee of $1.00 to cover identity verification processing. This is ",e("strong",null,"not a subscription")," — you pay once and your credential is yours for life. The fee goes to the pathway operator (hipverify.org), not to the HIP protocol. ",e("strong",null,"Want to try HIP first?")," Create a Tier 3 credential (biometric presence) at no cost to experience the full protocol before committing.")),
 e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:Object.assign({},btnG,{display:"block",textAlign:"center",textDecoration:"none",marginTop:12})},"Go to hipverify.org →"),
 e("div",{style:{marginTop:12,padding:"12px 16px",border:"1px solid "+bd,borderRadius:6,background:"rgba(255,255,255,0.02)",fontSize:12,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Institutional operators:")," Organizations that perform their own government ID verification (universities, employers, government agencies) can issue Tier 1 credentials directly through the ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go}},"hipverify.org")," institutional API. ",e("a",{href:"https://hipverify.org/docs",target:"_blank",rel:"noopener",style:{color:go}},"Learn more →")))),
 
@@ -1795,8 +1795,8 @@ e("button",{onClick:function(){setMode("t2recover")},style:Object.assign({},btnO
 
 // Tier 3 info
 e("div",{style:{padding:"14px 16px",border:"1px solid "+bd,borderRadius:8,background:"rgba(255,255,255,0.02)"}},
-e("div",{style:{fontSize:14,fontWeight:700,color:t1,marginBottom:4}},"Tier 3 — Device Biometric"),
-e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},"Tier 3 credentials cannot be recovered because there is no reusable identity anchor — your biometric is tied to a specific device. Create a fresh Tier 3 credential instead (trust score starts over), or consider upgrading to Tier 1 for recoverable credentials."))))),
+e("div",{style:{fontSize:14,fontWeight:700,color:t1,marginBottom:4}},"Tier 3 — Biometric Presence"),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},"Tier 3 credentials cannot be recovered because there is no reusable identity anchor — your biometric presence was verified at issuance only. Create a fresh Tier 3 credential instead (trust history starts over), or consider upgrading to Tier 1 for recoverable credentials."))))),
 
 // S33: Tier 2 recovery flow
 mode==="t2recover"&&e(T2RecoveryFlow,{onDone:wrapSetCred,onBack:function(){setMode("recover");setErr(null)},setErr:setErr}),
@@ -1818,9 +1818,9 @@ mode==="upgrade-t2"&&cred&&e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updat
 mode==="t3"&&e("div",null,
 e("button",{onClick:function(){setMode(null);setWaStep(0);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
 e("div",{style:{padding:18,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,background:gg,marginBottom:12}},
-e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}},"TIER 3 — DEVICE BIOMETRIC"),
-e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:8}},"Tier 3 is the fastest way to try HIP — completely free, no payment or personal information required. Use your device's built-in biometric (Face ID, Touch ID, Windows Hello) to create a credential in seconds."),
-e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Good to know: "),"Tier 3 starts with a lower trust score than Tier 1 or Tier 2, but it lets you attest files, create Proof Cards, and experience the full protocol before deciding if you want to upgrade. You can upgrade to Tier 1 ($1 one-time fee) or Tier 2 (peer vouch, no cost) at any time from the Credential tab."),
+e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}},"TIER 3 — BIOMETRIC PRESENCE"),
+e("p",{style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:8}},"Tier 3 is the fastest way to try HIP — completely free, no payment or personal information required. Use your device's biometric (Face ID, Touch ID, Windows Hello) or synced passkey to create a credential in seconds."),
+e("p",{style:{fontSize:13,color:t2,lineHeight:1.6}},e("strong",{style:{color:t1}},"Good to know: "),"Tier 3 proves a live human was present at issuance. It starts with a lower trust index than Tier 1 or Tier 2 and is capped at 60 (vs 1000 max for higher tiers). It lets you attest files, create Proof Cards, and experience the full protocol. You can upgrade at any time from the Credential tab."),
 ToolAlert("success",e("span",null,e("strong",null,"Tier upgrade is available. "),"After creating a Tier 3 credential, you can upgrade to a higher tier at any time from the Credential tab. Your attestation history, credential age, and trust score will all be preserved — nothing is lost."))),
 waEnv&&waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"Biometric can't run here.")," Browsers block biometric in embedded frames. Open this tool directly at ",e("strong",{style:{color:go}},"hipprotocol.org")," for Tier 3.")),
 waEnv&&!waEnv.ok&&!waEnv.sandboxed&&ToolAlert("warn",e("span",null,e("strong",null,"No biometric detected.")," Try a smartphone or laptop with Face ID, Touch ID, or Windows Hello.")),
@@ -3181,7 +3181,7 @@ function App() {
           EqGrid(3,"hip-grid-3",
             [{tier:"T1",name:"Government ID",desc:"Verification against an authoritative external record \u2014 a government-issued ID or recognized institutional affiliation. The highest initial assurance level. Your identity is confirmed by the pathway provider but never recorded on the public ledger.",strength:"HIGHEST",color:go},
              {tier:"T2",name:"Peer Vouching",desc:"A Tier 1 credential holder vouches that you\u2019re a real person. Every Tier 2 credential traces back to a government-verified human. The voucher stakes their reputation: if your credential is later found fraudulent, their standing is affected.",strength:"MODERATE",color:"#3B82F6"},
-             {tier:"T3",name:"Device Biometric",desc:"Your phone or computer\u2019s hardware security confirms a live human was present \u2014 using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored.",strength:"ACCESSIBLE",color:"#22C55E"}
+             {tier:"T3",name:"Biometric Presence",desc:"Your device\u2019s biometric or synced passkey confirms a live human was present at issuance \u2014 using the same biometric systems (Face ID, fingerprint) you already use daily. No biometric data is transmitted or stored. Does not claim uniqueness \u2014 trust ceiling and attestation cap provide Sybil defense.",strength:"ACCESSIBLE",color:"#22C55E"}
             ].map(function(t,i) {
               return e("div",{key:i,style:{padding:"28px 24px",background:dk,borderLeft:"3px solid "+t.color}},
                 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}},

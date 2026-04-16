@@ -66,7 +66,7 @@ and a HIP credential is issued. Each pathway has:
 |---|---|---|---|
 | Government ID Verification | 1 | hipverify.org | Document scan + liveness check via Didit |
 | Peer Vouch | 2 | Protocol-native | Existing credential holder vouches for new human |
-| Device Biometric | 3 | Protocol-native | WebAuthn platform authenticator |
+| Biometric Presence | 3 | Protocol-native | WebAuthn platform authenticator or synced passkey |
 
 ### Pathway Health Index (PHI)
 

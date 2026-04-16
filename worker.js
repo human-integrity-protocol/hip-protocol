@@ -562,7 +562,7 @@ async function handleInstitutionalVerify(request, env) {
   }, 200, origin);
 }
 
-// ── Tier 3 (Device Biometric) Server-Side Registration ──
+// ── Tier 3 (Biometric Presence) Server-Side Registration ──
 // S29: Challenge/response flow with IP rate limiting.
 // Prevents unlimited client-only credential creation.
 
@@ -938,6 +938,14 @@ async function handleTrustInitialize(request, env) {
     liveness_verified_count: 0,
     active_months: [],
   };
+
+  // S98 #33 Option C: Stamp pathway on trust record at initialization.
+  // T1 pathway is stamped later by the Didit flow (government-id-didit-v1).
+  // T3 pathway was previously unstamped — now set to device-or-passkey-webauthn-v1
+  // per the biometric-presence reframe (S95→S98).
+  if (tier === 3) {
+    record.pathway = "device-or-passkey-webauthn-v1";
+  }
 
   // S33: Store voucher link for Tier 2 recovery
   if (tier === 2 && voucher_credential_id) {
