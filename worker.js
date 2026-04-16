@@ -724,18 +724,13 @@ async function handleTier3Register(request, env) {
     }
   }
 
-  // Step 4c-gate (S95 #33 Option A): Reject password-manager passkeys and unparseable attestations.
-  // Hardware/platform authenticators emit fmt:"packed"|"tpm"|"apple"|"android-key"|"android-safetynet".
-  // 1Password / iCloud Keychain / Bitwarden / Chrome built-in passkeys emit fmt:"none" because they
-  // don't issue device attestations. Syncing a passkey across a vault would let one human mint
-  // unlimited T3 credentials — this gate preserves T3 as a per-device credential.
-  if (attestationMeta.format === "none" || attestationMeta.format === "unknown") {
-    return jsonResponse({
-      error: "attestation_required",
-      message: "Tier 3 credentials require a hardware-attested authenticator. Password-manager passkeys (1Password, iCloud Keychain, Bitwarden, etc.) cannot be used to mint a T3 credential. Use a device with a built-in biometric sensor (Touch ID, Face ID, Windows Hello, Android fingerprint).",
-      detail: "fmt: " + attestationMeta.format,
-    }, 403, origin);
-  }
+  // S95 #33 Option A: fmt + AAGUID are now captured and stored (see t3audit write below).
+  // Reject gate REMOVED after live testing: Apple (macOS/iOS) routes ALL platform passkey
+  // creation through iCloud Keychain, which emits fmt:"none". Enforcing fmt!="none" blocks
+  // T3 minting for all Apple users, violating DP-7 (Zero Institutional Cost = free tier
+  // must be universally accessible). Existing Sybil defenses (50-attestation lifetime cap,
+  // TI=60 ceiling, 2/IP/24h rate limit) remain the active controls. AAGUID data collected
+  // here enables future AAGUID-allowlist enforcement (Option B) if warranted.
 
   // Step 4d: Enforce IP rate limit
   const rateKey = `t3rate:${ipHash}`;

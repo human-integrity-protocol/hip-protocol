@@ -1536,7 +1536,7 @@ var waTs=new Date().toISOString();
 // S29: Send attestation to worker for validation
 var regResp=await fetch(HIP_WORKER_URL+"/tier3/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 session_id:challengeData.session_id,credential_id:waCredId,attestation_object:waAttObj,client_data_json:waCdj,public_key:pub})});
-if(!regResp.ok){var rErr=await regResp.json().catch(function(){return{message:"Registration failed"}});setErr(regResp.status===429?"Too many credentials created from this network today (max 2 per 24 hours). Try again tomorrow or from a different network.":"Registration couldn't be completed. This can happen if the session expired (5 minute limit) or the server is temporarily unavailable. Please try again.");setBusy(false);setWaStep(0);return}
+if(!regResp.ok){var rErr=await regResp.json().catch(function(){return{message:"Registration failed"}});setErr(regResp.status===429?"Too many credentials created from this network today (max 2 per 24 hours). Try again tomorrow or from a different network.":regResp.status===403&&rErr&&rErr.error==="attestation_required"?rErr.message:"Registration couldn't be completed. This can happen if the session expired (5 minute limit) or the server is temporarily unavailable. Please try again.");setBusy(false);setWaStep(0);return}
 var regData=await regResp.json();
 
 var privBytes=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
