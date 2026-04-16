@@ -1432,6 +1432,9 @@ var als=useState(false);var autoLoaded=als[0];var setAutoLoaded=als[1];
 var bcs=useState(false);var bioConfirmed=bcs[0];var setBioConfirmed=bcs[1];
 // S21b: Retirement confirmation state (MUST be here with other hooks, not after conditional return)
 var rts=useState(false);var retireMode=rts[0];var setRetireMode=rts[1];
+// S96: Retirement in-progress + error state
+var rips=useState(false);var retireInProgress=rips[0];var setRetireInProgress=rips[1];
+var res=useState(null);var retireError=res[0];var setRetireError=res[1];
 // S27: QR transfer state
 var qrs=useState(null);var qrState=qrs[0];var setQrState=qrs[1];
 var qrRef=useRef(null);
@@ -1596,7 +1599,7 @@ bioConfirmed&&ToolAlert("success",e("span",null,"Your credential has been ",e("s
 e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
 e("div",null,e("div",{style:{fontFamily:mo,fontSize:11,letterSpacing:1.5,color:go,textTransform:"uppercase",marginBottom:6}},tn),
 e("div",{style:{padding:"12px 14px",background:"rgba(74,222,128,0.04)",borderRadius:6,border:"1px solid rgba(74,222,128,0.15)",fontSize:12,color:"#4ade80",fontFamily:mo}},HIP_IMPORT_RESULT==="imported"?"✓ Credential imported from hipverify.org":HIP_UPGRADE_RESULT==="upgraded"?"✓ Credential upgraded to Tier "+cred.tier:cred.recoveredFrom?"✓ Credential recovered (trust migrated)":cred.upgradedFrom?"✓ Upgraded from Tier "+cred.upgradedFrom:autoLoaded?"✓ Credential restored from this browser":"✓ Credential active")),
-e("button",{onClick:function(){wrapSetCred(null);setMode(null);setWaStep(0);setBioConfirmed(false);setAutoLoaded(false);window._hipDupWarned=false},style:btnSm},"Change")),
+e("button",{onClick:function(){setRetireMode(true)},style:btnSm},"Change")),
 HIP_IMPORT_RESULT==="imported"&&ToolAlert("success",e("span",null,"Your Tier 1 credential was ",e("strong",null,"transferred from hipverify.org")," and saved in this browser. You can start attesting right away.")),
 HIP_UPGRADE_RESULT==="upgraded"&&ToolAlert("success",e("span",null,"Your credential was ",e("strong",null,"upgraded to Tier "+cred.tier)," via hipverify.org. Your trust history has been preserved — attestation count, credential age, and trust score all carried forward. Download a new backup copy below.")),
 HIP_UPGRADE_RESULT==="mismatch"&&ToolAlert("danger","A tier upgrade was detected but the credential ID doesn't match the one saved in this browser. Make sure you're using the same browser where your credential is stored."),
@@ -1684,14 +1687,42 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
   return null;
 })(),
 
-// S21b: Retirement confirmation screen
+// S96: Retirement confirmation screen — server-side retire + localStorage clear
 !mode&&retireMode&&e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-  ToolAlert("danger",e("span",null,e("strong",null,"Retiring a credential is permanent.")," Your old credential will be removed from this browser. Any Proof Cards signed with it remain valid, but you won't be able to create new attestations with it. Make sure you've saved a backup of your old credential file if you need it.")),
+  ToolAlert("danger",e("span",null,e("strong",null,"Retiring a credential is permanent.")," The server will mark this credential as retired, so it ",e("strong",null,"cannot be used on any device")," — even from a backup file. Any existing attestations remain valid and verifiable. Make sure you've saved a backup if you need the credential file for your records.")),
+  retireError&&ToolAlert("danger",e("span",null,e("strong",null,"Retirement failed: "),retireError," Your credential was NOT removed.")),
   e("div",{style:{display:"flex",gap:8}},
-    e("button",{style:Object.assign({},btnSm,{flex:1}),onClick:function(){setRetireMode(false)}},"← Cancel"),
-    e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"12px 24px",background:"#dc2626",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){
-      clearCredStorage();setRetireMode(false);window._hipDupWarned=false;
-    }},"Retire Credential — I understand"))),
+    e("button",{style:Object.assign({},btnSm,{flex:1}),disabled:retireInProgress,onClick:function(){setRetireMode(false);setRetireError(null)}},"← Cancel"),
+    e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"12px 24px",background:retireInProgress?"#991b1b":"#dc2626",color:"#fff",border:"none",borderRadius:6,cursor:retireInProgress?"wait":"pointer",fontWeight:600,opacity:retireInProgress?0.7:1},disabled:retireInProgress,onClick:function(){
+      // S96: Server-side retirement flow
+      setRetireInProgress(true);setRetireError(null);
+      (async function(){
+        try{
+          // Get credential — either from React state or localStorage
+          var c=cred;
+          var privKey=c?c._priv:null;
+          var credId=c?c.credentialId:null;
+          var pubKey=c?c.publicKey:null;
+          if(!c){
+            var saved=loadCredFromStorage();
+            if(!saved||saved.version!=="hip-credential-v1"){setRetireError("No credential found to retire.");setRetireInProgress(false);return}
+            credId=saved.credentialId;pubKey=saved.publicKey;
+            try{privKey=await crypto.subtle.importKey("pkcs8",b64d(saved.privateKey),"Ed25519",false,["sign"])}
+            catch(ex){setRetireError("Couldn't load credential keys. Try using your existing credential first, then retiring.");setRetireInProgress(false);return}
+          }
+          // Build auth signature: HIPKIT|/retire-credential|{credentialId}|{timestamp}
+          var ts=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
+          var msg="HIPKIT|/retire-credential|"+credId+"|"+ts;
+          var sigBuf=await crypto.subtle.sign("Ed25519",privKey,new TextEncoder().encode(msg));
+          var sig=b64e(sigBuf);
+          var resp=await fetch(HIP_WORKER_URL+"/retire-credential",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:credId,public_key:pubKey,timestamp:ts,signature:sig})});
+          var data=await resp.json();
+          if(!resp.ok){setRetireError(data.error||"Server returned "+resp.status);setRetireInProgress(false);return}
+          // Success — now safe to clear localStorage
+          clearCredStorage();wrapSetCred(null);setRetireMode(false);setRetireInProgress(false);setRetireError(null);window._hipDupWarned=false;
+        }catch(ex){setRetireError("Network error: "+ex.message);setRetireInProgress(false)}
+      })()
+    }},retireInProgress?"Retiring…":"Retire Credential — I understand"))),
 
 // Normal tier selection (only shows when no saved credential exists, or after retirement)
 !mode&&!retireMode&&!(function(){var s=loadCredFromStorage();return s&&s.version==="hip-credential-v1"}())&&e("div",{style:{display:"flex",flexDirection:"column",gap:8}},

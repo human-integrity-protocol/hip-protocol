@@ -1536,6 +1536,37 @@ async function addToCredProofsIndex(env, credential_id, content_hash) {
 }
 
 
+// S96: POST /retire-credential — Voluntary credential retirement (Level 2)
+// Sets superseded_by:"self-retired" on the trust record, blocking all future
+// API calls via verifyAppAuth line 156. Existing attestations remain valid.
+// Client should clear localStorage only AFTER this succeeds (fail-safe).
+async function handleRetireCredential(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Auth: prove ownership of the credential being retired
+  const auth = await verifyAppAuth(request, "/retire-credential", env);
+  if (!auth.ok) {
+    return jsonResponse({ error: auth.error }, auth.status, origin);
+  }
+
+  const { credential_id, trust_record } = auth;
+
+  // Mark as self-retired (same fields as recovery-supersede, different sentinel)
+  trust_record.superseded_by = "self-retired";
+  trust_record.superseded_at = new Date().toISOString();
+  trust_record.retirement_reason = "voluntary";
+
+  await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trust_record));
+
+  return jsonResponse({
+    ok: true,
+    credential_id,
+    retired_at: trust_record.superseded_at,
+    message: "Credential retired. It can no longer be used for attestations on any device."
+  }, 200, origin);
+}
+
+
 // POST /transfer/:code — Phone pushes encrypted credential blob
 async function handleTransferPush(code, request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
@@ -3281,6 +3312,11 @@ export default {
     // S34: Credential tier upgrade route
     if (method === "POST" && path === "/upgrade-credential") {
       return handleUpgradeCredential(request, env);
+    }
+
+    // S96: Credential voluntary retirement route
+    if (method === "POST" && path === "/retire-credential") {
+      return handleRetireCredential(request, env);
     }
 
     if (method === "GET" && path.startsWith("/trust/")) {
