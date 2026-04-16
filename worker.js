@@ -1106,7 +1106,7 @@ async function handleRecoverCredential(request, env) {
     return jsonResponse({ error: "Invalid JSON" }, 400, origin);
   }
 
-  const { recovery_type, old_credential_id, new_credential_id } = body;
+  const { recovery_type, old_credential_id, new_credential_id, recovery_nonce } = body;
 
   if (!recovery_type || !old_credential_id || !new_credential_id) {
     return jsonResponse({ error: "Missing recovery_type, old_credential_id, or new_credential_id" }, 400, origin);
@@ -1114,6 +1114,25 @@ async function handleRecoverCredential(request, env) {
 
   if (old_credential_id === new_credential_id) {
     return jsonResponse({ error: "Old and new credential IDs must be different" }, 400, origin);
+  }
+
+  // S97 #34d: Idempotency key — client sends a UUID per recovery attempt.
+  // If this nonce was already processed, return the cached result (safe retry).
+  // If in progress, return 409 (concurrent duplicate blocked).
+  if (recovery_nonce) {
+    const idempotencyRaw = await env.DEDUP_KV.get(`recovery_idempotency:${recovery_nonce}`);
+    if (idempotencyRaw) {
+      const cached = JSON.parse(idempotencyRaw);
+      if (cached.status === "completed") {
+        return jsonResponse(cached.result, 200, origin);
+      }
+      // Still in progress — concurrent duplicate
+      return jsonResponse({ error: "Recovery already in progress for this attempt" }, 409, origin);
+    }
+    // Claim the nonce immediately — 60s TTL for self-healing
+    await env.DEDUP_KV.put(`recovery_idempotency:${recovery_nonce}`, JSON.stringify({ status: "in_progress" }), {
+      expirationTtl: 60,
+    });
   }
 
   // ── Tier 1 Recovery: re-verification via Didit ──
@@ -1164,6 +1183,16 @@ async function handleRecoverCredential(request, env) {
       return jsonResponse({ error: "Dedup mapping inconsistency — credential may have already been recovered" }, 409, origin);
     }
 
+    // S97 #34d: Dedup-hash-level lock — narrows the TOCTOU window between the
+    // consistency check above and the dedup write below. KV lacks CAS, so this
+    // isn't airtight, but shrinks the race from seconds to milliseconds.
+    const lockKey = `recovery_lock:${sessionData.dedupHash}`;
+    const existingLock = await env.DEDUP_KV.get(lockKey);
+    if (existingLock) {
+      return jsonResponse({ error: "Recovery already in progress for this identity" }, 409, origin);
+    }
+    await env.DEDUP_KV.put(lockKey, recovery_nonce || "no-nonce", { expirationTtl: 60 });
+
     // ── Perform the rotation ──
 
     // 1. Update dedup hash → new credential ID
@@ -1184,7 +1213,10 @@ async function handleRecoverCredential(request, env) {
       expirationTtl: 3600,
     });
 
-    return jsonResponse({
+    // 4. Release lock + cache idempotency result
+    await env.DEDUP_KV.delete(lockKey);
+
+    const t1Result = {
       success: true,
       recovery_type: "tier1-reverify",
       old_credential_id: old_credential_id,
@@ -1194,7 +1226,17 @@ async function handleRecoverCredential(request, env) {
       trust_index: trustMigration.trust_index,
       trust_score_legacy: trustMigration.trust_score,
       trust_score: trustMigration.trust_score,
-    }, 200, origin);
+    };
+
+    // S97 #34d: Cache completed result for idempotent retry
+    if (recovery_nonce) {
+      await env.DEDUP_KV.put(`recovery_idempotency:${recovery_nonce}`, JSON.stringify({
+        status: "completed",
+        result: t1Result,
+      }), { expirationTtl: 60 });
+    }
+
+    return jsonResponse(t1Result, 200, origin);
   }
 
   // ── Tier 2 Recovery: same voucher re-vouches ──
@@ -1248,7 +1290,7 @@ async function handleRecoverCredential(request, env) {
       await env.DEDUP_KV.put(`trust:${new_credential_id}`, JSON.stringify(newTrust));
     }
 
-    return jsonResponse({
+    const t2Result = {
       success: true,
       recovery_type: "tier2-revouch",
       old_credential_id: old_credential_id,
@@ -1258,7 +1300,17 @@ async function handleRecoverCredential(request, env) {
       trust_index: trustMigration.trust_index,
       trust_score_legacy: trustMigration.trust_score,
       trust_score: trustMigration.trust_score,
-    }, 200, origin);
+    };
+
+    // S97 #34d: Cache completed result for idempotent retry
+    if (recovery_nonce) {
+      await env.DEDUP_KV.put(`recovery_idempotency:${recovery_nonce}`, JSON.stringify({
+        status: "completed",
+        result: t2Result,
+      }), { expirationTtl: 60 });
+    }
+
+    return jsonResponse(t2Result, 200, origin);
   }
 
   return jsonResponse({ error: "Invalid recovery_type. Must be 'tier1-reverify' or 'tier2-revouch'." }, 400, origin);
