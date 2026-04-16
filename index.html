@@ -1688,8 +1688,14 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
 })(),
 
 // S96: Retirement confirmation screen — server-side retire + localStorage clear
-!mode&&retireMode&&e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-  ToolAlert("danger",e("span",null,e("strong",null,"Retiring a credential is permanent.")," The server will mark this credential as retired, so it ",e("strong",null,"cannot be used on any device")," — even from a backup file. Any existing attestations remain valid and verifiable. Make sure you've saved a backup if you need the credential file for your records.")),
+!mode&&retireMode&&(function(){
+  var rc=cred||loadCredFromStorage();
+  var rcTier=rc?rc.tier:0;
+  return e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+  ToolAlert("danger",e("span",null,e("strong",null,"Retiring a credential is permanent.")," The server will mark this credential as retired, so it ",e("strong",null,"cannot be used on any device")," — even from a backup file. Any existing attestations remain valid and verifiable.")),
+  rcTier===1&&ToolAlert("info",e("span",null,e("strong",null,"Tier 1 holders can recover.")," If you retire this credential, you can re-verify your government ID at hipverify.org to get a new credential with your full trust history, attestation count, and portfolio migrated. Your $1 verification is not lost.")),
+  rcTier===3&&ToolAlert("warn",e("span",null,e("strong",null,"Tier 3 credentials cannot be recovered.")," There is no way to prove you are the same person after retirement. Your trust history, attestation count, and any portfolio will be permanently lost. Consider ",e("a",{href:"https://hipverify.org",target:"_blank",rel:"noopener",style:{color:go,textDecoration:"underline"}},"upgrading to Tier 1")," ($1, government ID) before retiring — upgraded credentials can be recovered.")),
+  rcTier===2&&ToolAlert("warn",e("span",null,e("strong",null,"Tier 2 recovery requires a new vouch.")," After retirement, you would need a Tier 1 holder to vouch for you again to regain Tier 2 status. Your trust history from this credential will be lost.")),
   retireError&&ToolAlert("danger",e("span",null,e("strong",null,"Retirement failed: "),retireError," Your credential was NOT removed.")),
   e("div",{style:{display:"flex",gap:8}},
     e("button",{style:Object.assign({},btnSm,{flex:1}),disabled:retireInProgress,onClick:function(){setRetireMode(false);setRetireError(null)}},"← Cancel"),
@@ -1722,7 +1728,8 @@ HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing
           clearCredStorage();wrapSetCred(null);setRetireMode(false);setRetireInProgress(false);setRetireError(null);window._hipDupWarned=false;
         }catch(ex){setRetireError("Network error: "+ex.message);setRetireInProgress(false)}
       })()
-    }},retireInProgress?"Retiring…":"Retire Credential — I understand"))),
+    }},retireInProgress?"Retiring…":"Retire Credential — I understand")))
+}()),
 
 // Normal tier selection (only shows when no saved credential exists, or after retirement)
 !mode&&!retireMode&&!(function(){var s=loadCredFromStorage();return s&&s.version==="hip-credential-v1"}())&&e("div",{style:{display:"flex",flexDirection:"column",gap:8}},
