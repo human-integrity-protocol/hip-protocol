@@ -1589,9 +1589,10 @@ return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
 e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updatedCred){wrapSetCred(updatedCred);setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 // S99 #32: Vouch mode — T1 holder vouches for someone. Reuses T2VouchFlow.
+// Error banner included here because the early return bypasses the main CredPanel error display.
 if(mode==="vouch"){
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
-e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+err&&ToolAlert("danger",err),
 e(T2VouchFlow,{onDone:function(newCred){setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
