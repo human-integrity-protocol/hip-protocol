@@ -3349,76 +3349,6 @@ async function handlePortfolio(request, env) {
 }
 
 
-// ══════════════════════════════════════════════════════════════
-// S85CW Backfill: one-shot cred_proofs index builder
-// ══════════════════════════════════════════════════════════════
-// POST /api/admin/backfill-cred-proofs-index
-// Headers: X-Admin-Key: <env.ADMIN_KEY>
-// Body (optional): { cursor: "<kv-list-cursor>", limit: 1000 }
-//
-// Scans proof:* keys in chunks (Workers KV list caps at 1000/page) and
-// indexes each under its credential_id. Idempotent — addToCredProofsIndex
-// dedupes on hash. Running this twice yields the same result.
-//
-// For large proof stores, call repeatedly with the returned `cursor` until
-// list_complete=true. Delete this endpoint once backfill is done (see kickoff).
-
-async function handleBackfillCredProofsIndex(request, env) {
-  const origin = request.headers.get("Origin") || CORS_ORIGIN;
-
-  // Admin gate — same pattern as handleCreateApiKey
-  const adminKey = request.headers.get("X-Admin-Key") || "";
-  if (!env.ADMIN_KEY || adminKey !== env.ADMIN_KEY) {
-    return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  }
-
-  let body = {};
-  try { body = await request.json(); } catch (_) { body = {}; }
-
-  const cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : undefined;
-  let limit = parseInt(body.limit, 10);
-  if (!Number.isFinite(limit) || limit < 1 || limit > 1000) limit = 1000;
-
-  const listResult = await env.DEDUP_KV.list({
-    prefix: "proof:",
-    limit,
-    cursor,
-  });
-
-  let scanned = 0;
-  let indexed = 0;
-  let skipped = 0;
-  const errors = [];
-
-  for (const key of listResult.keys) {
-    scanned++;
-    try {
-      const raw = await env.DEDUP_KV.get(key.name);
-      if (!raw) { skipped++; continue; }
-      const record = JSON.parse(raw);
-      if (!record.credential_id || !record.content_hash) {
-        skipped++;
-        continue;
-      }
-      await addToCredProofsIndex(env, record.credential_id, record.content_hash);
-      indexed++;
-    } catch (err) {
-      errors.push({ key: key.name, error: String(err && err.message || err) });
-    }
-  }
-
-  return jsonResponse({
-    ok: true,
-    scanned,
-    indexed,
-    skipped,
-    errors,
-    list_complete: !!listResult.list_complete,
-    cursor: listResult.cursor || null,
-  }, 200, origin);
-}
-
-
 // ── Main Router ──
 
 export default {
@@ -3572,10 +3502,6 @@ export default {
 
     // S85CW Backfill: one-shot index builder. Admin-key gated.
     // REMOVE THIS ROUTE AFTER BACKFILL COMPLETES (see S85CW kickoff).
-    if (method === "POST" && path === "/api/admin/backfill-cred-proofs-index") {
-      return handleBackfillCredProofsIndex(request, env);
-    }
-
     // S81: Public verification API — clean response for integrators
     if (method === "GET" && path.startsWith("/api/verify/")) {
       const contentHash = path.replace("/api/verify/", "").toLowerCase().trim();
