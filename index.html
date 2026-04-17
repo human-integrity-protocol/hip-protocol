@@ -1445,9 +1445,12 @@ useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:fal
 
 // S33: Handle deep link initialMode from parent (e.g. #tier3 hash)
 // S99 #32: "vouch" mode works even with existing credential (T1 voucher onramp)
+// S100: "vouch-recipient" deep link → open T2 flow as recipient
+var irs=useState(null);var initialRole=irs[0];var setInitialRole=irs[1];
 useEffect(function(){
-  if(props.initialMode && (!cred || props.initialMode === "vouch")) {
-    setMode(props.initialMode);
+  if(props.initialMode && (!cred || props.initialMode === "vouch" || props.initialMode === "vouch-recipient")) {
+    if(props.initialMode === "vouch-recipient") { setMode("t2"); setInitialRole("r"); }
+    else { setMode(props.initialMode); }
     if(props.clearInitialMode) props.clearInitialMode();
   }
 },[props.initialMode]);
@@ -1593,7 +1596,7 @@ e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updatedCred){wrapSetCred(updated
 if(mode==="vouch"){
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 err&&ToolAlert("danger",err),
-e(T2VouchFlow,{onDone:function(newCred){setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+e(T2VouchFlow,{voucherCred:cred,onDone:function(newCred){setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 // S21: Biometric confirmation banner (shows immediately after biometric creation)
@@ -1849,7 +1852,7 @@ waStep>=2&&e("div",{style:{marginTop:8,padding:"10px 14px",background:"rgba(255,
 "Your device may have also offered to save a \"passkey\" — that's your operating system storing the WebAuthn credential for you. This is normal and expected.")),
 waStep===0&&e("button",{style:waEnv&&waEnv.ok?btnG:btnDis,onClick:doT3Bio,disabled:busy||!(waEnv&&waEnv.ok)},busy?"Starting...":waEnv&&waEnv.ok?"Begin Biometric Verification →":"Biometric not available")),
 
-mode==="t2"&&e(T2VouchFlow,{onDone:wrapSetCred,onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+mode==="t2"&&e(T2VouchFlow,{initialRole:initialRole,onDone:wrapSetCred,onBack:function(){setMode(null);setInitialRole(null);setErr(null)},setErr:setErr}))}
 
 // ============================================================
 // TIER 2 — PEER VOUCH (S29: swapped from Tier 3)
@@ -1864,6 +1867,19 @@ var rps=useState("");var rPub=rps[0];var setRPub=rps[1];
 var ts=useState(null);var token=ts[0];var setToken=ts[1];
 var ks=useState(null);var rKeys=ks[0];var setRKeys=ks[1];
 var tts=useState("");var tText=tts[0];var setTText=tts[1];
+var dcs=useState(null);var doneCred=dcs[0];var setDoneCred=dcs[1];
+
+// S100: Auto-load voucher credential from localStorage when launched from T1 panel
+useEffect(function(){
+if(props.voucherCred&&!vCred){
+var d=props.voucherCred;
+(async function(){try{
+var priv=d._priv||await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);
+var pub=d._pub||await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);
+setVCred(Object.assign({},d,{_priv:priv,_pub:pub}));setRole("v");setStep(2)}catch(ex){}})()}
+// S100: Auto-select recipient role when arriving via #vouch-recipient deep link
+if(props.initialRole==="r"&&!role){setRole("r");setStep(1)}
+},[]);
 
 var signV=async function(){setBusy(true);try{
 if(HIP_CRYPTO_OK===false){props.setErr("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");setBusy(false);return}
@@ -1891,10 +1907,11 @@ var vPub=await crypto.subtle.importKey("raw",unhex(t.voucherPublicKey),"Ed25519"
 var valid=await crypto.subtle.verify("Ed25519",vPub,b64d(sig),new TextEncoder().encode(canonJSON(body)));
 if(!valid){props.setErr("The vouch token's signature couldn't be verified. Make sure you pasted the complete token exactly as the voucher sent it.");setBusy(false);return}
 if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("This vouch token has expired (older than 24 hours). Ask the voucher to create a new one.");setBusy(false);return}
-props.onDone({version:"hip-credential-v1",credentialId:rKeys.credentialId,publicKey:rKeys.publicKey,privateKey:rKeys.privateKey,
+var newCred={version:"hip-credential-v1",credentialId:rKeys.credentialId,publicKey:rKeys.publicKey,privateKey:rKeys.privateKey,
 tier:2,pathway:"peer-vouch-bound-token-v1",
 vouchRecord:{voucherCredentialId:t.voucherCredentialId,voucherPublicKey:t.voucherPublicKey,voucherTier:t.voucherTier,nonce:t.nonce,timestamp:t.timestamp,signature:sig},
-created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub});
+created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pub:rKeys._pub};
+setDoneCred(newCred);props.onDone(newCred);
 // S29: Initialize trust record for new Tier 2 vouch credential
 // S33: Include voucher_credential_id for recovery support
 try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2,voucher_credential_id:t.voucherCredentialId})})}catch(te){}
@@ -1912,8 +1929,8 @@ ToolAlert("info",e("span",null,
 e("strong",null,"How peer vouching works"),
 e("div",{style:{marginTop:8,fontSize:12,lineHeight:1.8}},
 "1. You load your Tier 1 credential file below.",e("br"),
-"2. Tell the person you're vouching for to visit ",e("a",{href:"https://hipprotocol.org#tier2",target:"_blank",rel:"noopener",style:{color:go,textDecoration:"underline"}},"hipprotocol.org"),
-" → Credential tab → Tier 2 → \"I'm the Recipient\" → Generate My Identity.",e("br"),
+"2. Send this link to the person you're vouching for: ",e("a",{href:"https://hipprotocol.org#vouch-recipient",target:"_blank",rel:"noopener",style:{color:go,textDecoration:"underline"}},"hipprotocol.org#vouch-recipient"),
+" — it opens the recipient flow directly.",e("br"),
 "3. They send you their public key (64-character hex string).",e("br"),
 "4. You paste it here and create a vouch token.",e("br"),
 "5. Send the token back to them — they paste it to finish."))),
@@ -1922,7 +1939,7 @@ step===1&&e(ToolDropZone,{onLoad:function(d,er){if(er){props.setErr(er);return}i
 (async function(){try{d._priv=await crypto.subtle.importKey("pkcs8",b64d(d.privateKey),"Ed25519",false,["sign"]);d._pub=await crypto.subtle.importKey("raw",unhex(d.publicKey),"Ed25519",true,["verify"]);setVCred(d);setStep(2);props.setErr(null)}catch(ex){props.setErr("Couldn't read this credential file. It may be damaged — try downloading a fresh backup from the device where you created it.")}})()},label:"Drop your credential file here"}),
 step>1&&vCred&&e("div",{style:{fontSize:12,color:"#4ade80",fontFamily:mo,display:"flex",alignItems:"center",gap:4}},"✓ Loaded: ",e(CopyHash,{value:vCred.credentialId,chars:16,fontSize:12,color:"#4ade80"}))),
 e(StepDot,{n:2,title:"Enter Recipient's Public Key",active:step===2,done:step>2},
-step===2&&e("div",null,e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Paste the 64-character hex public key that the recipient sent you. If they haven't generated one yet, tell them to visit ",e("a",{href:"https://hipprotocol.org#tier2",target:"_blank",rel:"noopener",style:{color:go}},"hipprotocol.org"),e("span",null," → Credential → Tier 2 → \"I'm the Recipient\" → Generate My Identity.")),
+step===2&&e("div",null,e("p",{style:{color:t2,fontSize:13,marginBottom:8}},"Paste the 64-character hex public key that the recipient sent you. If they haven't generated one yet, send them this link: ",e("a",{href:"https://hipprotocol.org#vouch-recipient",target:"_blank",rel:"noopener",style:{color:go}},"hipprotocol.org#vouch-recipient")),
 e("textarea",{style:Object.assign({},wizTxt,{fontSize:12,fontFamily:mo,minHeight:48}),placeholder:"Paste their 64-char hex public key",value:rPub,onChange:function(ev){setRPub(ev.target.value.trim())}}),
 e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:signV,disabled:busy},busy?"Signing...":"Create Vouch Token →"))),
 e(StepDot,{n:3,title:"Send to Recipient",active:step===3,done:false},
@@ -1945,7 +1962,8 @@ ToolAlert("info",e("span",null,e("strong",null,"Step B:")," Paste the vouch toke
 e("textarea",{style:Object.assign({},wizTxt,{fontSize:11,fontFamily:mo,minHeight:80}),placeholder:"Paste the vouch token here",value:tText,onChange:function(ev){setTText(ev.target.value)}}),
 e("button",{style:Object.assign({},btnG,{marginTop:8}),onClick:acceptV,disabled:busy},busy?"Verifying...":"Accept Vouch →"))),
 e(StepDot,{n:3,title:"You're Credentialed",active:step>=4,done:step>=4},
-step>=4&&ToolAlert("success",e("span",null,e("strong",null,"Tier 2 credential issued.")," Save your credential file now.")))))}
+step>=4&&e("div",null,ToolAlert("success",e("span",null,e("strong",null,"Tier 2 credential issued and saved in this browser."),e("div",{style:{marginTop:6,fontSize:12}},"Download a backup copy now — if you clear your browser data or switch devices, this is the only way to recover it."))),
+doneCred&&e("button",{style:Object.assign({},btnDl,{marginTop:8,width:"100%"}),onClick:function(){var obj=Object.assign({},doneCred);delete obj._priv;delete obj._pub;dl(obj,"HIP_Credential_"+doneCred.credentialId.substring(0,8)+".json")}},"↓ Download Backup Copy")))))}
 
 // ============================================================
 // S33: TIER 2 RECOVERY — Same voucher re-vouches
@@ -2948,6 +2966,10 @@ function App() {
     } else if (hash === "#vouch") {
       // S99 #32: Deep link for T1 vouchers — opens vouch flow directly
       setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("vouch");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    } else if (hash === "#vouch-recipient") {
+      // S100: Deep link for vouch recipients — opens T2 flow as recipient directly
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("vouch-recipient");
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
     }
     // S65: Auto-open credential tab when arriving via #hip-import= sync link
