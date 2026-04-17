@@ -929,6 +929,39 @@ async function handleTrustInitialize(request, env) {
     }
   }
 
+  // S99 #32 hardening: Tier 2 requires a valid T1 voucher with TI >= 200.
+  // Client validates vouch signature; server validates voucher eligibility + rate limits.
+  if (tier === 2) {
+    if (!voucher_credential_id) {
+      return jsonResponse({ error: "Tier 2 requires voucher_credential_id" }, 400, origin);
+    }
+    const voucherRaw = await env.DEDUP_KV.get(`trust:${voucher_credential_id}`);
+    if (!voucherRaw) {
+      return jsonResponse({ error: "No trust record found for voucher credential" }, 404, origin);
+    }
+    const voucherRecord = JSON.parse(voucherRaw);
+    if (voucherRecord.tier !== 1) {
+      return jsonResponse({ error: "Voucher must hold a Tier 1 credential (current: Tier " + voucherRecord.tier + ")" }, 403, origin);
+    }
+    const voucherTs = await computeTrustScore(voucherRecord, env);
+    if (voucherTs.trust_index < 200) {
+      return jsonResponse({ error: "Voucher trust index (" + voucherTs.trust_index + ") is below the 200 minimum required to vouch (per HP-SPEC-v1_2 §314)" }, 403, origin);
+    }
+    // S99: Vouch rate limits — 3 per 30 days, max 10 active unresolved (HP-SPEC-v1_2 §839)
+    const vouchLogKey = `vouches:${voucher_credential_id}`;
+    const vouchLogRaw = await env.DEDUP_KV.get(vouchLogKey);
+    const vouchLog = vouchLogRaw ? JSON.parse(vouchLogRaw) : [];
+    const thirtyDaysAgo = Date.now() - 30 * 86400000;
+    const recentVouches = vouchLog.filter(function(v) { return new Date(v.timestamp).getTime() > thirtyDaysAgo; });
+    if (recentVouches.length >= 3) {
+      return jsonResponse({ error: "Voucher has reached the limit of 3 vouches per 30 days" }, 429, origin);
+    }
+    const activeVouches = vouchLog.filter(function(v) { return !v.resolved; });
+    if (activeVouches.length >= 10) {
+      return jsonResponse({ error: "Voucher has reached the limit of 10 active outstanding vouches" }, 429, origin);
+    }
+  }
+
   const now = new Date().toISOString();
   const record = {
     tier: tier,
@@ -946,6 +979,10 @@ async function handleTrustInitialize(request, env) {
   if (tier === 3) {
     record.pathway = "device-or-passkey-webauthn-v1";
   }
+  // S99 #32: Stamp T2 pathway at initialization (was missing — T3 was stamped but not T2).
+  if (tier === 2) {
+    record.pathway = "peer-vouch-bound-token-v1";
+  }
 
   // S33: Store voucher link for Tier 2 recovery
   if (tier === 2 && voucher_credential_id) {
@@ -958,6 +995,19 @@ async function handleTrustInitialize(request, env) {
   record.trust_index = ts.trust_index;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
+
+  // S99 #32: Log vouch event for rate limiting
+  if (tier === 2 && voucher_credential_id) {
+    const vouchLogKey = `vouches:${voucher_credential_id}`;
+    const vouchLogRaw = await env.DEDUP_KV.get(vouchLogKey);
+    const vouchLog = vouchLogRaw ? JSON.parse(vouchLogRaw) : [];
+    vouchLog.push({
+      timestamp: new Date().toISOString(),
+      vouched_credential_id: credential_id,
+      resolved: false,
+    });
+    await env.DEDUP_KV.put(vouchLogKey, JSON.stringify(vouchLog));
+  }
 
   return jsonResponse({
     credential_id: credential_id,
@@ -1449,6 +1499,26 @@ async function handleUpgradeCredential(request, env) {
       return jsonResponse({ error: "Voucher must hold a Tier 1 credential (current: Tier " + voucherTrust.tier + ")" }, 403, origin);
     }
 
+    // S99 #32 hardening: TI >= 200 voucher floor (HP-SPEC-v1_2 §314)
+    const voucherTs = await computeTrustScore(voucherTrust, env);
+    if (voucherTs.trust_index < 200) {
+      return jsonResponse({ error: "Voucher trust index (" + voucherTs.trust_index + ") is below the 200 minimum required to vouch (per HP-SPEC-v1_2 §314)" }, 403, origin);
+    }
+
+    // S99: Vouch rate limits — 3 per 30 days, max 10 active unresolved (HP-SPEC-v1_2 §839)
+    const vouchLogKey = `vouches:${voucher_credential_id}`;
+    const vouchLogRaw = await env.DEDUP_KV.get(vouchLogKey);
+    const vouchLog = vouchLogRaw ? JSON.parse(vouchLogRaw) : [];
+    const thirtyDaysAgo = Date.now() - 30 * 86400000;
+    const recentVouches = vouchLog.filter(function(v) { return new Date(v.timestamp).getTime() > thirtyDaysAgo; });
+    if (recentVouches.length >= 3) {
+      return jsonResponse({ error: "Voucher has reached the limit of 3 vouches per 30 days" }, 429, origin);
+    }
+    const activeVouches = vouchLog.filter(function(v) { return !v.resolved; });
+    if (activeVouches.length >= 10) {
+      return jsonResponse({ error: "Voucher has reached the limit of 10 active outstanding vouches" }, 429, origin);
+    }
+
     // Validate vouch timestamp (within 24 hours)
     if (vouch_timestamp) {
       const vouchAge = Math.abs(Date.now() - new Date(vouch_timestamp).getTime());
@@ -1469,6 +1539,17 @@ async function handleUpgradeCredential(request, env) {
     record.trust_index = ts.trust_index;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
+
+    // S99 #32: Log vouch event for rate limiting
+    const vouchLogKeyW = `vouches:${voucher_credential_id}`;
+    const vouchLogRawW = await env.DEDUP_KV.get(vouchLogKeyW);
+    const vouchLogW = vouchLogRawW ? JSON.parse(vouchLogRawW) : [];
+    vouchLogW.push({
+      timestamp: new Date().toISOString(),
+      vouched_credential_id: credential_id,
+      resolved: false,
+    });
+    await env.DEDUP_KV.put(vouchLogKeyW, JSON.stringify(vouchLogW));
 
     return jsonResponse({
       success: true,

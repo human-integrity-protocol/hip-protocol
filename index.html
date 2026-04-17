@@ -1444,8 +1444,9 @@ var sss=useState(null);var supersededBy=sss[0];var setSupersededBy=sss[1];
 useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:false,why:"error",sandboxed:false})})},[]);
 
 // S33: Handle deep link initialMode from parent (e.g. #tier3 hash)
+// S99 #32: "vouch" mode works even with existing credential (T1 voucher onramp)
 useEffect(function(){
-  if(props.initialMode && !cred) {
+  if(props.initialMode && (!cred || props.initialMode === "vouch")) {
     setMode(props.initialMode);
     if(props.clearInitialMode) props.clearInitialMode();
   }
@@ -1587,6 +1588,11 @@ if(mode==="upgrade-t2"){
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
 e(T2UpgradeVouchFlow,{cred:cred,onDone:function(updatedCred){wrapSetCred(updatedCred);setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+// S99 #32: Vouch mode — T1 holder vouches for someone. Reuses T2VouchFlow.
+if(mode==="vouch"){
+return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+e("button",{onClick:function(){setMode(null);setErr(null)},style:Object.assign({},btnSm,{marginBottom:12})},"← Back"),
+e(T2VouchFlow,{onDone:function(newCred){setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 // S21: Biometric confirmation banner (shows immediately after biometric creation)
@@ -1631,6 +1637,12 @@ cred.tier===3&&e("button",{onClick:function(){setMode("upgrade-t2")},style:{widt
 e(Ico,{name:"scale",size:16,color:go}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 2"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Peer vouch from a Tier 1 holder · no cost · trust history preserved"))),
 cred.tier===2&&e("button",{onClick:function(){setMode("upgrade-t1")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(74,222,128,0.03)",color:go,border:"1px solid rgba(74,222,128,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"building",size:16,color:"#4ade80"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Upgrade to Tier 1"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Government ID verification · $1 one-time · trust history preserved"))))),
+// S99 #32: Vouch button — T1 holders can vouch for someone to issue a Tier 2 credential
+cred.tier===1&&e("div",{style:{marginTop:4}},
+e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}},"PEER VOUCH"),
+e("button",{onClick:function(){setMode("vouch")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(96,165,250,0.03)",color:go,border:"1px solid rgba(96,165,250,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e(Ico,{name:"scale",size:16,color:"#60a5fa"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Vouch for Someone"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Issue a Tier 2 credential to someone you know · your reputation is at stake")))),
 // S34: Show upgrade status if credential was upgraded
 cred.upgradedFrom&&ToolAlert("success",e("span",null,"This credential was ",e("strong",null,"upgraded from Tier "+cred.upgradedFrom)," on ",new Date(cred.upgradedAt).toLocaleDateString(),". Your trust history was preserved — attestation count, credential age, and trust score all carried forward.")),
 ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")),
@@ -2921,6 +2933,10 @@ function App() {
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
     } else if (hash === "#tier1") {
       setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("t1");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    } else if (hash === "#vouch") {
+      // S99 #32: Deep link for T1 vouchers — opens vouch flow directly
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("vouch");
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
     }
     // S65: Auto-open credential tab when arriving via #hip-import= sync link
