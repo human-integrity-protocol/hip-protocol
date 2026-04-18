@@ -965,8 +965,81 @@ function QuickVerify(props) {
       var resp=await fetch(HIP_WORKER_URL+"/api/proof/"+h);
       var data=await resp.json();
       if(resp.ok&&data.found) {
-        setResult({found:true,record:data});
+        // Direct hit: the dropped file's bytes match the registered
+        // (post-embed, canonical) hash. This is the HIP-embedded copy.
+        setResult({found:true,matchedVia:"content",record:data});
       } else {
+        // S101: Server miss. Check local history — if this browser attested
+        // this file recently, the pre-embed original hash is stashed there
+        // alongside the canonical content hash. Follow the pointer to the
+        // server record via the paired content_hash.
+        var localMatch=null;
+        try{
+          var attestedLocal=JSON.parse(localStorage.getItem("hip_attest_local")||"[]");
+          localMatch=attestedLocal.find(function(x){return x&&x.original_hash===h&&x.original_hash!==x.content_hash});
+        }catch(lsErr){}
+        if(localMatch){
+          try{
+            var resp2=await fetch(HIP_WORKER_URL+"/api/proof/"+localMatch.content_hash);
+            if(resp2.ok){
+              var data2=await resp2.json();
+              if(data2.found){
+                setResult({found:true,matchedVia:"original",record:data2,pairedContentHash:localMatch.content_hash});
+                setChecking(false);
+                return;
+              }
+            }
+          }catch(fetchErr){}
+        }
+        // S102 Path 2: cross-device / cross-browser fallback. If this browser
+        // has a HIP credential loaded (not required — the Verify tool is a
+        // public tool), ask the server for THIS credential's attestation
+        // history (compact triples) and scan for a dual-hash match. This
+        // covers the case where the user attested on device A, moved their
+        // credential to device B, and is now verifying the pre-embed source
+        // file on device B with no proof card and no localStorage seed.
+        // Auth-gated: only the credential holder can enumerate their own
+        // history. Non-fatal on any error — fall through to "not found."
+        try{
+          var savedCredV=(typeof loadCredFromStorage==="function")?loadCredFromStorage():null;
+          if(savedCredV&&savedCredV.credentialId&&savedCredV.privateKey&&savedCredV.publicKey){
+            var privV=await crypto.subtle.importKey("pkcs8",b64d(savedCredV.privateKey),"Ed25519",false,["sign"]);
+            var tsV=new Date().toISOString();
+            var canonV="HIPKIT|/api/credential/attestations|"+savedCredV.credentialId+"|"+tsV;
+            var sigBufV=await crypto.subtle.sign("Ed25519",privV,new TextEncoder().encode(canonV));
+            var sigV=b64e(sigBufV);
+            var histResp=await fetch(HIP_WORKER_URL+"/api/credential/"+savedCredV.credentialId+"/attestations",{
+              method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({credential_id:savedCredV.credentialId,public_key:savedCredV.publicKey,timestamp:tsV,signature:sigV})
+            });
+            if(histResp.ok){
+              var histData=await histResp.json();
+              if(histData&&Array.isArray(histData.entries)){
+                var srvMatch=histData.entries.find(function(x){
+                  if(!x)return false;
+                  if(x.content_hash===h)return true;
+                  if(x.original_hash===h&&x.original_hash!==x.content_hash)return true;
+                  return false;
+                });
+                if(srvMatch){
+                  var matchedVia=(srvMatch.content_hash===h)?"content":"original";
+                  var resp3=await fetch(HIP_WORKER_URL+"/api/proof/"+srvMatch.content_hash);
+                  if(resp3.ok){
+                    var data3=await resp3.json();
+                    if(data3.found){
+                      var outResult={found:true,matchedVia:matchedVia,record:data3};
+                      if(matchedVia==="original")outResult.pairedContentHash=srvMatch.content_hash;
+                      setResult(outResult);
+                      setChecking(false);
+                      return;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }catch(histErr){/* non-fatal — fall through to not found */}
         setResult({found:false});
       }
     } catch(ex) {
@@ -1036,10 +1109,24 @@ function QuickVerify(props) {
               e("div",{style:{fontSize:compact?9:10,color:"#555",fontFamily:mo,marginTop:4}},compact?"Also scans for embedded metadata":"Also extracts metadata from images, PDFs, Office docs, audio, and video"))
     ),
     // Result display
+    // S101: Two distinct positive outcomes. matchedVia === "content": the
+    // dropped file IS the registered canonical (post-embed) copy — its bytes
+    // are the ones the signature covers. matchedVia === "original": the
+    // dropped file is the pre-embed source; the server record was located
+    // via this browser's local attestation history. Both link to the same
+    // attestation but describe different aspects of the same artifact.
     result&&result.found&&e("div",{style:{padding:"14px 16px",borderRadius:8,background:"rgba(74,222,128,0.04)",border:"1px solid rgba(74,222,128,0.15)"}},
       e("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:8}},
         e("span",{style:{fontSize:18,color:"#4ade80"}},"✓"),
-        e("div",{style:{fontFamily:mo,fontSize:12,fontWeight:600,color:"#4ade80",letterSpacing:0.5}},"ATTESTED CONTENT FOUND")
+        e("div",{style:{fontFamily:mo,fontSize:12,fontWeight:600,color:"#4ade80",letterSpacing:0.5}},
+          result.matchedVia==="original"?"ATTESTED — PRE-EMBED SOURCE RECOGNIZED":"ATTESTED — CANONICAL COPY MATCHED")
+      ),
+      result.matchedVia==="original"&&e("div",{style:{fontSize:12,color:t2,lineHeight:1.55,marginBottom:10,padding:"8px 10px",background:"rgba(96,165,250,0.04)",borderRadius:6,border:"1px solid rgba(96,165,250,0.12)"}},
+        "This file is the pre-embed source — the original bytes from before HIP metadata was embedded. The canonical attested copy is a different byte sequence. Both link to the same attestation below.",
+        result.pairedContentHash&&e("div",{style:{fontFamily:mo,fontSize:10,color:"#666",marginTop:4,wordBreak:"break-all"}},"Canonical hash: "+result.pairedContentHash)
+      ),
+      result.matchedVia==="content"&&e("div",{style:{fontSize:12,color:t2,lineHeight:1.55,marginBottom:10}},
+        "This file's bytes match the registered canonical hash — it is the HIP-embedded copy that the signature covers."
       ),
       e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
         e("div",null,
@@ -2296,6 +2383,10 @@ try{await waLiveness(cred.webauthn.credentialId);ld="device-attested";setLv("don
 
 // S21b: For JPEG files, embed HIP metadata before hashing
 // S34: Also for PNG files, embed HIP metadata in iTXt chunk
+// S101: Preserve pre-embed hash — for non-embedding types it equals finalHash;
+// for JPEG/PNG/WebP it captures the file as the user dropped it so verify can
+// match either the attested copy OR the original the user kept on disk.
+var originalHash=hash;
 var finalHash=hash;
 var pcFilename="HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json";
 
@@ -2384,7 +2475,7 @@ var content={
 "@context":["https://www.w3.org/2018/credentials/v1","https://hip.protocol/contexts/v1"],
 attestation:{attestationChain:null,editorialStatement:editorial,priorVersion:null,type:"OriginalAttestation"},
 bundleMetadata:{processingNode:"local-poc",schemaExtensions:[]},
-credentialSubject:{classification:cls,contentHash:finalHash,contentType:"application/octet-stream",hashAlgorithm:"sha-256",id:"urn:hip:content:"+finalHash,
+credentialSubject:{classification:cls,contentHash:finalHash,originalHash:originalHash,contentType:"application/octet-stream",hashAlgorithm:"sha-256",id:"urn:hip:content:"+finalHash,
 originalFilename:fname||null,
 credentialTier:cred.tier,credentialPathway:cred.pathway,livenessDesignation:ld},
 issuanceDate:now,
@@ -2416,6 +2507,12 @@ try{
   var canonStr=[hash,pHash||"NULL",cred.credentialId,attestedAt,classification].join("|");
   var sigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encode(canonStr));
   var sig=b64e(sigBuf);
+  // S102 Path 2: stamp originalHash (pre-embed source hash, captured in S101
+  // D-wide before badge/metadata embedding) on the server record so the
+  // /api/credential/{id}/attestations history endpoint can dual-hash-match a
+  // dropped file against a cross-device attestation history. Metadata only —
+  // not part of the signature payload (same posture as file_name).
+  var origHashForBody=(pc.credentialSubject&&pc.credentialSubject.originalHash)||null;
   var body={
     content_hash:hash,
     perceptual_hash:pHash||null,
@@ -2425,7 +2522,8 @@ try{
     classification:classification,
     signature:sig,
     sealed:sealedAttest,
-    protocol_version:"1.2"
+    protocol_version:"1.2",
+    original_hash:origHashForBody
   };
   var resp=await fetch(HIP_WORKER_URL+"/register-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   var text=await resp.text();
@@ -2433,6 +2531,25 @@ try{
   try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
     setProofUrl(data.short_url||data.proof_url);
+    // S101: Stash a local attestation record so QuickVerify can recognize
+    // either the pre-embed original OR the post-embed attested copy when the
+    // same browser is used for both attest and verify. Pure client-side
+    // augmentation — no KV cost. Cross-browser/cross-device still requires
+    // either Full Verify (with proof card) or a future Option-C server flip.
+    try{
+      var origHashForLocal=pc.credentialSubject&&pc.credentialSubject.originalHash;
+      if(origHashForLocal){
+        var localEntry={original_hash:origHashForLocal,content_hash:hash,credential_id:cred.credentialId,classification:classification,attested_at:attestedAt,filename:fname||null};
+        var attestedLocal=[];
+        try{attestedLocal=JSON.parse(localStorage.getItem("hip_attest_local")||"[]")}catch(parseErr){attestedLocal=[]}
+        // De-dupe by content_hash in case of re-publish of the same file
+        attestedLocal=attestedLocal.filter(function(x){return x&&x.content_hash!==hash});
+        attestedLocal.push(localEntry);
+        // Cap at last 500 entries to keep localStorage bounded
+        if(attestedLocal.length>500)attestedLocal=attestedLocal.slice(-500);
+        localStorage.setItem("hip_attest_local",JSON.stringify(attestedLocal));
+      }
+    }catch(lsErr){/* localStorage full, blocked (Safari private), or disabled — non-fatal */}
     // S41/S42: Generate attested copy with full proof metadata embedded
     if(canEmbed){
       try{
@@ -2680,19 +2797,28 @@ function VerifyWizard() {
   var cfh=useState(null); var contentFileHash=cfh[0]; var setContentFileHash=cfh[1];
   var contentRef = useRef(null);
 
-  var loadPcFile = async function(ev) {
-    var f = ev.target.files && ev.target.files[0]; if(!f) return;
+  // S101: split loaders so drop handlers can call them with a File directly.
+  var loadPcFromFile = async function(f) {
+    if(!f) return;
     var text = await f.text();
     setPcText(text);
   };
+  var loadPcFile = function(ev) {
+    var f = ev.target.files && ev.target.files[0];
+    loadPcFromFile(f);
+  };
 
-  var loadContentFile = async function(ev) {
-    var f = ev.target.files && ev.target.files[0]; if(!f) return;
+  var loadContentFromFile = async function(f) {
+    if(!f) return;
     setContentFileName(f.name);
     var buf = await f.arrayBuffer();
     var h = await sha256(new Uint8Array(buf));
     setContentFileHash(h);
     setContentFile(true);
+  };
+  var loadContentFile = function(ev) {
+    var f = ev.target.files && ev.target.files[0];
+    loadContentFromFile(f);
   };
 
   var verify = async function() {
@@ -2783,14 +2909,29 @@ function VerifyWizard() {
       r.push({l:"Ed25519 signature", p:sigResult, d:sigDetail});
 
       // ── PART 2: Content Matching ──
+      // S101: dual-hash compare. Proof cards carry both contentHash (post-embed,
+      // the canonical attested bytes) and originalHash (pre-embed, the file as
+      // the user dropped it). For non-embedding types they're equal. For
+      // JPEG/PNG/WebP they differ; either side matching means the dropped file
+      // is the one that was attested, regardless of whether the user kept the
+      // pristine original or the HIP-embedded copy.
       if(contentFileHash) {
         r.push({l:"PART 2 — CONTENT MATCHING", p:null, d:"Confirms this Proof Card belongs to the provided file.", section:true});
         var expectedHash = b.credentialSubject && b.credentialSubject.contentHash;
-        var match = contentFileHash === expectedHash;
+        var originalHashExpected = b.credentialSubject && b.credentialSubject.originalHash;
+        var matchEmbedded = contentFileHash === expectedHash;
+        var matchOriginal = !!(originalHashExpected && contentFileHash === originalHashExpected);
+        var match = matchEmbedded || matchOriginal;
+        var matchDesc;
+        if(matchEmbedded) {
+          matchDesc = "File hash matches (attested copy). This Proof Card attests to \"" + (contentFileName||"this file") + "\".";
+        } else if(matchOriginal) {
+          matchDesc = "File hash matches (pre-embed original). This Proof Card attests to \"" + (contentFileName||"this file") + "\".";
+        } else {
+          matchDesc = "MISMATCH — File hash: " + contentFileHash.substring(0,16) + "… vs Proof Card: " + (expectedHash||"").substring(0,16) + "…" + (originalHashExpected ? " (or original " + originalHashExpected.substring(0,16) + "…)" : "") + ". This Proof Card does not attest to this file.";
+        }
         r.push({l:"Content file matches Proof Card", p:match,
-          d:match
-            ? "File hash matches. This Proof Card attests to \"" + (contentFileName||"this file") + "\"."
-            : "MISMATCH — File hash: " + contentFileHash.substring(0,16) + "… vs Proof Card: " + (expectedHash||"").substring(0,16) + "…. This Proof Card does not attest to this file.",
+          d:matchDesc,
           full:contentFileHash});
         if(match) {
           var pcFn = null;
@@ -2842,7 +2983,10 @@ function VerifyWizard() {
       e("button", {style:Object.assign({},mode==="manual"?btnG:btnSm,{flex:1}), onClick:function(){setMode("manual");setRes(null)}}, "Bundle + Anchor")
     ),
     mode==="proofcard" && e("div", {style:{display:"flex",flexDirection:"column",gap:8}},
-      e("div", {style:{border:"2px dashed "+bd,borderRadius:8,padding:"20px",textAlign:"center",cursor:"pointer"}, onClick:function(){pcFileRef.current&&pcFileRef.current.click()}},
+      e("div", {style:{border:"2px dashed "+bd,borderRadius:8,padding:"20px",textAlign:"center",cursor:"pointer"},
+        onClick:function(){pcFileRef.current&&pcFileRef.current.click()},
+        onDragOver:function(ev){ev.preventDefault()},
+        onDrop:function(ev){ev.preventDefault();var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];if(f)loadPcFromFile(f)}},
         e("input", {ref:pcFileRef, type:"file", accept:".json", style:{display:"none"}, onChange:loadPcFile}),
         pcText ? e("span", {style:{color:"#4ade80",fontFamily:mo,fontSize:12}}, "✓ Proofcard loaded ("+Math.round(pcText.length/1024)+" KB)")
           : e("span", {style:{color:t2,fontSize:14}}, "Drop your Proof Card here, or tap to browse")
@@ -2865,7 +3009,10 @@ function VerifyWizard() {
     e("div", {style:{borderTop:"1px solid "+bd,paddingTop:12,marginTop:4}},
       e("div", {style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:go,marginBottom:6}}, "Content Matching (optional)"),
       e("p", {style:{fontSize:13,color:t2,lineHeight:1.5,marginBottom:8}}, "Add the original file to verify this Proof Card attests to that specific content."),
-      e("div", {style:{border:"2px dashed "+(contentFile?go:bd),borderRadius:8,padding:"16px",textAlign:"center",cursor:"pointer",background:contentFile?"rgba(224,90,0,0.04)":"transparent"}, onClick:function(){contentRef.current&&contentRef.current.click()}},
+      e("div", {style:{border:"2px dashed "+(contentFile?go:bd),borderRadius:8,padding:"16px",textAlign:"center",cursor:"pointer",background:contentFile?"rgba(224,90,0,0.04)":"transparent"},
+        onClick:function(){contentRef.current&&contentRef.current.click()},
+        onDragOver:function(ev){ev.preventDefault()},
+        onDrop:function(ev){ev.preventDefault();var f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];if(f)loadContentFromFile(f)}},
         e("input", {ref:contentRef, type:"file", style:{display:"none"}, onChange:loadContentFile}),
         contentFile
           ? e("span", {style:{color:"#4ade80",fontFamily:mo,fontSize:12}}, "✓ " + contentFileName + " loaded")
