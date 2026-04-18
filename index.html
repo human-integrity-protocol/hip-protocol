@@ -621,6 +621,84 @@ return{buffer:rb,filename:fn,mimeType:mime,format:fmt};
 return{embed:embedImage,detectFormat:detectFmt};
 })();
 
+// ── S103: HipImageRead — reverse of HipImageEmbed ──
+// Extracts hip:ContentHash / hip:Signature claims from an attested image's
+// embedded metadata. Mirrors HipImageEmbed walker patterns. Input: Uint8Array
+// (raw bytes, not ArrayBuffer). readXxx returns UTF-8 payload (XMP RDF/XML for
+// JPEG/WebP, JSON for PNG iTXt "HIP:Proof") or null. extractXxx accepts either.
+var HipImageRead=(function(){
+function detectFmt(u){
+if(!u||u.length<12)return null;
+if(u[0]===0xFF&&u[1]===0xD8&&u[2]===0xFF)return"jpeg";
+if(u[0]===0x89&&u[1]===0x50&&u[2]===0x4E&&u[3]===0x47)return"png";
+if(u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46&&u[8]===0x57&&u[9]===0x45&&u[10]===0x42&&u[11]===0x50)return"webp";
+return null;
+}
+var NS_JPEG_STR="http://ns.adobe.com/xap/1.0/\0";
+function nsBytes(){return new TextEncoder().encode(NS_JPEG_STR)}
+function readJPEGXmp(u){
+if(!u||u.length<4||u[0]!==0xFF||u[1]!==0xD8)return null;
+var ns=nsBytes();var pos=2;
+while(pos<u.length-3){
+if(u[pos]!==0xFF)return null;
+var marker=u[pos+1];
+if(marker===0xD9||marker===0xDA)return null;
+var segLen=(u[pos+2]<<8)|u[pos+3];
+if(segLen<2||pos+2+segLen>u.length)return null;
+if(marker===0xE1&&segLen>ns.length+2){
+var isXMP=true;for(var i=0;i<ns.length;i++){if(u[pos+4+i]!==ns[i]){isXMP=false;break}}
+if(isXMP)return new TextDecoder("utf-8").decode(u.subarray(pos+4+ns.length,pos+2+segLen));}
+pos+=2+segLen;}
+return null;
+}
+function readPNGiTXt(u){
+if(!u||u.length<8)return null;
+if(u[0]!==0x89||u[1]!==0x50||u[2]!==0x4E||u[3]!==0x47)return null;
+var p=8;var kw="HIP:Proof";
+while(p+8<=u.length){
+var clen=((u[p]*0x1000000)+(u[p+1]<<16)+(u[p+2]<<8)+u[p+3])>>>0;
+var ct=String.fromCharCode(u[p+4],u[p+5],u[p+6],u[p+7]);
+if(p+8+clen+4>u.length)return null;
+if(ct==="iTXt"&&clen>kw.length+5){
+var match=true;for(var i=0;i<kw.length;i++){if(u[p+8+i]!==kw.charCodeAt(i)){match=false;break}}
+// iTXt layout (S101 writer): kw\0 compFlag(0) compMethod(0) langTag\0 transKw\0 text
+if(match&&u[p+8+kw.length]===0)return new TextDecoder("utf-8").decode(u.subarray(p+8+kw.length+5,p+8+clen));}
+if(ct==="IDAT")return null;
+p+=8+clen+4;}
+return null;
+}
+function readWebPXmp(u){
+if(!u||u.length<12)return null;
+if(u[0]!==0x52||u[1]!==0x49||u[2]!==0x46||u[3]!==0x46)return null;
+if(u[8]!==0x57||u[9]!==0x45||u[10]!==0x42||u[11]!==0x50)return null;
+var riffEnd=Math.min(8+((u[4]|(u[5]<<8)|(u[6]<<16)|((u[7]<<24)>>>0))>>>0),u.length);
+var p=12;
+while(p+8<=riffEnd){
+var fc=String.fromCharCode(u[p],u[p+1],u[p+2],u[p+3]);
+var sz=((u[p+4]|(u[p+5]<<8)|(u[p+6]<<16)|((u[p+7]<<24)>>>0))>>>0);
+if(p+8+sz>riffEnd)return null;
+if(fc==="XMP ")return new TextDecoder("utf-8").decode(u.subarray(p+8,p+8+sz));
+p+=8+sz+(sz&1);}
+return null;
+}
+function extractContentHash(s){
+if(!s)return null;
+var t=s.replace(/^\uFEFF/,"").trimLeft?s.replace(/^\uFEFF/,"").trimLeft():s;
+var first=t.charAt(0);
+if(first==="{"){try{var o=JSON.parse(t);return(o&&typeof o.content_hash==="string"&&/^[0-9a-f]{64}$/.test(o.content_hash))?o.content_hash:null}catch(e){return null}}
+var m=s.match(/hip:ContentHash\s*=\s*"([0-9a-f]{64})"/);return m?m[1]:null;
+}
+function extractSignature(s){
+if(!s)return null;
+var t=s.replace(/^\uFEFF/,"");
+if(t.charAt(0)==="{"){try{var o=JSON.parse(t);return(o&&typeof o.signature==="string")?o.signature:null}catch(e){return null}}
+var m=s.match(/hip:Signature\s*=\s*"([^"]+)"/);return m?m[1]:null;
+}
+function readAny(u){var f=detectFmt(u);if(!f)return null;
+if(f==="jpeg")return readJPEGXmp(u);if(f==="png")return readPNGiTXt(u);if(f==="webp")return readWebPXmp(u);return null;}
+return{detectFormat:detectFmt,readJPEGXmp:readJPEGXmp,readPNGiTXt:readPNGiTXt,readWebPXmp:readWebPXmp,read:readAny,extractContentHash:extractContentHash,extractSignature:extractSignature};
+})();
+
 // ── S42: HipFileEmbed — universal post-attestation metadata embedding ──
 // Extends HipImageEmbed to support PDF, Office (DOCX/XLSX/PPTX), MP3, FLAC, WAV, MP4/MOV, AVI.
 // Image formats delegate to HipImageEmbed. All client-side.
@@ -920,7 +998,8 @@ function QuickVerify(props) {
     setFileMetaType(null);
     try {
       var buf=await f.arrayBuffer();
-      var h=await sha256(new Uint8Array(buf));
+      var fileBytes=new Uint8Array(buf);
+      var h=await sha256(fileBytes);
       setFileHash(h);
 
       // S42: Extract embedded HIP metadata + file-type-specific metadata
@@ -962,21 +1041,60 @@ function QuickVerify(props) {
       // Office
       if(ext==="docx"||ext==="xlsx"||ext==="pptx"){setFileMetaType("office")}
 
+      // S103 Tier 0: XMP-read / JSON-read. For JPEG/PNG/WebP, scan embedded
+      // HIP metadata and extract the hip:ContentHash claim. If present and
+      // not equal to the file's own hash (i.e. the user dropped a post-embed
+      // attested copy, whose bytes ≠ canonical content_hash), look up the
+      // canonical proof record directly via the claim. This is the primary
+      // self-contained verify path for attested images post-Fix-3. It also
+      // covers pre-S103 records where no alias row exists on the server.
+      // Fail-open: any error falls through to the file-hash-direct tier.
+      var xmpClaimHash=null;
+      try{
+        if(typeof HipImageRead!=="undefined"){
+          var xmpPayload=HipImageRead.read(fileBytes);
+          if(xmpPayload){
+            var candClaim=HipImageRead.extractContentHash(xmpPayload);
+            if(candClaim && /^[0-9a-f]{64}$/.test(candClaim) && candClaim!==h){xmpClaimHash=candClaim}
+          }
+        }
+      }catch(xmpErr){/* non-fatal */}
+      if(xmpClaimHash){
+        try{
+          var resp0=await fetch(HIP_WORKER_URL+"/api/proof/"+xmpClaimHash);
+          if(resp0.ok){
+            var data0=await resp0.json();
+            if(data0.found){
+              setResult({found:true,matchedVia:"xmp",record:data0,xmpClaimHash:xmpClaimHash});
+              setChecking(false);
+              return;
+            }
+          }
+        }catch(fetch0Err){/* non-fatal — fall through */}
+      }
+
       var resp=await fetch(HIP_WORKER_URL+"/api/proof/"+h);
       var data=await resp.json();
       if(resp.ok&&data.found) {
-        // Direct hit: the dropped file's bytes match the registered
-        // (post-embed, canonical) hash. This is the HIP-embedded copy.
-        setResult({found:true,matchedVia:"content",record:data});
+        // Tier 1: file-hash-direct. With Fix 3, this matches the pre-embed
+        // original (content_hash = sha256(source bytes)). For an attested
+        // copy whose bytes differ, the worker's alias miss-path (Phase 4)
+        // translates transparently — data.matched_via==="alias" distinguishes.
+        setResult({found:true,matchedVia:(data.matched_via==="alias"?"alias":"content"),record:data});
       } else {
         // S101: Server miss. Check local history — if this browser attested
         // this file recently, the pre-embed original hash is stashed there
         // alongside the canonical content hash. Follow the pointer to the
         // server record via the paired content_hash.
-        var localMatch=null;
+        var localMatch=null;var localMatchKind=null;
         try{
           var attestedLocal=JSON.parse(localStorage.getItem("hip_attest_local")||"[]");
-          localMatch=attestedLocal.find(function(x){return x&&x.original_hash===h&&x.original_hash!==x.content_hash});
+          for(var lix=0;lix<attestedLocal.length;lix++){
+            var lx=attestedLocal[lix];if(!lx)continue;
+            if(lx.original_hash===h&&lx.original_hash!==lx.content_hash){localMatch=lx;localMatchKind="original";break}
+            // S103: same-browser attested-copy match (alias seed, no server round-trip needed)
+            if(lx.attested_copy_hash===h&&lx.attested_copy_hash!==lx.content_hash){localMatch=lx;localMatchKind="attested_copy";break}
+          }
         }catch(lsErr){}
         if(localMatch){
           try{
@@ -984,7 +1102,7 @@ function QuickVerify(props) {
             if(resp2.ok){
               var data2=await resp2.json();
               if(data2.found){
-                setResult({found:true,matchedVia:"original",record:data2,pairedContentHash:localMatch.content_hash});
+                setResult({found:true,matchedVia:localMatchKind,record:data2,pairedContentHash:localMatch.content_hash});
                 setChecking(false);
                 return;
               }
@@ -2428,21 +2546,23 @@ if(badgeEnabled&&canEmbedImage&&_hipBadgeLight&&_hipBadgeDark){
   }catch(bex){console.warn("Badge composite:",bex.message)}
 }
 
-// S102 Test A fix: unified HipImageEmbed pass for JPEG/PNG/WebP.
-// Previously JPEG used embedHipExif (piexif) and PNG used embedHipPng,
-// which diverged from publishProof's attested-copy generation path
-// (HipImageEmbed.embed for all three). For iOS-origin JPEGs with EXIF
-// structures piexif couldn't parse, the buildIt embed silently threw
-// and finalHash stayed at the pre-embed value — causing /register-proof
-// to stamp the pre-embed hash as content_hash, which made dropping the
-// pre-embed file report CANONICAL COPY MATCHED and dropping the actual
-// attested copy report NO ATTESTATION FOUND. Converging on
-// HipImageEmbed here guarantees buildIt's canonical hash is the
-// post-XMP-embed hash, matching the WebP flow that was already correct.
-// Placeholder content_hash/signature in the XMP is the same pattern
-// WebP has shipped with since S41 — the file itself is the
-// content-addressable key; server records are keyed by its post-embed
-// hash, not by the pending strings in its own XMP.
+// S103 Fix 3: content_hash = pre-embed source hash (= originalHash).
+// Replaces the S102 Fix 2 scheme where content_hash was the hash of a
+// placeholder-XMP file the user never received (self-referential bug —
+// the downloaded attested copy has the REAL signature XMP swapped in,
+// so sha256(downloaded) ≠ stamped content_hash, making file-hash-direct
+// verify of the download miss the proof record). Post-Fix-3 semantics:
+// content_hash IS the pre-embed bytes' sha256 (finalHash stays at its
+// initial = originalHash value — no recompute here). Verify-by-rehash
+// of the pre-embed original still matches (Tier 1). The downloaded
+// attested copy is verified either by reading the hip:ContentHash claim
+// from its embedded metadata (Tier 0 — HipImageRead, added this session)
+// or via the worker alias table seeded by publishProof's attested_copy_hash
+// field (Tier 5 — alias backstop for formats without a reader).
+// The placeholder-XMP embed below still runs because embeddedBytes is
+// consumed by publishProof as a sourceBytes fallback (~L2633) and by the
+// UI for the download preview — its hash is simply no longer stamped as
+// content_hash.
 if(canEmbedImage){
   try{
     var imgBuf=rawBytes?rawBytes.buffer:dataURLtoBytes(rawDataURL).buffer;
@@ -2452,17 +2572,14 @@ if(canEmbedImage){
     if(!embResult)throw new Error("HipImageEmbed returned null for "+(fname||"image"));
     var embImg=new Uint8Array(embResult.buffer);
     setEmbeddedBytes(embImg);
-    finalHash=await sha256(embImg);
-    setHash(finalHash);
+    // S103: intentionally do NOT recompute finalHash from embImg. finalHash
+    // stays at the pre-embed source sha256 (= originalHash).
   }catch(ex){
-    // Unified embed failed. Leave finalHash at pre-embed value so proof
-    // card still builds, but publishProof will see originalHash ===
-    // contentHash and the attested-copy generator will re-run
-    // HipImageEmbed in publishProof — either it succeeds there (and
-    // content_hash on server matches THAT output via the sourceBytes
-    // fallback chain hitting rawBytes/rawDataURL) or it fails too and
-    // we degrade to a no-embed attestation. This catch path is now
-    // logged so the failure surfaces if it keeps happening.
+    // Placeholder embed failed. embImg not available for UI preview and
+    // publishProof will fall back through its sourceBytes chain
+    // (rawBytes → dataURLtoBytes(rawDataURL)) to re-run HipImageEmbed
+    // with real metadata. finalHash is already the pre-embed hash —
+    // nothing to roll back.
     console.warn("HipImageEmbed failed in buildIt:",ex.message);
     setEmbeddedBytes(null);
   }
@@ -2510,6 +2627,46 @@ try{
   // dropped file against a cross-device attestation history. Metadata only —
   // not part of the signature payload (same posture as file_name).
   var origHashForBody=(pc.credentialSubject&&pc.credentialSubject.originalHash)||null;
+  // S103 Fix 3: pre-generate the attested-copy bytes so we can compute
+  // attested_copy_hash and send it to the worker alongside /register-proof.
+  // The worker stores alias:{attested_copy_hash} → {canonical: content_hash}
+  // (if attested_copy_hash ≠ content_hash), enabling Verify to recognize the
+  // downloaded file via alias lookup when the file-hash-direct path misses
+  // (non-image formats) or the XMP-read path misses (stripped metadata,
+  // pre-S103 records). One-POST pattern — attested copy must be built
+  // before the POST, which means the embedded XMP references the default
+  // long proof URL (https://hipprotocol.org/proof.html?hash={content_hash})
+  // rather than the server-issued short_url. This is a deliberate cosmetic
+  // tradeoff to keep the attested-copy hash stable and the registration
+  // atomic. proofUrl returned from the server is still shown in the UI and
+  // lives in the proof card JSON — only the in-file XMP uses the long form.
+  var precomputedAcResult=null;
+  var attestedCopyHashForBody=null;
+  if(canEmbed){
+    try{
+      var acSourceBytes=null;
+      if(embeddedDataURL){acSourceBytes=dataURLtoBytes(embeddedDataURL).buffer}
+      else if(embeddedBytes){acSourceBytes=embeddedBytes.buffer}
+      else if(rawBytes){acSourceBytes=rawBytes.buffer}
+      else if(rawDataURL){acSourceBytes=dataURLtoBytes(rawDataURL).buffer}
+      if(acSourceBytes){
+        var acMetaPre={content_hash:hash,credential_id:cred.credentialId,classification:classification,
+          attested_at:attestedAt,short_url:null,signature:sig,protocol_version:"1.2"};
+        if(canEmbedImage && typeof HipImageEmbed !== "undefined"){
+          precomputedAcResult=HipImageEmbed.embed(acSourceBytes,acMetaPre,fname);
+        }
+        if(!precomputedAcResult && typeof HipFileEmbed !== "undefined"){
+          precomputedAcResult=await HipFileEmbed.embedAsync(acSourceBytes,acMetaPre,fname);
+        }
+        if(precomputedAcResult){
+          var acHashCandidate=await sha256(new Uint8Array(precomputedAcResult.buffer));
+          // Only send alias hash when the attested copy differs from the pre-embed
+          // source; otherwise alias would collide with the canonical record.
+          if(acHashCandidate && acHashCandidate!==hash){attestedCopyHashForBody=acHashCandidate}
+        }
+      }
+    }catch(acPreEx){console.warn("Attested copy pre-generation:",acPreEx.message);precomputedAcResult=null;attestedCopyHashForBody=null}
+  }
   var body={
     content_hash:hash,
     perceptual_hash:pHash||null,
@@ -2520,7 +2677,8 @@ try{
     signature:sig,
     sealed:sealedAttest,
     protocol_version:"1.2",
-    original_hash:origHashForBody
+    original_hash:origHashForBody,
+    attested_copy_hash:attestedCopyHashForBody
   };
   var resp=await fetch(HIP_WORKER_URL+"/register-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   var text=await resp.text();
@@ -2536,7 +2694,9 @@ try{
     try{
       var origHashForLocal=pc.credentialSubject&&pc.credentialSubject.originalHash;
       if(origHashForLocal){
-        var localEntry={original_hash:origHashForLocal,content_hash:hash,credential_id:cred.credentialId,classification:classification,attested_at:attestedAt,filename:fname||null};
+        // S103: include attested_copy_hash so QuickVerify Tier 2 (S101 localStorage)
+        // can match a dropped attested copy same-browser without a server round-trip.
+        var localEntry={original_hash:origHashForLocal,content_hash:hash,attested_copy_hash:attestedCopyHashForBody||null,credential_id:cred.credentialId,classification:classification,attested_at:attestedAt,filename:fname||null};
         var attestedLocal=[];
         try{attestedLocal=JSON.parse(localStorage.getItem("hip_attest_local")||"[]")}catch(parseErr){attestedLocal=[]}
         // De-dupe by content_hash in case of re-publish of the same file
@@ -2547,32 +2707,16 @@ try{
         localStorage.setItem("hip_attest_local",JSON.stringify(attestedLocal));
       }
     }catch(lsErr){/* localStorage full, blocked (Safari private), or disabled — non-fatal */}
-    // S41/S42: Generate attested copy with full proof metadata embedded
-    if(canEmbed){
+    // S41/S42/S103: expose the pre-generated attested copy to the UI. Bytes
+    // were built above (pre-POST) to stabilize attested_copy_hash for the
+    // alias registration. If pre-generation failed, no download is offered;
+    // the proof record is still valid via content_hash.
+    if(precomputedAcResult){
       try{
-        var sourceBytes=null;
-        if(embeddedDataURL){sourceBytes=dataURLtoBytes(embeddedDataURL).buffer}
-        else if(embeddedBytes){sourceBytes=embeddedBytes.buffer}
-        else if(rawBytes){sourceBytes=rawBytes.buffer}
-        else if(rawDataURL){sourceBytes=dataURLtoBytes(rawDataURL).buffer}
-        if(sourceBytes){
-          var acMeta={content_hash:hash,credential_id:cred.credentialId,classification:classification,
-            attested_at:attestedAt,short_url:data.short_url||null,signature:sig,protocol_version:"1.2"};
-          // S42: Use HipFileEmbed for all formats, fall back to HipImageEmbed for images
-          var acResult=null;
-          if(canEmbedImage && typeof HipImageEmbed !== "undefined"){
-            acResult=HipImageEmbed.embed(sourceBytes,acMeta,fname);
-          }
-          if(!acResult && typeof HipFileEmbed !== "undefined"){
-            acResult=await HipFileEmbed.embedAsync(sourceBytes,acMeta,fname);
-          }
-          if(acResult){
-            var acBlob=new Blob([acResult.buffer],{type:acResult.mimeType});
-            setAttestedCopyURL(URL.createObjectURL(acBlob));
-            setAttestedCopyName(acResult.filename);
-          }
-        }
-      }catch(acEx){console.warn("Attested copy generation:",acEx.message)}
+        var acBlob=new Blob([precomputedAcResult.buffer],{type:precomputedAcResult.mimeType});
+        setAttestedCopyURL(URL.createObjectURL(acBlob));
+        setAttestedCopyName(precomputedAcResult.filename);
+      }catch(acEx){console.warn("Attested copy blob:",acEx.message)}
     }
   } else if(resp.status===409&&data.existing_record){
     setProofUrl("https://hipprotocol.org/proof.html?hash="+hash);

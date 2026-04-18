@@ -1885,6 +1885,7 @@ async function handleRegisterProof(request, env) {
     protocol_version,
     file_name,
     original_hash,
+    attested_copy_hash,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -1909,6 +1910,17 @@ async function handleRegisterProof(request, env) {
   // against proofs attested under the requester's credential.
   if (original_hash !== undefined && original_hash !== null && !/^[0-9a-f]{64}$/.test(original_hash)) {
     return jsonResponse({ error: "original_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
+  }
+
+  // S103 Fix 3: optional attested-copy hash. Client computes sha256 of the
+  // attested-copy bytes (the file the user actually downloads) and sends it
+  // alongside the canonical content_hash (= pre-embed source hash). When
+  // present and distinct from content_hash, we write an alias KV entry so
+  // Verify's /api/proof/{hash} miss-path can translate the downloaded-file
+  // hash to the canonical record. Metadata only, not part of the signature
+  // payload (same posture as file_name and original_hash).
+  if (attested_copy_hash !== undefined && attested_copy_hash !== null && !/^[0-9a-f]{64}$/.test(attested_copy_hash)) {
+    return jsonResponse({ error: "attested_copy_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
   }
 
   // public_key must be a 64-char hex string (Ed25519 = 32 bytes = 64 hex chars)
@@ -2054,9 +2066,23 @@ async function handleRegisterProof(request, env) {
     short_id: short_id,
     file_name: sanitizedFileName,
     original_hash: original_hash || null,
+    attested_copy_hash: attested_copy_hash || null,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S103 Fix 3: write alias row so Verify can resolve sha256(downloaded file)
+  // → canonical content_hash when the attested copy's bytes differ from the
+  // pre-embed source (JPEG/PNG/WebP via HipImageEmbed, PDF/DOCX/MP3/etc. via
+  // HipFileEmbed). Value is JSON for forward extensibility. Skip when the
+  // attested copy's hash equals content_hash (no distinct attested copy) —
+  // the canonical proof record already handles that case.
+  if (attested_copy_hash && attested_copy_hash !== content_hash) {
+    await env.DEDUP_KV.put(
+      `alias:${attested_copy_hash}`,
+      JSON.stringify({ canonical: content_hash, registered_at: now })
+    );
+  }
 
   // S90 #23b: Increment T3 OriginalAttestation counter on the trust record.
   // Only applies to T3 credentials; corrections/withdrawals are exempt and
@@ -2238,7 +2264,32 @@ async function handleGetProof(contentHash, request, env) {
   }
 
   const proofKey = `proof:${contentHash}`;
-  const raw = await env.DEDUP_KV.get(proofKey);
+  let raw = await env.DEDUP_KV.get(proofKey);
+  let canonicalHash = contentHash;
+  let matchedVia = "canonical";
+
+  // S103 Fix 3: alias miss-path fallback. If the requested hash isn't a
+  // canonical content_hash, it may be the hash of a downloaded attested copy
+  // whose bytes differ from the pre-embed source (any HipImageEmbed output,
+  // or HipFileEmbed outputs for PDF/DOCX/MP3/etc.). Alias rows translate
+  // those hashes to the canonical record. Diagnostic field matched_via
+  // distinguishes the two paths for client logging / debugging.
+  if (!raw) {
+    const aliasRaw = await env.DEDUP_KV.get(`alias:${contentHash}`);
+    if (aliasRaw) {
+      try {
+        const aliasRecord = JSON.parse(aliasRaw);
+        if (aliasRecord && /^[0-9a-f]{64}$/.test(aliasRecord.canonical)) {
+          const canonicalRaw = await env.DEDUP_KV.get(`proof:${aliasRecord.canonical}`);
+          if (canonicalRaw) {
+            raw = canonicalRaw;
+            canonicalHash = aliasRecord.canonical;
+            matchedVia = "alias";
+          }
+        }
+      } catch (_) { /* malformed alias — treat as miss */ }
+    }
+  }
 
   if (!raw) {
     return jsonResponse({
@@ -2254,7 +2305,9 @@ async function handleGetProof(contentHash, request, env) {
   if (record.sealed) {
     return jsonResponse({
       found: true,
-      content_hash: contentHash,
+      content_hash: canonicalHash,
+      queried_hash: contentHash,
+      matched_via: matchedVia,
       sealed: true,
       registered_at: record.registered_at,
       message: "This proof record is sealed by its creator. The content has been attested but the proof details are not yet public.",
@@ -2264,6 +2317,8 @@ async function handleGetProof(contentHash, request, env) {
   // Public record: return full record
   return jsonResponse({
     found: true,
+    queried_hash: contentHash,
+    matched_via: matchedVia,
     ...record,
   }, 200, origin);
 }
@@ -2574,6 +2629,7 @@ async function handleApiAttest(request, env) {
     public_key,
     file_name,
     original_hash,
+    attested_copy_hash,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -2600,6 +2656,13 @@ async function handleApiAttest(request, env) {
   if (original_hash !== undefined && original_hash !== null && !/^[0-9a-f]{64}$/.test(original_hash)) {
     return jsonResponse({
       error: "original_hash must be a 64-character lowercase hex string (SHA-256)"
+    }, 400, origin);
+  }
+
+  // S103 Fix 3: symmetric attested_copy_hash accept (see handleRegisterProof).
+  if (attested_copy_hash !== undefined && attested_copy_hash !== null && !/^[0-9a-f]{64}$/.test(attested_copy_hash)) {
+    return jsonResponse({
+      error: "attested_copy_hash must be a 64-character lowercase hex string (SHA-256)"
     }, 400, origin);
   }
 
@@ -2746,9 +2809,18 @@ async function handleApiAttest(request, env) {
     source: "api",
     file_name: sanitizedFileName,
     original_hash: original_hash || null,
+    attested_copy_hash: attested_copy_hash || null,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S103 Fix 3: symmetric alias write (see handleRegisterProof).
+  if (attested_copy_hash && attested_copy_hash !== content_hash) {
+    await env.DEDUP_KV.put(
+      `alias:${attested_copy_hash}`,
+      JSON.stringify({ canonical: content_hash, registered_at: now })
+    );
+  }
 
   // S85CW Change 2: Index this proof under the attester's credential.
   await addToCredProofsIndex(env, credential_id, content_hash);
