@@ -857,6 +857,31 @@ async function computeTrustScore(record, env) {
   };
 }
 
+// S101: Auto-flip positive-outcome resolution on vouches >=90 days old.
+// Per HP-SPEC-v1_2 §847-850: a vouch is resolved positively when the vouched
+// credential achieves 90 days of clean Active status. (Negative outcome via
+// formal Invalidation is not yet implemented — that branch is deferred until
+// the Credential Compromise Determination pipeline is built.)
+// Mutates vouchLog in place. Returns true if any entry was flipped so the
+// caller can persist the updated log.
+function flipResolvedVouches(vouchLog) {
+  const ninetyDaysMs = 90 * 86400000;
+  const now = Date.now();
+  let mutated = false;
+  for (let i = 0; i < vouchLog.length; i++) {
+    const v = vouchLog[i];
+    if (v.resolved) continue;
+    const age = now - new Date(v.timestamp).getTime();
+    if (age >= ninetyDaysMs) {
+      v.resolved = true;
+      v.resolution = "positive";
+      v.resolved_at = new Date().toISOString();
+      mutated = true;
+    }
+  }
+  return mutated;
+}
+
 // POST /trust/initialize — Called during credential creation
 async function handleTrustInitialize(request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
@@ -951,6 +976,10 @@ async function handleTrustInitialize(request, env) {
     const vouchLogKey = `vouches:${voucher_credential_id}`;
     const vouchLogRaw = await env.DEDUP_KV.get(vouchLogKey);
     const vouchLog = vouchLogRaw ? JSON.parse(vouchLogRaw) : [];
+    // S101: Auto-flip 90-day positive resolutions before counting (HP-SPEC-v1_2 §847-850)
+    if (flipResolvedVouches(vouchLog)) {
+      await env.DEDUP_KV.put(vouchLogKey, JSON.stringify(vouchLog));
+    }
     const thirtyDaysAgo = Date.now() - 30 * 86400000;
     const recentVouches = vouchLog.filter(function(v) { return new Date(v.timestamp).getTime() > thirtyDaysAgo; });
     if (recentVouches.length >= 3) {
@@ -1509,6 +1538,10 @@ async function handleUpgradeCredential(request, env) {
     const vouchLogKey = `vouches:${voucher_credential_id}`;
     const vouchLogRaw = await env.DEDUP_KV.get(vouchLogKey);
     const vouchLog = vouchLogRaw ? JSON.parse(vouchLogRaw) : [];
+    // S101: Auto-flip 90-day positive resolutions before counting (HP-SPEC-v1_2 §847-850)
+    if (flipResolvedVouches(vouchLog)) {
+      await env.DEDUP_KV.put(vouchLogKey, JSON.stringify(vouchLog));
+    }
     const thirtyDaysAgo = Date.now() - 30 * 86400000;
     const recentVouches = vouchLog.filter(function(v) { return new Date(v.timestamp).getTime() > thirtyDaysAgo; });
     if (recentVouches.length >= 3) {
@@ -1851,6 +1884,7 @@ async function handleRegisterProof(request, env) {
     sealed,
     protocol_version,
     file_name,
+    original_hash,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -1866,6 +1900,15 @@ async function handleRegisterProof(request, env) {
   // content_hash must be a 64-char hex string (SHA-256)
   if (!/^[0-9a-f]{64}$/.test(content_hash)) {
     return jsonResponse({ error: "content_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
+  }
+
+  // S102 Path 2: optional pre-embed hash, captured client-side before
+  // badge/metadata embedding. Not part of the signature payload — metadata
+  // only (same posture as file_name). Enables cross-device Verify fallback
+  // via /api/credential/{id}/attestations to dual-hash-match a dropped file
+  // against proofs attested under the requester's credential.
+  if (original_hash !== undefined && original_hash !== null && !/^[0-9a-f]{64}$/.test(original_hash)) {
+    return jsonResponse({ error: "original_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
   }
 
   // public_key must be a 64-char hex string (Ed25519 = 32 bytes = 64 hex chars)
@@ -2010,6 +2053,7 @@ async function handleRegisterProof(request, env) {
     protocol_version: protocol_version || "1.2",
     short_id: short_id,
     file_name: sanitizedFileName,
+    original_hash: original_hash || null,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
@@ -2529,6 +2573,7 @@ async function handleApiAttest(request, env) {
     perceptual_hash,
     public_key,
     file_name,
+    original_hash,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -2545,6 +2590,16 @@ async function handleApiAttest(request, env) {
   if (!/^[0-9a-f]{64}$/.test(content_hash)) {
     return jsonResponse({
       error: "content_hash must be a 64-character lowercase hex string (SHA-256)"
+    }, 400, origin);
+  }
+
+  // S102 Path 2: optional pre-embed hash (metadata only, not signed). See
+  // handleRegisterProof for rationale. Symmetrical stamping here keeps
+  // HIPKit-authed attestations shape-compatible with the credential history
+  // endpoint (records with null original_hash are matched on content_hash only).
+  if (original_hash !== undefined && original_hash !== null && !/^[0-9a-f]{64}$/.test(original_hash)) {
+    return jsonResponse({
+      error: "original_hash must be a 64-character lowercase hex string (SHA-256)"
     }, 400, origin);
   }
 
@@ -2690,6 +2745,7 @@ async function handleApiAttest(request, env) {
     short_id: short_id,
     source: "api",
     file_name: sanitizedFileName,
+    original_hash: original_hash || null,
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
@@ -3349,6 +3405,105 @@ async function handlePortfolio(request, env) {
 }
 
 
+// ══════════════════════════════════════════════════════════════
+// S102 Path 2 — POST /api/credential/{id}/attestations
+// Auth-gated compact enumeration of the calling credential's attestations.
+// Returns {content_hash, original_hash|null, attested_at} triples so the
+// hipprotocol.org Verify tool can dual-hash-match a dropped file against a
+// cross-device (or cross-browser) attestation history without requiring the
+// user to still have the proof card or an in-browser localStorage seed.
+//
+// Auth: verifyAppAuth with canonical endpoint string "/api/credential/attestations"
+// (the {id} URL segment is discoverability only — the body-signed credential_id
+// is the authority; if the URL id doesn't match, the request is rejected).
+//
+// Privacy posture: credential_id is already public (SHA-256 of public_key),
+// and /api/proof/{hash} is already public. The only new leak is that an
+// attacker who steals a credential can enumerate its history rather than
+// guessing hashes. Same attacker can do worse with the credential (attest,
+// retire). Net: modest bulk-profiling defense; not a sybil/theft defense.
+//
+// Migration: records written before this endpoint shipped have no
+// original_hash field — we return null. Client treats null as "match
+// content_hash only." Pre-embed hashes for pre-S102 embedding-file records
+// are not recoverable server-side (they were computed client-side and never
+// transmitted). Acceptable degradation; same-browser coverage continues via
+// S101's hip_attest_local localStorage cache.
+//
+// Response cap: 1000 newest entries (oldest truncated). For typical users
+// this is single-shot; power users with >1000 proofs get recency coverage.
+// Compact shape keeps the payload manageable (~200 bytes/entry × 1000 = 200KB).
+async function handleCredentialAttestations(request, env, credentialIdFromUrl) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const auth = await verifyAppAuth(request, "/api/credential/attestations", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id } = auth;
+
+  // URL id must match authenticated credential_id. Defense-in-depth — the
+  // body-signed credential_id is the sole authority, but this catches the
+  // category of bugs where a client constructs the URL from one credential
+  // and signs with another.
+  if (credentialIdFromUrl && credentialIdFromUrl !== credential_id) {
+    return jsonResponse({
+      error: "URL credential_id does not match authenticated credential",
+    }, 400, origin);
+  }
+
+  const indexRaw = await env.DEDUP_KV.get(`cred_proofs:${credential_id}`);
+  if (!indexRaw) {
+    return jsonResponse({
+      credential_id,
+      entries: [],
+      total: 0,
+      truncated: false,
+      cap: 1000,
+    }, 200, origin);
+  }
+
+  let index;
+  try { index = JSON.parse(indexRaw); } catch (_) { index = null; }
+  if (!index || !Array.isArray(index.hashes) || index.hashes.length === 0) {
+    return jsonResponse({
+      credential_id,
+      entries: [],
+      total: 0,
+      truncated: false,
+      cap: 1000,
+    }, 200, origin);
+  }
+
+  // Newest first — append-order means last element is most recent.
+  const orderedAll = index.hashes.slice().reverse();
+  const total = orderedAll.length;
+  const cap = 1000;
+  const truncated = total > cap;
+  const ordered = truncated ? orderedAll.slice(0, cap) : orderedAll;
+
+  // Fetch each proof record. Skip orphans (index present, record deleted).
+  const entries = [];
+  for (const hash of ordered) {
+    const proofRaw = await env.DEDUP_KV.get(`proof:${hash}`);
+    if (!proofRaw) continue;
+    let record;
+    try { record = JSON.parse(proofRaw); } catch (_) { continue; }
+    entries.push({
+      content_hash: record.content_hash,
+      original_hash: record.original_hash || null,
+      attested_at: record.attested_at || null,
+    });
+  }
+
+  return jsonResponse({
+    credential_id,
+    entries,
+    total,
+    truncated,
+    cap,
+  }, 200, origin);
+}
+
+
 // ── Main Router ──
 
 export default {
@@ -3498,6 +3653,15 @@ export default {
     // S85CW Change 3: Portfolio — paginated proofs for authenticated credential
     if (method === "POST" && path === "/api/portfolio") {
       return handlePortfolio(request, env);
+    }
+
+    // S102 Path 2: Credential-keyed attestation history (compact) for
+    // cross-device Verify fallback. Auth-gated via verifyAppAuth.
+    if (method === "POST") {
+      const credAttMatch = path.match(/^\/api\/credential\/([0-9a-f]{64})\/attestations$/);
+      if (credAttMatch) {
+        return handleCredentialAttestations(request, env, credAttMatch[1]);
+      }
     }
 
     // S85CW Backfill: one-shot index builder. Admin-key gated.
