@@ -2428,45 +2428,42 @@ if(badgeEnabled&&canEmbedImage&&_hipBadgeLight&&_hipBadgeDark){
   }catch(bex){console.warn("Badge composite:",bex.message)}
 }
 
-if(isJpg&&rawDataURL){
+// S102 Test A fix: unified HipImageEmbed pass for JPEG/PNG/WebP.
+// Previously JPEG used embedHipExif (piexif) and PNG used embedHipPng,
+// which diverged from publishProof's attested-copy generation path
+// (HipImageEmbed.embed for all three). For iOS-origin JPEGs with EXIF
+// structures piexif couldn't parse, the buildIt embed silently threw
+// and finalHash stayed at the pre-embed value — causing /register-proof
+// to stamp the pre-embed hash as content_hash, which made dropping the
+// pre-embed file report CANONICAL COPY MATCHED and dropping the actual
+// attested copy report NO ATTESTATION FOUND. Converging on
+// HipImageEmbed here guarantees buildIt's canonical hash is the
+// post-XMP-embed hash, matching the WebP flow that was already correct.
+// Placeholder content_hash/signature in the XMP is the same pattern
+// WebP has shipped with since S41 — the file itself is the
+// content-addressable key; server records are keyed by its post-embed
+// hash, not by the pending strings in its own XMP.
+if(canEmbedImage){
   try{
-    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
-    var embedded=embedHipExif(rawDataURL,hipMeta);
-    setEmbeddedDataURL(embedded);
-    // Hash the embedded version — this is the canonical hash
-    var embBytes=dataURLtoBytes(embedded);
-    finalHash=await sha256(embBytes);
-    setHash(finalHash);
-  }catch(ex){
-    // EXIF embed failed — fall back to raw file hash
-    setEmbeddedDataURL(null);
-  }
-} else if(isPngFile&&rawBytes){
-  try{
-    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
-    var embPng=embedHipPng(rawBytes,hipMeta);
-    setEmbeddedBytes(embPng);
-    // Hash the embedded version — this is the canonical hash
-    finalHash=await sha256(embPng);
-    setHash(finalHash);
-  }catch(ex){
-    // PNG embed failed — fall back to raw file hash
-    setEmbeddedBytes(null);
-  }
-} else if(isWebPFile&&rawBytes){
-  // S41: WebP — embed minimal HIP metadata via XMP before hashing
-  try{
-    var hipMeta={"HIP-Protocol":"attested",credentialId:cred.credentialId.substring(0,16),tier:cred.tier,timestamp:now,proofCardFilename:pcFilename};
-    var embResult=HipImageEmbed.embed(rawBytes.buffer,{
+    var imgBuf=rawBytes?rawBytes.buffer:dataURLtoBytes(rawDataURL).buffer;
+    var embResult=HipImageEmbed.embed(imgBuf,{
       content_hash:"pending",credential_id:cred.credentialId.substring(0,16),
       classification:cls,attested_at:now,signature:"pending",protocol_version:"1.2"},fname);
-    if(embResult){
-      var embWebP=new Uint8Array(embResult.buffer);
-      setEmbeddedBytes(embWebP);
-      finalHash=await sha256(embWebP);
-      setHash(finalHash);
-    }
+    if(!embResult)throw new Error("HipImageEmbed returned null for "+(fname||"image"));
+    var embImg=new Uint8Array(embResult.buffer);
+    setEmbeddedBytes(embImg);
+    finalHash=await sha256(embImg);
+    setHash(finalHash);
   }catch(ex){
+    // Unified embed failed. Leave finalHash at pre-embed value so proof
+    // card still builds, but publishProof will see originalHash ===
+    // contentHash and the attested-copy generator will re-run
+    // HipImageEmbed in publishProof — either it succeeds there (and
+    // content_hash on server matches THAT output via the sourceBytes
+    // fallback chain hitting rawBytes/rawDataURL) or it fails too and
+    // we degrade to a no-embed attestation. This catch path is now
+    // logged so the failure surfaces if it keeps happening.
+    console.warn("HipImageEmbed failed in buildIt:",ex.message);
     setEmbeddedBytes(null);
   }
 }
@@ -2618,7 +2615,7 @@ setUnsealing(false);};
 // These are computed fresh each render in step 4 — acceptable since step 4 is stable.
 var embeddedBlobURL=null;
 if(embeddedDataURL){var eb=dataURLtoBytes(embeddedDataURL);embeddedBlobURL=URL.createObjectURL(new Blob([eb],{type:"image/jpeg"}))}
-else if(embeddedBytes){embeddedBlobURL=URL.createObjectURL(new Blob([embeddedBytes],{type:isWebPFile?"image/webp":"image/png"}))}
+else if(embeddedBytes){embeddedBlobURL=URL.createObjectURL(new Blob([embeddedBytes],{type:isWebPFile?"image/webp":isJpg?"image/jpeg":"image/png"}))}
 var pcBlobURL=null;
 if(proofcard){pcBlobURL=URL.createObjectURL(new Blob([JSON.stringify(proofcard,null,2)],{type:"application/json"}))}
 var bundleBlobURL=null;var anchorBlobURL=null;
@@ -2657,9 +2654,9 @@ e("div",{style:{marginBottom:6}},e("div",{style:wizRL},"Bundle ID"),e("code",{st
 e("div",null,e("div",{style:wizRL},"Anchor Link"),e("code",{style:wizRV},proofcard.proofAnchor.anchorLink))),
 // S21b/S34/S41: Download section — attested image (JPEG EXIF or PNG iTXt or WebP XMP) + Proof Card
 (embeddedDataURL||embeddedBytes)&&e("div",{style:{padding:"14px 16px",background:"rgba(74,222,128,0.04)",borderRadius:8,border:"1px solid rgba(74,222,128,0.15)",marginBottom:4}},
-ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"EXIF":isWebPFile?"XMP":"metadata chunk",".")),
+ToolAlert("success",e("span",null,e("strong",null,"HIP metadata embedded in your image.")," Download this version — it replaces your original. The attestation data is now inside the file's ",isJpg?"XMP":isWebPFile?"XMP":"metadata chunk",".")),
 e("a",{className:"hip-cta-btn",style:Object.assign({},btnG,{width:"100%",marginBottom:8,display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:embeddedBlobURL,download:fname||(isJpg?"attested.jpg":isWebPFile?"attested.webp":"attested.png")},"↓ Save Attested "+fname),
-e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's EXIF now contains: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":isWebPFile?"This WebP now contains XMP metadata with: HIP protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with: protocol marker, credential ID, tier, timestamp, and Proof Card filename. Any HIP tool can detect this.")),
+e("div",{style:{fontSize:11,color:t2,fontFamily:mo,lineHeight:1.5}},isJpg?"This file's XMP now contains HIP protocol markers (hash placeholders until publish). Any HIP tool can detect this.":isWebPFile?"This WebP now contains XMP metadata with HIP protocol markers (hash placeholders until publish). Any HIP tool can detect this.":"This PNG now contains a HIP iTXt metadata chunk with HIP protocol markers (hash placeholders until publish). Any HIP tool can detect this.")),
 e("div",{style:{padding:"14px 16px",background:gg,borderRadius:8,border:"1px solid rgba(224,90,0,0.2)"}},
 e("a",{className:"hip-cta-btn",style:Object.assign({},(embeddedDataURL||embeddedBytes)?btnDl:btnG,{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}),href:pcBlobURL,download:"HIP_ProofCard_"+(fname?fname.replace(/[^a-zA-Z0-9._-]/g,"_"):"")+".json"},"↓ Save Proof Card"),
 e("button",{onClick:function(){setShowBundleAnchor(!showBundleAnchor)},style:{background:"none",border:"none",color:t2,cursor:"pointer",fontSize:10,fontFamily:mo,padding:"6px 0",marginTop:6,width:"100%",textAlign:"center",letterSpacing:0.5}},showBundleAnchor?"▾ Hide Bundle & Anchor files":"▸ Bundle & Anchor files"),
