@@ -23,6 +23,12 @@
     window.location.replace('https://hipprotocol.org/proof.html?hash=' + m[1].toLowerCase());
     return;
   }
+  // /c/{collection_id} short links → redirect to proof.html (S107CW Phase 2.1)
+  var cMatch = path.match(/^\/c\/([a-z2-7]{20})$/);
+  if (cMatch) {
+    window.location.replace('https://hipprotocol.org/proof.html?cid=' + cMatch[1]);
+    return;
+  }
   // Otherwise show 404
   document.addEventListener('DOMContentLoaded', function(){
     document.getElementById('c').style.display = 'flex';

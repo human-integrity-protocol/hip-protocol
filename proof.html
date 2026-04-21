@@ -187,6 +187,17 @@ function getHashFromURL(){
   return null;
 }
 
+// S107CW Phase 2.1 — collection_id (cid) extractor for /c/{cid} or ?cid=
+function getCidFromURL(){
+  var path=window.location.pathname;
+  var m=path.match(/\/c\/([a-z2-7]{20})/);
+  if(m)return m[1];
+  var params=new URLSearchParams(window.location.search);
+  var c=params.get("cid");
+  if(c&&/^[a-z2-7]{20}$/.test(c))return c;
+  return null;
+}
+
 // ── Classification display ──
 var CLS_LABELS={
   "CompleteHumanOrigin":"Complete Human Origin",
@@ -297,6 +308,28 @@ function badgeImg(cls){
 
 // ── Main render ──
 async function init(){
+  // S107CW Phase 2.1 — /c/{cid} and ?cid= branch (runs before hash branch)
+  var cid = getCidFromURL();
+  if(cid){
+    try{
+      var cresp = await fetch(WORKER_URL+"/api/collection/"+cid);
+      if(cresp.status === 404){
+        renderCollectionNotFound(cid);
+        return;
+      }
+      var cdata = await cresp.json();
+      if(cresp.ok && cdata && cdata.collection_hash && cdata.manifest){
+        await renderCollection(cdata.collection_hash, cdata);
+        return;
+      }
+      renderError("Collection record could not be loaded.");
+      return;
+    }catch(e){
+      renderError("Could not reach the HIP collection registry. Please try again.");
+      return;
+    }
+  }
+
   var contentHash = getHashFromURL();
 
   if(!contentHash){
@@ -348,6 +381,18 @@ function renderNotFound(hash){
     +'<h2 style="font-family:\'Space Grotesk\',sans-serif;font-size:24px;font-weight:400;color:#E8E8E0;margin-bottom:12px">No proof record found</h2>'
     +'<p style="font-size:14px;color:#555;line-height:1.7;max-width:480px;margin:0 auto 20px">No attestation has been published to the HIP registry for this content hash. The creator may not have published a proof link, or the content may have been modified from the attested original.</p>'
     +'<div style="padding:12px 16px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;font-family:\'Azeret Mono\',monospace;font-size:11px;color:#444;word-break:break-all;margin-bottom:20px">'+hash+'</div>'
+    +'<a href="https://hipprotocol.org" style="color:#E05A00;font-size:13px">← hipprotocol.org</a>'
+    +'</div>';
+  show("footer");
+}
+
+// ── Render: collection not found (S107CW Phase 2.1) ──
+function renderCollectionNotFound(cid){
+  qs("main").innerHTML = '<div class="not-found">'
+    +'<div style="font-size:48px;margin-bottom:20px;opacity:0.2">✋</div>'
+    +'<h2 style="font-family:\'Space Grotesk\',sans-serif;font-size:24px;font-weight:400;color:#E8E8E0;margin-bottom:12px">Collection not found</h2>'
+    +'<p style="font-size:14px;color:#555;line-height:1.7;max-width:480px;margin:0 auto 20px">No collection with this identifier exists in the HIP registry. The link may be incorrect, or the collection may have been withdrawn.</p>'
+    +'<div style="padding:12px 16px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;font-family:\'Azeret Mono\',monospace;font-size:11px;color:#444;word-break:break-all;margin-bottom:20px">'+cid+'</div>'
     +'<a href="https://hipprotocol.org" style="color:#E05A00;font-size:13px">← hipprotocol.org</a>'
     +'</div>';
   show("footer");
