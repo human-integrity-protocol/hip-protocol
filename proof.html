@@ -108,6 +108,30 @@ a:hover{text-decoration:underline}
 .footer{text-align:center;padding:40px 24px 20px;font-size:12px;color:#444;border-top:1px solid rgba(255,255,255,0.04)}
 .footer a{color:#666}
 .footer a:hover{color:#E8E8E0}
+/* Collection proof card (S107CW Phase 2) */
+.proof-card.coll-card::before{background:linear-gradient(90deg,#2DD4BF,rgba(45,212,191,0.3))}
+.pill-collection{background:rgba(45,212,191,0.12);border:1px solid rgba(45,212,191,0.3);color:#2DD4BF}
+.chain-panel{background:#0d0d0d;border:1px solid rgba(45,212,191,0.18);border-radius:8px;padding:14px 16px;margin-bottom:20px;font-size:13px;line-height:1.7;color:#aac}
+.chain-panel-title{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#2DD4BF;margin-bottom:8px}
+.chain-panel a{color:#2DD4BF;font-family:'Azeret Mono',monospace;font-size:11px}
+.member-table{width:100%;border-collapse:collapse;margin:8px 0 20px;font-size:12px}
+.member-table th{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#555;text-align:left;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);font-weight:500}
+.member-table td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.04);color:#bbb;vertical-align:top}
+.member-table tr:hover td{background:rgba(45,212,191,0.03)}
+.member-table .mt-idx{color:#555;font-family:'Azeret Mono',monospace;width:36px}
+.member-table .mt-name{color:#E8E8E0;font-weight:500;word-break:break-word}
+.member-table .mt-meta{font-size:11px;color:#666;margin-top:2px}
+.member-table .mt-hash{font-family:'Azeret Mono',monospace;font-size:10px;color:#777;word-break:break-all}
+.member-table a{color:#E05A00}
+.member-table .mt-hint{display:block;margin-top:4px;font-size:10px;color:#2DD4BF;font-family:'Azeret Mono',monospace}
+.member-link{display:inline-block;padding:10px 14px;background:rgba(45,212,191,0.08);border:1px solid rgba(45,212,191,0.25);border-radius:6px;color:#2DD4BF;font-family:'Azeret Mono',monospace;font-size:12px;letter-spacing:0.5px;margin-top:12px}
+.member-link:hover{background:rgba(45,212,191,0.14);text-decoration:none}
+.match-method{padding:12px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;font-size:13px;color:#aaa;line-height:1.6;margin-bottom:20px}
+.match-method strong{color:#E8E8E0;font-weight:500}
+.coll-summary{background:#0d0d0d;border:1px solid rgba(45,212,191,0.15);border-radius:8px;padding:16px;margin-bottom:20px}
+.coll-summary-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#2DD4BF;margin-bottom:8px}
+.coll-summary-title{font-size:16px;color:#E8E8E0;margin-bottom:4px}
+.coll-summary-meta{font-size:12px;color:#888}
 /* Not found */
 .not-found{text-align:center;padding:80px 24px}
 </style>
@@ -188,6 +212,25 @@ function fmtDate(iso){
   }catch(e){return iso}
 }
 
+// ── S107CW Phase 2 helpers ──
+function fmtBytes(n){
+  if(typeof n !== "number" || !isFinite(n) || n < 0) return "—";
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  if(n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + " MB";
+  return (n/(1024*1024*1024)).toFixed(2) + " GB";
+}
+function short(h, n){ n = n || 12; return (typeof h === "string" && h.length > n) ? h.substring(0,n) + "…" : (h || ""); }
+function b64ToHex(b64){ try{ return hex(b64d(b64)); }catch(e){ return null; } }
+async function verifyEd25519Bytes(publicKeyHex, msgBytes, signatureB64){
+  try{
+    var pubKeyBytes = unhex(publicKeyHex);
+    var key = await crypto.subtle.importKey("raw", pubKeyBytes, {name:"Ed25519"}, false, ["verify"]);
+    var sigBytes = b64d(signatureB64);
+    return await crypto.subtle.verify("Ed25519", key, sigBytes, msgBytes);
+  }catch(e){ return null; }
+}
+
 // ── pHash helpers (same as hipprotocol_index.html) ──
 var pHashDistance=function(a,b){
   if(!a||!b||a.length!==16||b.length!==16)return null;
@@ -266,6 +309,15 @@ async function init(){
   try{
     var resp = await fetch(WORKER_URL+"/api/proof/"+contentHash);
     var data = await resp.json();
+    // S107CW Phase 2 — collection-aware dispatch (prepend; legacy paths unchanged)
+    if(resp.ok && data && data.type === "collection" && data.collection){
+      await renderCollection(contentHash, data.collection);
+      return;
+    }
+    if(resp.ok && data && data.type === "collection_member" && data.collection){
+      await renderCollectionMember(contentHash, data.collection, data.member_index, data.matchedVia);
+      return;
+    }
     if(resp.status===404||!data.found){
       renderNotFound(contentHash);
       return;
@@ -561,6 +613,341 @@ async function verifySignature(record, hash){
     +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>This page is served from hipprotocol.org. A fake page at any other domain cannot produce a valid record from HIP's registry.</div>";
 }
 
+// ── S107CW Phase 2: Collection proof card renderer ──
+async function renderCollection(hash, col){
+  var m = col.manifest || {};
+  var creator = m.creator || {};
+  var members = Array.isArray(m.members) ? m.members : [];
+  var title = (typeof m.title === "string" && m.title.length > 0) ? m.title : "Untitled Collection";
+  var description = (typeof m.description === "string" && m.description.length > 0) ? m.description : "";
+  var tier = creator.tier || 0;
+  var ordering = m.ordering === "set" ? "Unordered set" : "Ordered sequence";
+  var cs = col.chain_sidecar || null;
+  var hasChain = !!(cs && (
+    (Number.isInteger(cs.position) && cs.position > 1)
+    || (Array.isArray(cs.has_children) && cs.has_children.length > 0)
+    || m.parent_collection_hash
+  ));
+
+  var html = '<div class="badge-wrap">'+badgeImg("verified")+'</div>';
+
+  html += '<div class="proof-card coll-card" id="coll-main">'
+    +'<div class="card-header">'
+    +'<div class="card-title-group"><div class="card-label">Collection Proof Card · hipprotocol.org</div><div class="card-title">'+escHtml(title)+'</div></div>'
+    +'<div class="status-pill pill-collection"><span class="pill-dot"></span>COLLECTION</div>'
+    +'</div>';
+
+  if(description){
+    html += '<p style="font-size:14px;color:#bbb;line-height:1.7;margin-bottom:20px;white-space:pre-wrap">'+escHtml(description)+'</p>';
+  }
+
+  html += '<div class="field-grid-3">'
+    +'<div class="field"><div class="field-label">Creator Tier</div><div class="field-val '+tierClass(tier)+'">'+tierLabel(tier)+'</div></div>'
+    +'<div class="field"><div class="field-label">Issued</div><div class="field-val" style="font-size:13px">'+fmtDate(m.issued_at)+'</div></div>'
+    +'<div class="field"><div class="field-label">Registered</div><div class="field-val" style="font-size:13px">'+fmtDate(col.created_at)+'</div></div>'
+    +'</div>';
+
+  html += '<div class="field-grid-3">'
+    +'<div class="field"><div class="field-label">Members</div><div class="field-val">'+members.length+'</div></div>'
+    +'<div class="field"><div class="field-label">Ordering</div><div class="field-val" style="font-size:14px">'+ordering+'</div></div>'
+    +'<div class="field"><div class="field-label">Cover</div><div class="field-val" style="font-size:14px">'+(Number.isInteger(m.cover_index) ? "#"+(m.cover_index+1) : "—")+'</div></div>'
+    +'</div>';
+
+  html += '<div class="divider"></div>';
+
+  if(hasChain){
+    html += '<div class="chain-panel"><div class="chain-panel-title">Chain of Provenance</div>';
+    if(cs && typeof cs.chain_id === "string"){
+      html += '<div style="margin-bottom:4px">Chain ID: <span class="mono" style="font-size:11px;color:#bbb">'+short(cs.chain_id,16)+'</span></div>';
+    }
+    if(cs && Number.isInteger(cs.position)){
+      html += '<div style="margin-bottom:4px">Position: <strong style="color:#E8E8E0">'+cs.position+'</strong> of <strong style="color:#E8E8E0">'+(cs.known_length || cs.position)+'</strong> known</div>';
+    }
+    if(m.parent_collection_hash){
+      html += '<div style="margin-bottom:4px">Parent collection: <a href="/proof/'+m.parent_collection_hash+'">'+short(m.parent_collection_hash,16)+'</a></div>';
+    }
+    if(cs && Array.isArray(cs.has_children) && cs.has_children.length > 0){
+      var shownChildren = cs.has_children.slice(0,5).map(function(cid){
+        return '<a href="/c/'+cid+'">'+short(cid,10)+'</a>';
+      }).join(", ");
+      var childSuffix = cs.has_children.length > 5 ? " + "+(cs.has_children.length - 5)+" more" : "";
+      html += '<div>Children ('+cs.has_children.length+'): '+shownChildren+childSuffix+'</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '<div class="field" style="margin-bottom:8px"><div class="field-label">Members ('+members.length+')</div></div>';
+  html += '<div style="overflow-x:auto"><table class="member-table"><thead><tr>'
+    +'<th>#</th><th>Name / Type</th><th>Size</th><th>Hash</th>'
+    +'</tr></thead><tbody>';
+  var sidecar = col.member_sidecar || {};
+  for(var i = 0; i < members.length; i++){
+    var mem = members[i] || {};
+    var nameDisp = (typeof mem.filename === "string" && mem.filename.length > 0)
+      ? escHtml(mem.filename)
+      : "<em style=\"color:#555\">unnamed member</em>";
+    var sc = sidecar[String(i)] || {};
+    var hintHtml = (sc && typeof sc.download_url_hint === "string" && sc.download_url_hint.length > 0)
+      ? '<span class="mt-hint">↗ '+escHtml(sc.download_url_hint)+'</span>' : "";
+    var isCover = (i === m.cover_index);
+    var coverMark = isCover ? ' <span title="Cover" style="color:#2DD4BF">★</span>' : '';
+    html += '<tr>'
+      +'<td class="mt-idx">'+(i+1)+coverMark+'</td>'
+      +'<td><div class="mt-name">'+nameDisp+'</div><div class="mt-meta">'+escHtml(mem.mime || "—")+'</div>'+hintHtml+'</td>'
+      +'<td>'+fmtBytes(mem.size)+'</td>'
+      +'<td class="mt-hash"><a href="/proof/'+mem.member_hash+'">'+short(mem.member_hash,16)+'</a></td>'
+      +'</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  html += '<div class="divider"></div>';
+
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Collection Hash (SHA-256 of canonical manifest)</div><div class="field-val mono">'+col.collection_hash+'</div></div>';
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Creator Credential</div><div class="field-val mono">'+creator.credential_id+'</div></div>';
+  if(creator.public_key){
+    html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Creator Public Key (Ed25519, base64)</div><div class="field-val mono">'+creator.public_key+'</div></div>';
+  }
+  if(col.short_url){
+    html += '<div class="field" style="margin-bottom:4px"><div class="field-label">Short Link</div><div class="field-val" style="font-size:13px"><a href="'+col.short_url+'" style="color:#2DD4BF;font-family:Azeret Mono,monospace;font-size:12px">'+col.short_url+'</a></div></div>';
+  }
+  html += '<div class="field" style="margin-bottom:4px"><div class="field-label">Collection ID</div><div class="field-val mono">'+col.collection_id+'</div></div>';
+
+  html += '<div class="divider"></div>';
+  html += '<div class="sig-block sig-pending" id="sig-status">Verifying collection signature…</div>';
+
+  html += '</div>'; // end proof-card
+
+  html += '<div class="boundary">This record shows a verified HIP credential holder published a collection manifest of <strong style="color:#E8E8E0;font-style:normal">'+members.length+' member'+(members.length === 1 ? '' : 's')+'</strong> at '+fmtDate(m.issued_at)+'. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable. The signature was verified live in your browser against the canonical manifest digest.</div>';
+
+  // Drop zone A — does my file belong to THIS collection?
+  html += '<div class="verify-section">'
+    +'<div class="verify-title">Does my file belong to this collection?</div>'
+    +'<div class="verify-desc">Drop a file to check whether its SHA-256 matches any member of this collection (either pre-embed source or post-embed attested copy).</div>'
+    +'<div class="drop-zone" id="coll-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleCollDrop(event)" onclick="document.getElementById(\'coll-input\').click()">'
+    +'<div class="drop-label">Drop file here or click to select</div>'
+    +'<input type="file" id="coll-input" style="display:none" onchange="handleCollFile(event)">'
+    +'</div>'
+    +'<div id="coll-result"></div>'
+    +'</div>';
+
+  // Drop zone B — existing global Verify Another File
+  html += '<div class="verify-section" style="margin-top:16px">'
+    +'<div class="verify-title" style="color:#4ade80">Verify Another File (any registry match)</div>'
+    +'<div class="verify-desc">Check if any file has a published HIP attestation — standalone or inside any collection.</div>'
+    +'<div class="drop-zone" id="quick-verify-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleQuickVerifyDrop(event)" onclick="document.getElementById(\'quick-verify-input\').click()">'
+    +'<div class="drop-label" id="quick-verify-label">Drop any file here to check the registry</div>'
+    +'<input type="file" id="quick-verify-input" style="display:none" onchange="handleQuickVerifyFile(event)">'
+    +'</div>'
+    +'<div id="quick-verify-result"></div>'
+    +'</div>';
+
+  html += '<div style="text-align:center;margin-top:8px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
+
+  qs("main").innerHTML = html;
+  show("footer");
+
+  // Stash collection for the drop-zone handler
+  window._currentCollection = col;
+
+  await verifyCollectionSignature(col);
+}
+
+// Collection signature verification — Ed25519 over unhex(collection_hash) (the 32-byte SHA-256(JCS(manifest)) digest).
+async function verifyCollectionSignature(col){
+  var el = qs("sig-status");
+  if(!el) return;
+  var m = col.manifest || {};
+  var creator = m.creator || {};
+
+  if(!col.signature){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ No signature present</strong> — this collection record cannot be cryptographically verified.";
+    return;
+  }
+  if(!creator.public_key){
+    el.className = "sig-block sig-pending";
+    el.innerHTML = "<strong>⚡ Signature present</strong> — creator public key missing from manifest; full verification unavailable.";
+    return;
+  }
+
+  var pubKeyHex = b64ToHex(creator.public_key);
+  if(!pubKeyHex){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Public key malformed</strong> — base64 decode failed.";
+    return;
+  }
+
+  // Key binding: sha256(pubkey_bytes) === credential_id
+  var computedCid = await sha256(unhex(pubKeyHex));
+  if(computedCid !== creator.credential_id){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Key mismatch</strong> — manifest.creator.public_key does not hash to manifest.creator.credential_id. This record may be tampered with.";
+    return;
+  }
+
+  var digestBytes = unhex(col.collection_hash);
+  var verified = await verifyEd25519Bytes(pubKeyHex, digestBytes, col.signature);
+
+  if(verified === true){
+    el.className = "sig-block sig-ok";
+    el.innerHTML = "<strong>✓ Collection signature verified</strong> — Ed25519 over SHA-256(JCS(manifest)) = collection_hash."
+      +"<div style='margin-top:8px;font-size:11px;opacity:0.7'>Public key: <code style='font-family:Azeret Mono,monospace'>"+pubKeyHex.substring(0,24)+"…</code></div>"
+      +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed digest: <code style='font-family:Azeret Mono,monospace'>"+col.collection_hash.substring(0,24)+"…</code></div>"
+      +"<div style='margin-top:4px;font-size:11px;opacity:0.7'>Key binding: SHA-256(public_key) = credential_id ✓</div>";
+  } else if(verified === false){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Signature invalid</strong> — the Ed25519 signature does not match the creator's public key and the collection_hash digest. This record may be tampered with.";
+  } else {
+    el.className = "sig-block sig-pending";
+    el.innerHTML = "<strong>⚡ Signature present</strong> — your browser does not support Ed25519 verification. Try Chrome or Edge for full verification.";
+  }
+}
+
+// Drop-zone handler — check if dropped file matches any member of the current collection
+function handleCollDrop(ev){
+  ev.preventDefault();
+  var z = qs("coll-zone");
+  if(z) z.classList.remove("drag-over");
+  var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  if(f) checkCollMember(f);
+}
+function handleCollFile(ev){
+  var f = ev.target.files && ev.target.files[0];
+  if(f) checkCollMember(f);
+}
+async function checkCollMember(f){
+  var el = qs("coll-result");
+  var col = window._currentCollection;
+  if(!col || !col.manifest || !Array.isArray(col.manifest.members)){
+    if(el) el.innerHTML = '<div class="drop-result match-none">Collection data unavailable.</div>';
+    return;
+  }
+  if(el) el.innerHTML = '<div class="drop-result sig-pending">Computing hash…</div>';
+  try{
+    var buf = await f.arrayBuffer();
+    var h = await sha256(new Uint8Array(buf));
+    var members = col.manifest.members;
+    var found = null;
+    var foundVia = null;
+    for(var i = 0; i < members.length; i++){
+      var mem = members[i] || {};
+      if(mem.member_hash === h){ found = {index:i, member:mem}; foundVia = "source"; break; }
+      if(mem.attested_copy_hash === h){ found = {index:i, member:mem}; foundVia = "attested_copy"; break; }
+    }
+    if(found){
+      var nameDisp = (typeof found.member.filename === "string" && found.member.filename.length > 0)
+        ? escHtml(found.member.filename) : "(unnamed)";
+      var viaLabel = foundVia === "source" ? "pre-embed source hash" : "post-embed attested-copy hash";
+      el.innerHTML = '<div class="drop-result match-exact">'
+        +'<strong>✓ Member #'+(found.index+1)+' match</strong> — '+escHtml(f.name)+' matches <strong>'+nameDisp+'</strong> on '+viaLabel+'.'
+        +'<div style="margin-top:6px;font-size:11px;opacity:0.8">SHA-256: <code style="font-family:Azeret Mono,monospace">'+h+'</code></div>'
+        +'<a href="/proof/'+found.member.member_hash+'" style="font-size:11px;color:#E05A00;margin-top:6px;display:inline-block">View member proof →</a>'
+        +'</div>';
+    } else {
+      el.innerHTML = '<div class="drop-result match-none">'
+        +'<strong>Not a member of this collection</strong> — '+escHtml(f.name)+' does not match any member\'s source or attested-copy hash.'
+        +'<div style="margin-top:6px;font-size:11px;opacity:0.7">SHA-256: '+h+'</div>'
+        +'<div style="margin-top:4px;font-size:11px;opacity:0.7">Try the global registry check below to see if it\'s attested elsewhere.</div>'
+        +'</div>';
+    }
+  }catch(e){
+    if(el) el.innerHTML = '<div class="drop-result match-none">Error reading file: '+e.message+'</div>';
+  }
+}
+
+// ── S107CW Phase 2: Collection member proof card renderer ──
+async function renderCollectionMember(hash, col, memberIndex, matchedVia){
+  var m = col.manifest || {};
+  var creator = m.creator || {};
+  var members = Array.isArray(m.members) ? m.members : [];
+  if(typeof memberIndex !== "number" || memberIndex < 0 || memberIndex >= members.length) memberIndex = 0;
+  var mem = members[memberIndex] || {};
+  var memberName = (typeof mem.filename === "string" && mem.filename.length > 0)
+    ? escHtml(mem.filename) : ("Member #"+(memberIndex+1));
+  var collTitle = (typeof m.title === "string" && m.title.length > 0) ? m.title : "Untitled Collection";
+  var tier = creator.tier || 0;
+  var ordering = m.ordering === "set" ? "Unordered set" : "Ordered sequence";
+
+  var matchMethodDesc;
+  if(matchedVia === "collection_member_attested_copy"){
+    matchMethodDesc = "<strong>Matched on attested-copy hash.</strong> This file is the post-embed form (the original plus HIP metadata written into it). The pre-embed source hash is stored in the collection manifest.";
+  } else if(matchedVia === "collection_member_source"){
+    matchMethodDesc = "<strong>Matched on source hash.</strong> This is the pre-embed original bytes of the member, before any HIP metadata was embedded.";
+  } else {
+    matchMethodDesc = "<strong>Matched.</strong> Method: <code>"+escHtml(matchedVia || "unknown")+"</code>";
+  }
+
+  var html = '<div class="badge-wrap">'+badgeImg("verified")+'</div>';
+
+  html += '<div class="proof-card coll-card">'
+    +'<div class="card-header">'
+    +'<div class="card-title-group"><div class="card-label">Collection Member · hipprotocol.org</div><div class="card-title">'+memberName+'</div></div>'
+    +'<div class="status-pill pill-collection"><span class="pill-dot"></span>ATTESTED</div>'
+    +'</div>';
+
+  html += '<div class="match-method">'+matchMethodDesc+'</div>';
+
+  html += '<div class="coll-summary">'
+    +'<div class="coll-summary-label">Part of Collection</div>'
+    +'<div class="coll-summary-title">'+escHtml(collTitle)+'</div>'
+    +'<div class="coll-summary-meta">Member <strong style="color:#E8E8E0">#'+(memberIndex+1)+'</strong> of <strong style="color:#E8E8E0">'+members.length+'</strong> · '+ordering+'</div>'
+    +'<a class="member-link" href="/proof/'+col.collection_hash+'">View full collection card →</a>'
+    +'</div>';
+
+  html += '<div class="field-grid-3">'
+    +'<div class="field"><div class="field-label">Creator Tier</div><div class="field-val '+tierClass(tier)+'">'+tierLabel(tier)+'</div></div>'
+    +'<div class="field"><div class="field-label">Issued</div><div class="field-val" style="font-size:13px">'+fmtDate(m.issued_at)+'</div></div>'
+    +'<div class="field"><div class="field-label">Registered</div><div class="field-val" style="font-size:13px">'+fmtDate(col.created_at)+'</div></div>'
+    +'</div>';
+
+  html += '<div class="divider"></div>';
+
+  html += '<div class="field-grid">'
+    +'<div class="field"><div class="field-label">Filename</div><div class="field-val" style="font-size:14px;font-weight:500">'+memberName+'</div></div>'
+    +'<div class="field"><div class="field-label">MIME</div><div class="field-val" style="font-size:14px">'+escHtml(mem.mime || "—")+'</div></div>'
+    +'</div>';
+
+  html += '<div class="field-grid">'
+    +'<div class="field"><div class="field-label">Size</div><div class="field-val" style="font-size:14px">'+fmtBytes(mem.size)+'</div></div>'
+    +'<div class="field"><div class="field-label">Position</div><div class="field-val" style="font-size:14px">#'+(memberIndex+1)+' of '+members.length+'</div></div>'
+    +'</div>';
+
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Queried Hash (SHA-256)</div><div class="field-val mono">'+hash+'</div></div>';
+  if(mem.member_hash){
+    html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Source Hash (pre-embed)</div><div class="field-val mono">'+mem.member_hash+'</div></div>';
+  }
+  if(mem.attested_copy_hash){
+    html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Attested-Copy Hash (post-embed)</div><div class="field-val mono">'+mem.attested_copy_hash+'</div></div>';
+  }
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Collection Hash</div><div class="field-val mono"><a href="/proof/'+col.collection_hash+'" style="color:#2DD4BF">'+col.collection_hash+'</a></div></div>';
+  html += '<div class="field" style="margin-bottom:12px"><div class="field-label">Creator Credential</div><div class="field-val mono">'+creator.credential_id+'</div></div>';
+
+  html += '<div class="divider"></div>';
+  html += '<div class="sig-block sig-pending" id="sig-status">Verifying collection signature…</div>';
+
+  html += '</div>'; // end proof-card
+
+  html += '<div class="boundary">This file is a member of a HIP-attested collection. The collection\'s signature covers a canonical manifest that lists this member\'s hash alongside the other members. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable.</div>';
+
+  // Global Verify Another File zone
+  html += '<div class="verify-section" style="margin-top:16px">'
+    +'<div class="verify-title" style="color:#4ade80">Verify Another File</div>'
+    +'<div class="verify-desc">Check if any file has a published HIP attestation — standalone or inside any collection.</div>'
+    +'<div class="drop-zone" id="quick-verify-zone" ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleQuickVerifyDrop(event)" onclick="document.getElementById(\'quick-verify-input\').click()">'
+    +'<div class="drop-label" id="quick-verify-label">Drop any file here to check the registry</div>'
+    +'<input type="file" id="quick-verify-input" style="display:none" onchange="handleQuickVerifyFile(event)">'
+    +'</div>'
+    +'<div id="quick-verify-result"></div>'
+    +'</div>';
+
+  html += '<div style="text-align:center;margin-top:8px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
+
+  qs("main").innerHTML = html;
+  show("footer");
+
+  await verifyCollectionSignature(col);
+}
+
 // ── Exact match handler ──
 async function handleExactDrop(ev, expectedHash){
   ev.preventDefault();
@@ -726,6 +1113,38 @@ async function quickVerifyFile(f){
     var h=await sha256(new Uint8Array(buf));
     var resp=await fetch(WORKER_URL+"/api/proof/"+h);
     var data=await resp.json();
+    // S107CW Phase 2 — collection-aware dispatch
+    if(resp.ok && data && data.type === "collection" && data.collection){
+      var colA = data.collection;
+      var mA = colA.manifest || {};
+      var titleA = (typeof mA.title === "string" && mA.title.length > 0) ? mA.title : "Untitled Collection";
+      var mcA = Array.isArray(mA.members) ? mA.members.length : 0;
+      el.innerHTML='<div class="drop-result match-exact">'
+        +'<strong>✓ Collection attestation found</strong><br>'
+        +'<span style="font-size:12px;opacity:0.9">'+escHtml(titleA)+' · '+mcA+' member'+(mcA===1?'':'s')+' · '+fmtDate(mA.issued_at)+'</span><br>'
+        +'<a href="/proof/'+colA.collection_hash+'" style="font-size:11px;color:#2DD4BF;margin-top:6px;display:inline-block">View collection card →</a>'
+        +'</div>';
+      if(lbl)lbl.textContent=f.name+" — tap to check another";
+      return;
+    }
+    if(resp.ok && data && data.type === "collection_member" && data.collection){
+      var colB = data.collection;
+      var mB = colB.manifest || {};
+      var memsB = Array.isArray(mB.members) ? mB.members : [];
+      var idxB = (typeof data.member_index === "number") ? data.member_index : 0;
+      var memB = memsB[idxB] || {};
+      var titleB = (typeof mB.title === "string" && mB.title.length > 0) ? mB.title : "Untitled Collection";
+      var memNameB = (typeof memB.filename === "string" && memB.filename.length > 0)
+        ? escHtml(memB.filename) : ("Member #"+(idxB+1));
+      el.innerHTML='<div class="drop-result match-exact">'
+        +'<strong>✓ Collection member found</strong><br>'
+        +'<span style="font-size:12px;opacity:0.9">'+memNameB+' · member #'+(idxB+1)+' of '+memsB.length+' in '+escHtml(titleB)+'</span><br>'
+        +'<a href="/proof/'+h+'" style="font-size:11px;color:#2DD4BF;margin-top:6px;display:inline-block;margin-right:12px">View member card →</a>'
+        +'<a href="/proof/'+colB.collection_hash+'" style="font-size:11px;color:#2DD4BF;margin-top:6px;display:inline-block">View collection →</a>'
+        +'</div>';
+      if(lbl)lbl.textContent=f.name+" — tap to check another";
+      return;
+    }
     if(resp.ok&&data.found){
       var cls=CLS_LABELS[data.classification]||data.classification;
       var tierCls=data.credential_tier===1?"tier-1":data.credential_tier===2?"tier-2":"tier-3";
