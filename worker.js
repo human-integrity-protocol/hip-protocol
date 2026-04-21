@@ -94,7 +94,10 @@ function corsHeaders(origin) {
   );
   return {
     "Access-Control-Allow-Origin": allowed ? origin : CORS_ORIGIN,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    // S106.8CW F.1: PATCH added for /api/collection/{id}/sidecar. Global
+    // advertisement is safe because per-route method gating still holds;
+    // browsers will only preflight PATCH against routes that actually use it.
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization",
     "Access-Control-Max-Age": "86400",
   };
@@ -277,6 +280,522 @@ async function computeDedupHash(idVerification, dedupSecret) {
   const input = `${docNum}|${dob}|${state}`;
   return await hmacSHA256(dedupSecret, input);
 }
+
+// ════════════════════════════════════════════════════════════════
+// ── S106 Collection Proof helpers (Phase 1) ──
+// RFC 8785 JCS canonicalization, SHA-256 hex, Ed25519 verify
+// wrapper, and validateManifest() per S105CW-COLLECTION-SPEC
+// §3.1 (manifest structure) and §3.2 (canonicalization + signing).
+// All pure functions — no KV reads, no mutations, no side effects.
+// ════════════════════════════════════════════════════════════════
+
+// base64 → Uint8Array. Uses atob (available in Workers runtime).
+function base64ToBytes(b64) {
+  if (typeof b64 !== "string") throw new Error("base64ToBytes: input must be string");
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// 64-hex-lowercase validator used pervasively for content/member/collection hashes.
+function isHex64Lower(s) {
+  return typeof s === "string" && /^[0-9a-f]{64}$/.test(s);
+}
+
+// S106.6CW Ambiguity F: collection_id = base32-lowercase(collection_hash[:12]) → 20 chars
+// over the RFC 4648 alphabet "abcdefghijklmnopqrstuvwxyz234567". NOT [a-z0-9]{20}
+// (the loose "alphanumeric" annotation would false-accept 0,1,8,9). Used by the
+// §3.4.2 / §3.4.3 / §3.4.7 (short-URL Option C) validators so malformed ids produce
+// a clean 400 rather than a soft 404.
+function isCollectionId(s) {
+  return typeof s === "string" && /^[a-z2-7]{20}$/.test(s);
+}
+
+// JCS (RFC 8785) canonical JSON serializer — string output.
+// Pure function; throws on non-JSON values (undefined, BigInt, NaN, ±Infinity, lone surrogates).
+function jcsSerializeString(s) {
+  let out = '"';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    // Surrogate pair handling (JCS requires well-formed UTF-16).
+    if (ch >= 0xD800 && ch <= 0xDBFF) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next < 0xDC00 || next > 0xDFFF) throw new Error("jcs: lone high surrogate at index " + i);
+      out += s[i] + s[i + 1]; // emit the full supplementary code point as-is
+      i++;                     // skip the low surrogate we just consumed
+      continue;
+    }
+    if (ch >= 0xDC00 && ch <= 0xDFFF) {
+      throw new Error("jcs: lone low surrogate at index " + i);
+    }
+    if (ch === 0x22)      out += '\\"';
+    else if (ch === 0x5C) out += '\\\\';
+    else if (ch === 0x08) out += '\\b';
+    else if (ch === 0x09) out += '\\t';
+    else if (ch === 0x0A) out += '\\n';
+    else if (ch === 0x0C) out += '\\f';
+    else if (ch === 0x0D) out += '\\r';
+    else if (ch < 0x20)   out += '\\u' + ch.toString(16).padStart(4, '0');
+    else                  out += s[i];
+  }
+  return out + '"';
+}
+
+function jcsSerializeNumber(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) {
+    throw new Error("jcs: number must be finite, got " + String(n));
+  }
+  if (n === 0) return "0"; // normalises -0
+  // ES6 Number.prototype.toString already gives the JCS-prescribed shortest
+  // round-trip decimal. JCS forbids the leading "+" on exponents that V8 emits
+  // for very large magnitudes (e.g. 1e+21); strip it.
+  return n.toString().replace("e+", "e");
+}
+
+function jcsSerialize(v) {
+  if (v === null)           return "null";
+  if (v === true)           return "true";
+  if (v === false)          return "false";
+  if (typeof v === "number") return jcsSerializeNumber(v);
+  if (typeof v === "string") return jcsSerializeString(v);
+  if (Array.isArray(v)) {
+    return "[" + v.map(jcsSerialize).join(",") + "]";
+  }
+  if (typeof v === "object") {
+    // Object.keys().sort() uses UTF-16 code-unit order — JCS-compliant.
+    const keys = Object.keys(v).sort();
+    const parts = [];
+    for (const k of keys) {
+      if (v[k] === undefined) continue; // drop undefined keys, like JSON.stringify
+      parts.push(jcsSerializeString(k) + ":" + jcsSerialize(v[k]));
+    }
+    return "{" + parts.join(",") + "}";
+  }
+  if (typeof v === "undefined") throw new Error("jcs: undefined is not a JSON value");
+  if (typeof v === "bigint")    throw new Error("jcs: BigInt is not a JSON value");
+  throw new Error("jcs: unsupported value type " + typeof v);
+}
+
+// Returns Uint8Array of the UTF-8 canonical bytes.
+function jcsCanonicalize(value) {
+  return new TextEncoder().encode(jcsSerialize(value));
+}
+
+// SHA-256 hex-lowercase. Accepts Uint8Array or string (UTF-8 encoded if string).
+async function sha256Hex(input) {
+  const data = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// SHA-256 raw bytes (Uint8Array). Used as the Ed25519 signing message per §3.2.5.
+async function sha256Bytes(input) {
+  const data = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+}
+
+// Ed25519 verify wrapper over Web Crypto. Spec §3.2.5: signature is Ed25519 over
+// the 32-byte SHA-256(JCS(manifest)) digest. Public key and signature arrive as
+// base64 strings in manifest/collection records.
+// Returns boolean. Throws on malformed inputs (bad base64, wrong byte length).
+async function verifyEd25519(publicKeyB64, signatureB64, messageBytes) {
+  const pub = base64ToBytes(publicKeyB64);
+  if (pub.length !== 32) throw new Error("verifyEd25519: public key must be 32 bytes, got " + pub.length);
+  return await verifyEd25519FromBytes(pub, signatureB64, messageBytes);
+}
+
+// S106.8CW G.2: bytes-in variant for callers whose public key comes from a
+// source other than manifest.creator.public_key (e.g., trust:{id}.public_key
+// which is stored as 64-char lowercase hex, not base64). Keeps the base64
+// caller unchanged; PATCH sidecar + any future hex-keyed callers route here.
+// Returns boolean. Throws on malformed inputs.
+async function verifyEd25519FromBytes(pubkeyBytes, signatureB64, messageBytes) {
+  if (!(pubkeyBytes instanceof Uint8Array) || pubkeyBytes.length !== 32) {
+    const got = (pubkeyBytes && pubkeyBytes.length !== undefined) ? pubkeyBytes.length : "non-Uint8Array";
+    throw new Error("verifyEd25519FromBytes: public key must be 32 bytes, got " + got);
+  }
+  const sig = base64ToBytes(signatureB64);
+  if (sig.length !== 64) throw new Error("verifyEd25519FromBytes: signature must be 64 bytes, got " + sig.length);
+  const key = await crypto.subtle.importKey("raw", pubkeyBytes, { name: "Ed25519" }, false, ["verify"]);
+  return await crypto.subtle.verify({ name: "Ed25519" }, key, sig, messageBytes);
+}
+
+// Manifest validator per S105CW-COLLECTION-SPEC §3.1 + §3.2.
+// Pure: no I/O, no clock reads. Returns structural and semantic pass/fail;
+// does NOT validate signatures (that's the endpoint's responsibility),
+// does NOT validate credential existence (KV lookup — endpoint's job),
+// does NOT validate issued_at drift vs server clock (endpoint's job per §3.1.1).
+// Returns { ok, errors[], canonicalBytes, collectionHash }.
+// On ok:false, canonicalBytes and collectionHash are null.
+// On ok:true, canonicalBytes = JCS UTF-8 bytes, collectionHash = SHA-256 hex.
+async function validateManifest(manifest) {
+  const errors = [];
+  const push = (code, message, at) => {
+    const e = { code, message };
+    if (at !== undefined) e.at = at;
+    errors.push(e);
+  };
+
+  // Root must be a plain object.
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    push("not_object", "manifest must be a JSON object");
+    return { ok: false, errors, canonicalBytes: null, collectionHash: null };
+  }
+
+  // schema_version — locked to hip-collection-1.0 for S106.
+  if (manifest.schema_version !== "hip-collection-1.0") {
+    push("bad_schema_version", 'schema_version must be "hip-collection-1.0"');
+  }
+
+  // issued_at — ISO 8601 UTC, millisecond precision.
+  if (typeof manifest.issued_at !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(manifest.issued_at) ||
+      Number.isNaN(new Date(manifest.issued_at).getTime())) {
+    push("bad_issued_at", "issued_at must be ISO 8601 UTC with ms precision (YYYY-MM-DDTHH:MM:SS.sssZ)");
+  }
+
+  // ordering — enum of three values.
+  if (manifest.ordering !== "sequence" && manifest.ordering !== "set" && manifest.ordering !== "chronological") {
+    push("bad_ordering", 'ordering must be "sequence", "set", or "chronological"');
+  }
+
+  // title — string, may be "", ≤200 code points.
+  if (typeof manifest.title !== "string") {
+    push("bad_title", "title must be a string (may be empty)");
+  } else if ([...manifest.title].length > 200) {
+    push("title_too_long", "title max 200 Unicode code points");
+  }
+
+  // description — string, may be "", ≤2000 code points.
+  if (typeof manifest.description !== "string") {
+    push("bad_description", "description must be a string (may be empty)");
+  } else if ([...manifest.description].length > 2000) {
+    push("description_too_long", "description max 2000 Unicode code points");
+  }
+
+  // cover_index — non-negative integer; range check deferred until members validated.
+  if (!Number.isInteger(manifest.cover_index) || manifest.cover_index < 0) {
+    push("bad_cover_index", "cover_index must be a non-negative integer");
+  }
+
+  // parent_collection_hash — optional; when present must be 64 hex-lowercase.
+  if ("parent_collection_hash" in manifest) {
+    if (!isHex64Lower(manifest.parent_collection_hash)) {
+      push("bad_parent_collection_hash", "parent_collection_hash must be 64 hex-lowercase chars when present");
+    }
+  }
+
+  // creator — object with credential_id, tier, public_key.
+  const c = manifest.creator;
+  if (typeof c !== "object" || c === null || Array.isArray(c)) {
+    push("bad_creator", "creator must be an object");
+  } else {
+    if (typeof c.credential_id !== "string" || c.credential_id.length === 0) {
+      push("bad_credential_id", "creator.credential_id must be a non-empty string");
+    }
+    if (c.tier !== 1 && c.tier !== 2 && c.tier !== 3) {
+      push("bad_tier", "creator.tier must be 1, 2, or 3");
+    }
+    if (typeof c.public_key !== "string" || c.public_key.length === 0) {
+      push("bad_public_key", "creator.public_key must be a non-empty base64 string");
+    } else {
+      try {
+        const bytes = base64ToBytes(c.public_key);
+        if (bytes.length !== 32) {
+          push("bad_public_key_length", "creator.public_key must decode to 32 bytes, got " + bytes.length);
+        }
+      } catch (_) {
+        push("bad_public_key_base64", "creator.public_key is not valid base64");
+      }
+    }
+    // Unknown creator fields.
+    const ALLOWED_CREATOR = new Set(["credential_id", "tier", "public_key"]);
+    for (const key of Object.keys(c)) {
+      if (!ALLOWED_CREATOR.has(key)) push("unknown_creator_field", "unknown creator field: " + key);
+    }
+  }
+
+  // members — array, 1..497.
+  if (!Array.isArray(manifest.members)) {
+    push("bad_members", "members must be an array");
+  } else {
+    if (manifest.members.length < 1) {
+      push("members_empty", "members must contain at least 1 entry");
+    }
+    if (manifest.members.length > 497) {
+      push("members_too_many", "members max 497 per collection (KV write budget)");
+    }
+    // cover_index range — now that we know members length.
+    if (Number.isInteger(manifest.cover_index) && manifest.cover_index >= 0 &&
+        manifest.cover_index >= manifest.members.length) {
+      push("cover_index_out_of_range",
+        "cover_index " + manifest.cover_index + " >= members.length " + manifest.members.length);
+    }
+
+    const ALLOWED_MEMBER = new Set(["index", "filename", "size", "mime", "member_hash", "attested_copy_hash", "captured_at"]);
+    for (let i = 0; i < manifest.members.length; i++) {
+      const m = manifest.members[i];
+      if (typeof m !== "object" || m === null || Array.isArray(m)) {
+        push("bad_member", "member must be an object", i);
+        continue;
+      }
+      if (m.index !== i) {
+        push("member_index_mismatch", "member.index (" + m.index + ") must equal array position (" + i + ")", i);
+      }
+      if (!Number.isInteger(m.size) || m.size < 0) {
+        push("bad_member_size", "member.size must be a non-negative integer", i);
+      }
+      if (typeof m.mime !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(m.mime)) {
+        push("bad_member_mime", "member.mime must be a type/subtype string", i);
+      }
+      if (!isHex64Lower(m.member_hash)) {
+        push("bad_member_hash", "member.member_hash must be 64 hex-lowercase chars", i);
+      }
+      if (!isHex64Lower(m.attested_copy_hash)) {
+        push("bad_attested_copy_hash", "member.attested_copy_hash must be 64 hex-lowercase chars", i);
+      }
+      if ("filename" in m) {
+        if (typeof m.filename !== "string") {
+          push("bad_filename", "member.filename must be a string when present", i);
+        } else if (m.filename.length === 0) {
+          push("filename_empty_string", "member.filename must not be empty string — omit the key instead", i);
+        } else if ([...m.filename].length > 500) {
+          push("filename_too_long", "member.filename max 500 Unicode code points", i);
+        }
+      }
+      if ("captured_at" in m) {
+        if (typeof m.captured_at !== "string" ||
+            !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(m.captured_at) ||
+            Number.isNaN(new Date(m.captured_at).getTime())) {
+          push("bad_captured_at",
+            "member.captured_at must be ISO 8601 UTC with ms precision (YYYY-MM-DDTHH:MM:SS.sssZ) when present", i);
+        }
+      }
+      for (const key of Object.keys(m)) {
+        if (!ALLOWED_MEMBER.has(key)) push("unknown_member_field", "unknown member field: " + key, i);
+      }
+    }
+
+    // ordering "set" enforcement: member_hash ascending lexicographic.
+    if (manifest.ordering === "set" && manifest.members.length > 1) {
+      for (let i = 1; i < manifest.members.length; i++) {
+        const prev = manifest.members[i - 1].member_hash;
+        const curr = manifest.members[i].member_hash;
+        if (typeof prev === "string" && typeof curr === "string" && prev >= curr) {
+          push("set_not_sorted",
+            'ordering "set" requires members sorted by member_hash ascending — violation at index ' + i, i);
+          break;
+        }
+      }
+    }
+
+    // ordering "chronological" enforcement:
+    //   (1) every member must carry captured_at (client fills from EXIF →
+    //       XMP → issued_at fallback so no member is rejected).
+    //   (2) members must be ascending by captured_at; ties are broken by
+    //       member_hash ascending (same tiebreaker as ordering "set").
+    //   Verifier trust model: image members can be cross-checked against
+    //   their EXIF; non-image / EXIF-stripped members carry
+    //   captured_at === issued_at by convention, so the verifier can
+    //   confirm the fallback is honest.
+    if (manifest.ordering === "chronological" && Array.isArray(manifest.members)) {
+      // (1) required on every member.
+      for (let i = 0; i < manifest.members.length; i++) {
+        if (!("captured_at" in manifest.members[i])) {
+          push("chrono_missing_captured_at",
+            'ordering "chronological" requires captured_at on every member (use issued_at as fallback for members without EXIF/XMP)', i);
+        }
+      }
+      // (2) ascending order with member_hash tiebreaker.
+      if (manifest.members.length > 1) {
+        for (let i = 1; i < manifest.members.length; i++) {
+          const prevT = manifest.members[i - 1].captured_at;
+          const currT = manifest.members[i].captured_at;
+          const prevH = manifest.members[i - 1].member_hash;
+          const currH = manifest.members[i].member_hash;
+          if (typeof prevT !== "string" || typeof currT !== "string") continue;
+          if (prevT > currT) {
+            push("chrono_not_sorted",
+              'ordering "chronological" requires members ascending by captured_at — violation at index ' + i, i);
+            break;
+          }
+          if (prevT === currT && typeof prevH === "string" && typeof currH === "string" && prevH >= currH) {
+            push("chrono_tiebreak",
+              'ordering "chronological" requires captured_at ties broken by member_hash ascending — violation at index ' + i, i);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Unknown top-level fields.
+  const ALLOWED_TOP = new Set([
+    "schema_version", "issued_at", "ordering", "title", "description",
+    "cover_index", "parent_collection_hash", "creator", "members"
+  ]);
+  for (const key of Object.keys(manifest)) {
+    if (!ALLOWED_TOP.has(key)) push("unknown_field", "unknown top-level field: " + key);
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors, canonicalBytes: null, collectionHash: null };
+  }
+
+  // Structural checks passed → canonicalize and hash.
+  const canonicalBytes = jcsCanonicalize(manifest);
+  const collectionHash = await sha256Hex(canonicalBytes);
+  return { ok: true, errors: [], canonicalBytes, collectionHash };
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── End S106 Collection Proof helpers (Phase 1) ──
+// ════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════
+// ── Begin S106 Collection Proof helpers (Phase 2) ──
+// ════════════════════════════════════════════════════════════════
+// readHash() dual-read, deriveCollectionId() + base32, and small byte
+// utilities consumed by handleRegisterCollectionProof. Kept separate from
+// Phase 1 so that Phase 1 can stand alone as pure (no KV) while Phase 2
+// introduces the first KV-touching collection helpers.
+
+// Convert lowercase hex string to Uint8Array.
+function hexToBytes(hex) {
+  if (typeof hex !== "string" || hex.length % 2 !== 0) {
+    throw new Error("hexToBytes: expected even-length hex string");
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(bytes[i])) throw new Error("hexToBytes: non-hex char at " + (i * 2));
+  }
+  return bytes;
+}
+
+// Convert Uint8Array to lowercase hex.
+function bytesToHexLower(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Byte-wise equality for two Uint8Arrays (constant-time not required here —
+// credential key comparison is not secret-vs-guess, it's byte-vs-stored).
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// RFC 4648 base32 lowercase, no padding. 12 bytes (96 bits) → 20 chars exactly
+// (96 / 5 = 19.2, ceil = 20; final char carries 4 bits + 1 unused bit).
+const BASE32_LOWER_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+function base32LowercaseNoPad(bytes) {
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32_LOWER_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += BASE32_LOWER_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+// §3.3.4 step 1: collection_id = base32-lowercase(SHA-256(canonical_bytes)[:12]).
+// Accepts the 64-char hex collection_hash; extracts the first 12 bytes; emits 20 chars.
+function deriveCollectionId(collectionHashHex) {
+  if (typeof collectionHashHex !== "string" || !/^[0-9a-f]{64}$/.test(collectionHashHex)) {
+    throw new Error("deriveCollectionId: collectionHashHex must be 64 lowercase hex chars");
+  }
+  const first12 = hexToBytes(collectionHashHex.slice(0, 24));
+  return base32LowercaseNoPad(first12);
+}
+
+// Dual-read helper for the unified hash namespace during S106 migration.
+// Reads hash:{hex} first, falls back to legacy proof:{hex} and alias:{hex}.
+// Returns { record, sourceNamespace: "hash"|"proof"|"alias" } or null on miss.
+// §3.3.1 dual-read phase: new writes go to hash:{hex} only; reads fall back
+// so legacy S103 proofs remain resolvable until the sweep completes.
+async function readHash(env, hexHash) {
+  if (typeof hexHash !== "string" || !/^[0-9a-f]{64}$/.test(hexHash)) return null;
+
+  const unifiedRaw = await env.DEDUP_KV.get(`hash:${hexHash}`);
+  if (unifiedRaw) {
+    try { return { record: JSON.parse(unifiedRaw), sourceNamespace: "hash" }; }
+    catch (_) { return null; }
+  }
+
+  const proofRaw = await env.DEDUP_KV.get(`proof:${hexHash}`);
+  if (proofRaw) {
+    try {
+      const parsed = JSON.parse(proofRaw);
+      // Legacy standalone proof record. Wrap in unified type discriminator.
+      return { record: { type: "standalone", ...parsed }, sourceNamespace: "proof" };
+    } catch (_) { return null; }
+  }
+
+  const aliasRaw = await env.DEDUP_KV.get(`alias:${hexHash}`);
+  if (aliasRaw) {
+    try {
+      const parsed = JSON.parse(aliasRaw);
+      return { record: { type: "standalone", matchedVia: "alias", ...parsed }, sourceNamespace: "alias" };
+    } catch (_) { return null; }
+  }
+
+  return null;
+}
+
+// Normalize a 32-byte Ed25519 public key from the manifest's base64 form.
+// Returns Uint8Array(32) or null if malformed.
+function normalizePubkeyFromB64(b64) {
+  if (typeof b64 !== "string") return null;
+  try {
+    const bytes = base64ToBytes(b64);
+    return bytes.length === 32 ? bytes : null;
+  } catch (_) { return null; }
+}
+
+// Normalize a 32-byte Ed25519 public key from the trust record's hex form.
+// Returns Uint8Array(32) or null if absent/malformed.
+function normalizePubkeyFromHex(hex) {
+  if (typeof hex !== "string" || !/^[0-9a-f]{64}$/.test(hex)) return null;
+  return hexToBytes(hex);
+}
+
+// Map Phase 1 validateManifest internal codes to §3.4.1 spec-canonical error
+// names for the 400 response. Codes not in the mapping pass through as-is.
+function mapValidationError(err) {
+  const spec = {
+    not_object: "malformed_body",
+    bad_schema_version: "unsupported_schema_version",
+    bad_issued_at: "invalid_issued_at",
+    bad_members: "missing_field",
+    members_empty: "member_count_out_of_range",
+    members_too_many: "member_count_out_of_range",
+    bad_member_size: "member_size_out_of_range",
+    bad_member_hash: "invalid_hash",
+    bad_attested_copy_hash: "invalid_hash",
+    bad_parent_collection_hash: "invalid_parent_collection_hash",
+  }[err.code] || err.code;
+
+  const out = { error: spec };
+  if (err.code === "bad_schema_version") out.supported = ["hip-collection-1.0"];
+  if (err.code === "bad_members") out.field = "members";
+  if (err.code === "bad_member_hash") out.field = "member_hash";
+  if (err.code === "bad_attested_copy_hash") out.field = "attested_copy_hash";
+  if (err.at !== undefined) out.at = err.at;
+  if (err.message && !out.error.startsWith(err.code)) out.detail = err.message;
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── End S106 Collection Proof helpers (Phase 2) ──
+// ════════════════════════════════════════════════════════════════
 
 // ── Route Handlers ──
 
@@ -2263,6 +2782,150 @@ async function handleGetProof(contentHash, request, env) {
     return jsonResponse({ error: "Invalid content hash. Must be a 64-character lowercase hex SHA-256 hash." }, 400, origin);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // S107CW Phase 1 — §3.4.5 collection dispatch (Phase 0 Decision 2c).
+  //
+  // Before the hash:{hex} dispatch, check whether contentHash is a
+  // collection_hash. collection_hash_index:{hex} is written at POST time
+  // (L~3267) with a bare-string value {collection_id}. A hit means this
+  // hex identifies a collection as a whole, not a member or standalone.
+  //
+  // Without this branch, handleShortUrl (/c/{sid}) emits a 302 to
+  // proof.html?hash={collection_hash}, which then fetches
+  // /api/proof/{collection_hash} and 404s — collection_hashes were
+  // never written to hash:{hex} or proof:{hex} (§3.3.4). Decision 2c
+  // resolves the dead-end on the server side and preserves the
+  // ?hash={hex} URL contract so existing /c/ bookmarks keep working.
+  //
+  // Pending-skip (Decision C1 / §3.3.4 reader contract): if the
+  // referenced collection is status !== "active", fall through to the
+  // existing hash:{hex} / legacy paths rather than leaking a partial
+  // record. For the realistic case where no member_hash or legacy
+  // proof:{hex} is keyed under a collection_hash, the fall-through
+  // terminates at the final 404.
+  //
+  // Byte-identical preservation: collection_hash derivation
+  // (SHA-256(JCS(manifest))) is disjoint from member_hash / standalone
+  // content_hash derivations, so a hex that hits
+  // collection_hash_index:{hex} has never ALSO hit hash:{hex} or
+  // proof:{hex} in practice, and S106.6's byte-identical regression
+  // set is unaffected.
+  // ═══════════════════════════════════════════════════════════════
+  const collIdxRaw = await env.DEDUP_KV.get(`collection_hash_index:${contentHash}`);
+  if (collIdxRaw) {
+    const collectionId = typeof collIdxRaw === "string" ? collIdxRaw.trim() : "";
+    if (collectionId && isCollectionId(collectionId)) {
+      const colRaw = await env.DEDUP_KV.get(`collection:${collectionId}`);
+      if (colRaw) {
+        let col = null;
+        try { col = JSON.parse(colRaw); } catch (_) { col = null; }
+        if (col && col.status === "active") {
+          return jsonResponse({
+            type: "collection",
+            collection: {
+              collection_id: col.collection_id,
+              manifest: col.manifest,
+              signature: col.signature,
+              collection_hash: col.collection_hash,
+              short_url: col.short_url,
+              status: col.status,
+              created_at: col.created_at,
+              member_sidecar: col.member_sidecar || {},
+              chain_sidecar: col.chain_sidecar || null,
+            },
+          }, 200, origin);
+        }
+        // col pending / malformed → fall through to existing dispatch.
+      }
+      // collection:{id} missing → fall through.
+    }
+    // malformed collection_hash_index value → fall through.
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // S106.6CW §3.4.5 — unified hash:{hex} dispatch (additive; legacy
+  // proof:/alias: path below is untouched for byte-identical S103
+  // wire preservation per S106.6 Phase 0 Ambiguity A ruling).
+  //
+  //   • type:"collection_member" → §3.4.5 collection_member response
+  //     (nests the full §3.4.2 collection record inline, per S106.6
+  //     Phase 0 Decision 1). Pending-skip per Decision 3: if the
+  //     target collection isn't status:"active", fall through to the
+  //     legacy path so we don't leak pending records via dispatch.
+  //   • type:"standalone" → wire-mirror the legacy S103 shape exactly
+  //     (flat {found:true, queried_hash, matched_via, ...record}).
+  //     Currently unused in prod — no code writes standalone to
+  //     hash:{hex} as of S106.5 — but future migration of legacy
+  //     proof:{hex} rows must not silently change the wire format.
+  //   • malformed / unknown-type → fall through.
+  //
+  // matched_via translation (Ambiguity D): the hash:{hex} value's
+  // match_type is "source" | "attested_copy"; the wire response uses
+  // matchedVia "collection_member_source" | "collection_member_attested_copy".
+  // ═══════════════════════════════════════════════════════════════
+  const unifiedRaw = await env.DEDUP_KV.get(`hash:${contentHash}`);
+  if (unifiedRaw) {
+    let unified = null;
+    try { unified = JSON.parse(unifiedRaw); } catch (_) { unified = null; }
+
+    if (unified && unified.type === "collection_member"
+        && typeof unified.collection_id === "string" && unified.collection_id) {
+      const colRaw = await env.DEDUP_KV.get(`collection:${unified.collection_id}`);
+      if (colRaw) {
+        let col = null;
+        try { col = JSON.parse(colRaw); } catch (_) { col = null; }
+        if (col && col.status === "active") {
+          const mt = unified.match_type;
+          const dispatchMatchedVia = mt === "attested_copy"
+            ? "collection_member_attested_copy"
+            : "collection_member_source";
+          return jsonResponse({
+            type: "collection_member",
+            collection: {
+              collection_id: col.collection_id,
+              manifest: col.manifest,
+              signature: col.signature,
+              collection_hash: col.collection_hash,
+              short_url: col.short_url,
+              status: col.status,
+              created_at: col.created_at,
+              member_sidecar: col.member_sidecar || {},
+              chain_sidecar: col.chain_sidecar || null, // S106.7CW — surface chain metadata if present
+            },
+            member_index: typeof unified.member_index === "number"
+              ? unified.member_index : 0,
+            matchedVia: dispatchMatchedVia,
+          }, 200, origin);
+        }
+        // col pending / malformed / missing → fall through to legacy path.
+      }
+      // collection:{id} missing → fall through.
+    } else if (unified && unified.type === "standalone" && unified.record) {
+      // Post-migration standalone hit. Mirror legacy S103 wire byte-for-byte.
+      const sRecord = unified.record;
+      const sMatchedVia = unified.matchedVia === "alias" ? "alias" : "canonical";
+      if (sRecord.sealed) {
+        return jsonResponse({
+          found: true,
+          content_hash: contentHash,
+          queried_hash: contentHash,
+          matched_via: sMatchedVia,
+          sealed: true,
+          registered_at: sRecord.registered_at,
+          message: "This proof record is sealed by its creator. The content has been attested but the proof details are not yet public.",
+        }, 200, origin);
+      }
+      return jsonResponse({
+        found: true,
+        queried_hash: contentHash,
+        matched_via: sMatchedVia,
+        ...sRecord,
+      }, 200, origin);
+    }
+    // other shapes → fall through to legacy path.
+  }
+
+  // ── Legacy S103 proof:/alias: dual-read fallback (byte-identical). ──
   const proofKey = `proof:${contentHash}`;
   let raw = await env.DEDUP_KV.get(proofKey);
   let canonicalHash = contentHash;
@@ -2320,6 +2983,1222 @@ async function handleGetProof(contentHash, request, env) {
     queried_hash: contentHash,
     matched_via: matchedVia,
     ...record,
+  }, 200, origin);
+}
+
+// POST /register-collection-proof — §3.4.1 of S105 Collection Proof spec.
+//
+// Wires the Phase 1 validateManifest pure function into the full write pipeline:
+//   1. Parse JSON body. 400 malformed_body on parse failure. 413 manifest_too_large
+//      when the raw body exceeds 1 MB (§3.4.1 "Manifest size cap").
+//   2. validateManifest → on failure, 400 with the first error mapped to the
+//      §3.4.1 step-2 error catalogue (unsupported_schema_version, missing_field,
+//      invalid_issued_at, member_count_out_of_range, member_index_mismatch,
+//      cover_index_out_of_range, invalid_hash, member_size_out_of_range,
+//      filename_empty_string) — see mapValidationError().
+//   3. Credential check (§3.4.1 step 3). Uses trust:{credential_id}, which is
+//      the S103 impl name for what §3.5.6 calls credential:{...}.
+//        - absent → 401 unknown_credential
+//        - superseded_by truthy → 403 credential_revoked (+ revoked_at)
+//        - trust_record.tier !== manifest.creator.tier → 403 credential_tier_mismatch
+//        - public_key mismatch (byte-compare across the manifest's base64 and
+//          the trust record's hex encoding) → 403 credential_key_mismatch
+//        - trust_record has no public_key (legacy): accept iff
+//          SHA-256(manifest_pubkey_bytes) === credential_id, and backfill.
+//   4. Ed25519-verify signature against the 32-byte SHA-256(JCS(manifest)) digest
+//      (§3.2.5 line 185). 422 signature_verification_failed on any failure.
+//   5. Derive collection_id = base32-lowercase(digest[:12]) → 20 chars (§3.3.4 step 1).
+//   6. Pending-flag write sequence (§3.3.4):
+//        a. Existence check: collection:{id}.
+//            - status:"active"  → idempotent replay, return the existing 200.
+//            - status:"pending" → overwrite and resume the sequence.
+//            - absent           → proceed.
+//        b. Write collection:{id} with status:"pending" + created_at + sidecar.
+//        c. Write collection_hash_index:{collection_hash} → collection_id (§3.5.3).
+//        d. For each of the 2N member hashes, first-writer-wins (§3.3.5):
+//            - readHash miss → write hash:{hex} with the collection_member payload.
+//            - readHash hit  → skip write, record resolution_conflicts entry.
+//        e. Read-modify-write collection_by_credential:{credential_id}
+//           (§3.5.4). Idempotent-append: skip if collection_id already present.
+//        f. Overwrite collection:{id} with status:"active".
+//   7. Return 200 { collection_id, short_url, collection_hash, resolution_conflicts[],
+//                   warnings?: ["issued_at_drift"] } per §3.4.1 step 8 + §3.10 publish-later.
+//
+// Any KV write failure → 500 { error:"kv_write_failure", retry:true }. The entire
+// POST is idempotent on the derivation — retrying with the same body lands on the
+// same collection_id and converges toward active status.
+//
+// Spec-vs-impl divergences resolved inline (green-lit at Phase 2 kickoff):
+//   - credential:{id} in spec → trust:{id} in impl (§3.5.6: existing S103 key).
+//   - Manifest public_key is base64 (§3.1); stored trust public_key is 64-char hex.
+//     Normalize both to Uint8Array(32) and byte-compare.
+//   - "revoked" in spec → truthy trust_record.superseded_by sentinel in impl.
+//
+// Chain support (S106.7CW Phase 1-3):
+//   - §3.9.9 step 5a: if manifest.parent_collection_hash present, resolve via
+//     collection_hash_index:{parent_collection_hash} → collection:{parent_id}.
+//     Validate: parent active, same credential, issued_at >= parent.issued_at,
+//     and member_count <= 496 (one lower than the 497 non-chain cap because
+//     a chain POST writes one extra key — parent's chain_sidecar update —
+//     so 2N + 7 ≤ 1000 bites at N = 496, not 497). Error codes:
+//     chain_parent_not_found, chain_parent_inactive, chain_cross_credential_not_supported,
+//     chain_timestamp_regression, chain_member_count_exceeded — all 400.
+//   - Every successful POST embeds chain_sidecar = {chain_id, position,
+//     known_length, has_children, cache_updated_at} directly on the new
+//     collection record (atomic with the pending/active writes). Genesis
+//     POSTs get chain_id = own collection_hash, position = 1; extension POSTs
+//     inherit chain_id from parent (lazy-compute as parent.collection_hash
+//     for pre-S106.7 genesis parents that predate chain_sidecar), position =
+//     parent.position + 1.
+//   - After flip-to-active, best-effort writes to (a) chain_registry:{chain_id}
+//     (§3.5.5 cached, non-authoritative), and (b) parent's chain_sidecar.has_children
+//     RMW (§3.9.9 step 5b). Failures here log silently — stale chain cache is
+//     acceptable per §3.9.6 and the nightly sweep (S106.8CW) will recompute.
+//
+// Spec-vs-impl divergence on §3.4.6 (collection-by-credential): handled by
+// the sibling handleCollectionByCredential() below — POST not GET, mirrors the
+// existing verifyAppAuth pattern from handlePortfolio / handleCredentialAttestations.
+async function handleRegisterCollectionProof(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── 1. Parse body + enforce 1 MB manifest size cap ──
+  let rawBody;
+  try {
+    rawBody = await request.text();
+  } catch (_) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+  if (rawBody.length > 1_048_576) {
+    return jsonResponse({ error: "manifest_too_large" }, 413, origin);
+  }
+  let body;
+  try {
+    body = JSON.parse(rawBody);
+  } catch (_) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+
+  const { manifest, signature, member_sidecar } = body;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return jsonResponse({ error: "missing_field", field: "manifest" }, 400, origin);
+  }
+  if (typeof signature !== "string" || signature.length === 0) {
+    return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+
+  // ── 2. Manifest schema validation (Phase 1 pure function) ──
+  const validation = await validateManifest(manifest);
+  if (!validation.ok) {
+    // Return the first error with its §3.4.1 spec-canonical code.
+    return jsonResponse(mapValidationError(validation.errors[0]), 400, origin);
+  }
+
+  const canonicalBytes = validation.canonicalBytes; // Uint8Array of JCS bytes
+  const collectionHashHex = validation.collectionHash; // 64-char lowercase hex
+  const collectionHashBytes = hexToBytes(collectionHashHex); // 32 bytes
+
+  // ── 3. Credential check ──
+  const credentialId = manifest.creator.credential_id;
+  const manifestPubKeyBytes = normalizePubkeyFromB64(manifest.creator.public_key);
+  if (!manifestPubKeyBytes) {
+    // Phase 1 already validated this during validateManifest, but double-check.
+    return jsonResponse({ error: "invalid_public_key" }, 400, origin);
+  }
+
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credentialId}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "unknown_credential" }, 401, origin);
+  }
+  let trustRecord;
+  try { trustRecord = JSON.parse(trustRaw); }
+  catch (_) { return jsonResponse({ error: "unknown_credential" }, 401, origin); }
+
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "credential_revoked",
+      revoked_at: trustRecord.superseded_at || null,
+    }, 403, origin);
+  }
+  if (trustRecord.tier !== manifest.creator.tier) {
+    return jsonResponse({
+      error: "credential_tier_mismatch",
+      actual_tier: trustRecord.tier,
+    }, 403, origin);
+  }
+
+  let backfillPubKey = false;
+  if (trustRecord.public_key) {
+    const storedBytes = normalizePubkeyFromHex(trustRecord.public_key);
+    if (!storedBytes || !bytesEqual(storedBytes, manifestPubKeyBytes)) {
+      return jsonResponse({ error: "credential_key_mismatch" }, 403, origin);
+    }
+  } else {
+    // Legacy trust record without public_key: verify SHA-256(pubkey) === credential_id.
+    // Same fallback pattern as handleRegisterProof's backfill path.
+    const computedDigest = await crypto.subtle.digest("SHA-256", manifestPubKeyBytes);
+    const computedIdHex = bytesToHexLower(new Uint8Array(computedDigest));
+    if (computedIdHex !== credentialId) {
+      return jsonResponse({ error: "credential_key_mismatch" }, 403, origin);
+    }
+    backfillPubKey = true;
+  }
+
+  // ── 4. Ed25519-verify signature over 32-byte collection_hash digest ──
+  // §3.2.5: "Ed25519 over the 32-byte hash ... over the 32-byte collection_hash digest."
+  let verified = false;
+  try {
+    verified = await verifyEd25519(
+      manifest.creator.public_key, // base64
+      signature,                    // base64
+      collectionHashBytes,          // 32-byte Uint8Array
+    );
+  } catch (_) {
+    return jsonResponse({ error: "signature_verification_failed" }, 422, origin);
+  }
+  if (!verified) {
+    return jsonResponse({ error: "signature_verification_failed" }, 422, origin);
+  }
+
+  // ── 4.5. Chain validation (§3.9.9 step 5a) ──
+  // Runs after Ed25519 verify (so forged signatures fail before hitting KV) and
+  // before collection_id derivation. Resolved parentRecord is threaded forward
+  // so the write phases don't re-read KV.
+  let parentRecord = null;
+  const parentCollectionHash = manifest.parent_collection_hash;
+  if (typeof parentCollectionHash === "string" && parentCollectionHash.length > 0) {
+    // Q5 decision: chain POSTs cap members at 496 (not 497), because a chain
+    // extension writes one extra key (parent's chain_sidecar RMW) so
+    // 2N + 7 ≤ 1000 → N ≤ 496.
+    if (manifest.members.length > 496) {
+      return jsonResponse({
+        error: "chain_member_count_exceeded",
+        max: 496,
+      }, 400, origin);
+    }
+
+    // Resolve parent_collection_hash → parent_collection_id via §3.5.3 index.
+    const parentIdxRaw = await env.DEDUP_KV.get(
+      `collection_hash_index:${parentCollectionHash}`
+    );
+    if (!parentIdxRaw) {
+      return jsonResponse({ error: "chain_parent_not_found" }, 400, origin);
+    }
+    const parentId = parentIdxRaw;
+
+    // Read parent collection record.
+    const parentRaw = await env.DEDUP_KV.get(`collection:${parentId}`);
+    if (!parentRaw) {
+      return jsonResponse({ error: "chain_parent_not_found" }, 400, origin);
+    }
+    try { parentRecord = JSON.parse(parentRaw); }
+    catch (_) { return jsonResponse({ error: "chain_parent_not_found" }, 400, origin); }
+    if (!parentRecord || parentRecord.status !== "active") {
+      return jsonResponse({ error: "chain_parent_inactive" }, 400, origin);
+    }
+
+    // Same-credential enforcement (§3.9.3 — cross-credential chains out of S105 scope).
+    const parentCredId = parentRecord.manifest
+      && parentRecord.manifest.creator
+      && parentRecord.manifest.creator.credential_id;
+    if (parentCredId !== credentialId) {
+      return jsonResponse({
+        error: "chain_cross_credential_not_supported",
+      }, 400, origin);
+    }
+
+    // Monotonic issued_at within a chain (§3.9.3 bullet 4).
+    // Compare in ms (not string lex) so timezone suffixes don't confuse.
+    const parentIssuedMs = parentRecord.manifest
+      ? Date.parse(parentRecord.manifest.issued_at)
+      : NaN;
+    const newIssuedMs = Date.parse(manifest.issued_at);
+    if (!Number.isFinite(parentIssuedMs) || !Number.isFinite(newIssuedMs)
+        || newIssuedMs < parentIssuedMs) {
+      return jsonResponse({ error: "chain_timestamp_regression" }, 400, origin);
+    }
+  }
+
+  // ── 5. Derive collection_id (§3.3.4 step 1) ──
+  const collectionId = deriveCollectionId(collectionHashHex);
+  const shortUrl = `https://hipprotocol.org/c/${collectionId}`;
+
+  // ── 6. Pending-flag write sequence (§3.3.4) ──
+  const collectionKey = `collection:${collectionId}`;
+  const existingRaw = await env.DEDUP_KV.get(collectionKey);
+  if (existingRaw) {
+    try {
+      const existing = JSON.parse(existingRaw);
+      if (existing.status === "active") {
+        // True idempotent replay — the client re-sent the same bundle.
+        // Return the same 200 shape. resolution_conflicts is preserved from
+        // the original POST if we stored it; otherwise empty (older records).
+        return jsonResponse({
+          collection_id: collectionId,
+          short_url: existing.short_url || shortUrl,
+          collection_hash: collectionHashHex,
+          resolution_conflicts: existing.resolution_conflicts || [],
+        }, 200, origin);
+      }
+      // status:"pending" → a prior POST failed mid-sequence. Fall through and
+      // re-execute steps 6b-6f; KV writes are key-idempotent (same value).
+    } catch (_) { /* malformed pending record, overwrite below */ }
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // §3.10 publish-later: accept any drift, surface as a warning only.
+  const warnings = [];
+  const issuedMs = new Date(manifest.issued_at).getTime();
+  if (!Number.isNaN(issuedMs) && Math.abs(Date.now() - issuedMs) > 300_000) {
+    warnings.push("issued_at_drift");
+  }
+
+  // First compute the resolution_conflicts so the final active record can
+  // persist them (enables idempotent replay to echo the same array).
+  const members = manifest.members;
+  const probes = [];
+  for (let i = 0; i < members.length; i++) {
+    probes.push({ idx: i, hashType: "member_hash", hash: members[i].member_hash });
+    probes.push({ idx: i, hashType: "attested_copy_hash", hash: members[i].attested_copy_hash });
+  }
+  const probeResults = await Promise.all(probes.map(p => readHash(env, p.hash)));
+
+  const resolutionConflicts = [];
+  const memberWrites = [];
+  const claimWrites = []; // S106.5: hash_claim:{hex}:{collection_id} rows (conflicts only)
+  for (let p = 0; p < probes.length; p++) {
+    const probe = probes[p];
+    const hit = probeResults[p];
+    const value = {
+      type: "collection_member",
+      collection_id: collectionId,
+      member_index: probe.idx,
+      match_type: probe.hashType === "member_hash" ? "source" : "attested_copy",
+    };
+    if (hit) {
+      // Edge case: if the existing hit is for the SAME collection_id (retry
+      // case after step 6d partial write), the write is still a no-op for
+      // first-writer-wins, but it's not a real conflict to surface. Skip
+      // recording it in resolution_conflicts.
+      const rec = hit.record || {};
+      const sameCollectionRetry = rec.type === "collection_member"
+        && rec.collection_id === collectionId
+        && rec.member_index === probe.idx;
+      if (!sameCollectionRetry) {
+        const conflict = {
+          member_index: probe.idx,
+          hash_type: probe.hashType,
+          existing_record_type: rec.type || "standalone",
+        };
+        if (rec.type === "collection_member" && rec.collection_id) {
+          conflict.existing_collection_id = rec.collection_id;
+        }
+        resolutionConflicts.push(conflict);
+        // S106.5 history index — Phase 0 Decision 1=B, Decision 4 value shape.
+        // One hash_claim row per conflict entry; keyed by
+        // hash_claim:{member_hash_hex}:{this_collection_id} so the /history
+        // endpoint can list-prefix by hex to surface all co-claimants.
+        // Non-conflicting POSTs emit zero claim rows → S105 2N+6 budget preserved.
+        claimWrites.push({
+          key: `hash_claim:${probe.hash}:${collectionId}`,
+          value: {
+            credential_id: credentialId,
+            created_at: nowIso,
+            member_index: probe.idx,
+            hash_type: probe.hashType,
+            collection_hash: collectionHashHex,
+          },
+        });
+      }
+    } else {
+      memberWrites.push({ key: `hash:${probe.hash}`, value });
+    }
+  }
+
+  // Compute chain_sidecar for the new collection record (S106.7CW Phase 1).
+  // Genesis: chain_id = own collection_hash, position = 1.
+  // Extension: inherit chain_id from parent (lazy-compute for pre-S106.7 parents
+  // whose chain_sidecar is absent — their implicit chain_id is their own
+  // collection_hash, position 1, so this collection is position 2).
+  let chainSidecar;
+  if (parentRecord) {
+    const parentChainId = (parentRecord.chain_sidecar && typeof parentRecord.chain_sidecar.chain_id === "string")
+      ? parentRecord.chain_sidecar.chain_id
+      : parentRecord.collection_hash;
+    const parentPosition = (parentRecord.chain_sidecar && Number.isInteger(parentRecord.chain_sidecar.position))
+      ? parentRecord.chain_sidecar.position
+      : 1;
+    const newPosition = parentPosition + 1;
+    chainSidecar = {
+      chain_id: parentChainId,
+      position: newPosition,
+      known_length: newPosition,
+      has_children: [],
+      cache_updated_at: nowIso,
+    };
+  } else {
+    chainSidecar = {
+      chain_id: collectionHashHex,
+      position: 1,
+      known_length: 1,
+      has_children: [],
+      cache_updated_at: nowIso,
+    };
+  }
+
+  // 6b. Write collection:{id} pending.
+  const pendingRecord = {
+    collection_id: collectionId,
+    manifest,
+    signature,
+    collection_hash: collectionHashHex,
+    short_url: shortUrl,
+    status: "pending",
+    created_at: nowIso,
+    member_sidecar: (member_sidecar && typeof member_sidecar === "object" && !Array.isArray(member_sidecar))
+      ? member_sidecar : {},
+    chain_sidecar: chainSidecar,
+    resolution_conflicts: resolutionConflicts, // persisted for idempotent replay
+  };
+  try {
+    await env.DEDUP_KV.put(collectionKey, JSON.stringify(pendingRecord));
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // 6c. collection_hash_index:{collection_hash} → collection_id (§3.5.3).
+  try {
+    await env.DEDUP_KV.put(`collection_hash_index:${collectionHashHex}`, collectionId);
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // 6d. Member hash rows (non-conflicting only).
+  try {
+    await Promise.all(memberWrites.map(w =>
+      env.DEDUP_KV.put(w.key, JSON.stringify(w.value))
+    ));
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // 6d.5. S106.5 hash_claim:{hex}:{collection_id} rows for conflicted members.
+  // Emitted only for entries in resolutionConflicts — same cardinality as that
+  // array, so non-conflict POSTs write zero extra keys. Rolled-back-consistent
+  // with the rest of the sequence because the collection record is still
+  // status:"pending" at this point; readers that list hash_claim:{hex}:* MUST
+  // filter out claims whose target collection isn't status:"active" (§3.3.4
+  // reader contract, preserved by S106.5 Phase 0 Decision C1).
+  if (claimWrites.length) {
+    try {
+      await Promise.all(claimWrites.map(w =>
+        env.DEDUP_KV.put(w.key, JSON.stringify(w.value))
+      ));
+    } catch (_) {
+      return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+    }
+  }
+
+  // 6e. Append to collection_by_credential:{credential_id} (§3.5.4, idempotent).
+  const credIndexKey = `collection_by_credential:${credentialId}`;
+  try {
+    const credIndexRaw = await env.DEDUP_KV.get(credIndexKey);
+    let credIndex = [];
+    if (credIndexRaw) {
+      try {
+        const parsed = JSON.parse(credIndexRaw);
+        if (Array.isArray(parsed)) credIndex = parsed;
+      } catch (_) { credIndex = []; }
+    }
+    const alreadyPresent = credIndex.some(e => e && e.collection_id === collectionId);
+    if (!alreadyPresent) {
+      credIndex.unshift({
+        collection_id: collectionId,
+        title: manifest.title,
+        issued_at: manifest.issued_at,
+        member_count: members.length,
+        cover_index: manifest.cover_index,
+        short_url: shortUrl,
+        created_at: nowIso,
+        chain_id: chainSidecar.chain_id, // S106.7CW Phase 1 — populated for every POST
+      });
+      await env.DEDUP_KV.put(credIndexKey, JSON.stringify(credIndex));
+    }
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // 6f. Flip collection:{id} to status:"active".
+  const activeRecord = { ...pendingRecord, status: "active" };
+  try {
+    await env.DEDUP_KV.put(collectionKey, JSON.stringify(activeRecord));
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // ── 6g. chain_registry:{chain_id} write (S106.7CW Phase 2 — §3.5.5) ──
+  // Best-effort, non-blocking. Spec: "cached, non-authoritative — a verifier
+  // may always recompute by walking." Stale or missing entries get rebuilt
+  // by the nightly sweep (S106.8CW). Failure here does not fail the POST.
+  try {
+    const registryKey = `chain_registry:${chainSidecar.chain_id}`;
+    const existingRegistryRaw = await env.DEDUP_KV.get(registryKey);
+    let registry = null;
+    if (existingRegistryRaw) {
+      try { registry = JSON.parse(existingRegistryRaw); } catch (_) { registry = null; }
+    }
+    if (!registry || typeof registry !== "object") {
+      // Fresh registry entry. Either this IS the genesis POST (no parent), or
+      // we're lazy-creating for a pre-S106.7 parent whose chain_registry never
+      // existed. In the lazy case, stage_count_known = 2 because the parent
+      // (genesis) and the new child are both now known.
+      registry = {
+        chain_id: chainSidecar.chain_id,
+        genesis_collection_id: parentRecord
+          ? (parentRecord.collection_id)
+          : collectionId,
+        credential_id: credentialId,
+        stage_count_known: parentRecord ? 2 : 1,
+        last_extended_at: nowIso,
+        fork_points: [],
+        cache_updated_at: nowIso,
+      };
+    } else {
+      // Extension of an existing chain — increment stage_count_known and
+      // detect forks (parent already had ≥1 child before this POST).
+      registry.stage_count_known = (Number.isInteger(registry.stage_count_known)
+        ? registry.stage_count_known : 0) + 1;
+      registry.last_extended_at = nowIso;
+      registry.cache_updated_at = nowIso;
+      if (parentRecord && parentRecord.chain_sidecar
+          && Array.isArray(parentRecord.chain_sidecar.has_children)
+          && parentRecord.chain_sidecar.has_children.length >= 1) {
+        const forks = Array.isArray(registry.fork_points) ? registry.fork_points : [];
+        const existingFork = forks.find(f => f && f.parent_collection_id === parentRecord.collection_id);
+        if (existingFork) {
+          if (!Array.isArray(existingFork.children)) existingFork.children = [];
+          if (!existingFork.children.includes(collectionId)) {
+            existingFork.children.push(collectionId);
+          }
+        } else {
+          // First fork detection for this parent — seed with existing sibling(s)
+          // plus the new child, so the dashboard can render all branches.
+          const allChildren = [...parentRecord.chain_sidecar.has_children, collectionId];
+          forks.push({
+            parent_collection_id: parentRecord.collection_id,
+            children: allChildren,
+          });
+        }
+        registry.fork_points = forks;
+      }
+    }
+    await env.DEDUP_KV.put(registryKey, JSON.stringify(registry));
+  } catch (_) { /* stale registry is acceptable per §3.5.5 */ }
+
+  // ── 6h. Parent's chain_sidecar.has_children RMW (S106.7CW Phase 3 — §3.9.9 step 5b) ──
+  // Best-effort, non-atomic with the main write. On failure, parent cache stays
+  // stale but child is fully registered. Re-read the parent record here rather
+  // than mutating the captured parentRecord so we don't clobber concurrent
+  // writes (e.g. another sibling POST racing us on the same parent).
+  if (parentRecord) {
+    try {
+      const parentKey = `collection:${parentRecord.collection_id}`;
+      const latestParentRaw = await env.DEDUP_KV.get(parentKey);
+      if (latestParentRaw) {
+        const latestParent = JSON.parse(latestParentRaw);
+        if (latestParent && latestParent.status === "active") {
+          // Lazy-backfill chain_sidecar on pre-S106.7 parents.
+          if (!latestParent.chain_sidecar || typeof latestParent.chain_sidecar !== "object") {
+            latestParent.chain_sidecar = {
+              chain_id: latestParent.collection_hash,
+              position: 1,
+              known_length: 2,
+              has_children: [collectionId],
+              cache_updated_at: nowIso,
+            };
+          } else {
+            if (!Array.isArray(latestParent.chain_sidecar.has_children)) {
+              latestParent.chain_sidecar.has_children = [];
+            }
+            if (!latestParent.chain_sidecar.has_children.includes(collectionId)) {
+              latestParent.chain_sidecar.has_children.push(collectionId);
+            }
+            latestParent.chain_sidecar.cache_updated_at = nowIso;
+            // Best-effort known_length bump: we know the chain now reaches at
+            // least this child's position.
+            const childPos = chainSidecar.position;
+            if (!Number.isInteger(latestParent.chain_sidecar.known_length)
+                || latestParent.chain_sidecar.known_length < childPos) {
+              latestParent.chain_sidecar.known_length = childPos;
+            }
+          }
+          await env.DEDUP_KV.put(parentKey, JSON.stringify(latestParent));
+        }
+      }
+    } catch (_) { /* stale parent cache is acceptable per §3.9.6 */ }
+  }
+
+  // Best-effort backfill of trust_record.public_key (legacy credentials).
+  // Failure here is silent — the collection record is already active.
+  if (backfillPubKey) {
+    try {
+      trustRecord.public_key = bytesToHexLower(manifestPubKeyBytes);
+      await env.DEDUP_KV.put(`trust:${credentialId}`, JSON.stringify(trustRecord));
+    } catch (_) { /* swallow */ }
+  }
+
+  const response = {
+    collection_id: collectionId,
+    short_url: shortUrl,
+    collection_hash: collectionHashHex,
+    resolution_conflicts: resolutionConflicts,
+  };
+  if (warnings.length) response.warnings = warnings;
+  return jsonResponse(response, 200, origin);
+}
+
+// GET /api/proof/{hex}/history — §3.3.5 S106.5CW multi-attestor visibility.
+// Returns every record that ever claimed a hash, ascending by timestamp.
+// First-writer wins the default /api/proof/{hash} route (unchanged); this
+// endpoint only surfaces subsequent co-claimants so the file drop in Verify
+// can still discover them. See SESSION 106.5CW/S106.5CW-KICKOFF.md Phase 0
+// for the four decisions that shape this response.
+async function handleProofHistory(hexHash, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // Validate hex (64 lowercase chars) per §3.3.1.
+  if (typeof hexHash !== "string" || !/^[0-9a-f]{64}$/.test(hexHash)) {
+    return jsonResponse({ error: "invalid_hash" }, 400, origin);
+  }
+
+  // 1. First-writer lookup via the unified dual-read helper. This covers
+  //    hash:{hex}, legacy proof:{hex}, and legacy alias:{hex}.
+  const firstHit = await readHash(env, hexHash);
+
+  // 2. List all hash_claim:{hex}:* rows. Paginate defensively.
+  const claimKeys = [];
+  let cursor = undefined;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const listOpts = { prefix: `hash_claim:${hexHash}:` };
+    if (cursor) listOpts.cursor = cursor;
+    const page = await env.DEDUP_KV.list(listOpts);
+    if (page && Array.isArray(page.keys)) {
+      for (const k of page.keys) claimKeys.push(k.name);
+    }
+    if (!page || page.list_complete || !page.cursor) break;
+    cursor = page.cursor;
+  }
+
+  if (!firstHit && claimKeys.length === 0) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  // 3. Fetch all hash_claim values in parallel.
+  const claimRaws = await Promise.all(
+    claimKeys.map(k => env.DEDUP_KV.get(k))
+  );
+  const claims = [];
+  const prefixLen = `hash_claim:${hexHash}:`.length;
+  for (let i = 0; i < claimKeys.length; i++) {
+    const raw = claimRaws[i];
+    if (!raw) continue;
+    let v;
+    try { v = JSON.parse(raw); } catch (_) { continue; }
+    const collectionId = claimKeys[i].slice(prefixLen);
+    if (!collectionId) continue;
+    claims.push({ collectionId, value: v });
+  }
+
+  // 4. Resolve target collections. Needed for:
+  //    (a) first-writer collection_member timestamp + short_url + collection_hash
+  //    (b) each claim's short_url + Decision C1 pending-skip gate
+  const neededCollectionIds = new Set(claims.map(c => c.collectionId));
+  if (firstHit && firstHit.record && firstHit.record.type === "collection_member"
+      && firstHit.record.collection_id) {
+    neededCollectionIds.add(firstHit.record.collection_id);
+  }
+  const colIds = Array.from(neededCollectionIds);
+  const colRaws = await Promise.all(
+    colIds.map(id => env.DEDUP_KV.get(`collection:${id}`))
+  );
+  const activeCol = new Map();
+  for (let i = 0; i < colIds.length; i++) {
+    const raw = colRaws[i];
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      // Decision C1: skip pending/non-active collections — matches §3.3.4
+      // reader contract ("resolvers MUST treat pending collections as
+      // not-yet-registered").
+      if (parsed && parsed.status === "active") {
+        activeCol.set(colIds[i], parsed);
+      }
+    } catch (_) { /* skip malformed */ }
+  }
+
+  // 5. Assemble entries. Role is determined by source namespace:
+  //    - hash:{hex}  → first_writer
+  //    - hash_claim:* → subsequent
+  //    Invariant: the first-writer's nowIso is always ≤ any claim's nowIso,
+  //    so the source-based role tag aligns with chronological order after
+  //    the ascending sort below. If the first-writer collection is pending
+  //    or missing, it's omitted here and the response contains only
+  //    subsequent claims.
+  const entries = [];
+
+  if (firstHit && firstHit.record) {
+    const rec = firstHit.record;
+    if (rec.type === "collection_member") {
+      const col = activeCol.get(rec.collection_id);
+      if (col) {
+        entries.push({
+          record_type: "collection_member",
+          role: "first_writer",
+          credential_id: (col.manifest && col.manifest.creator
+            && col.manifest.creator.credential_id) || null,
+          timestamp_iso: col.created_at || null,
+          hash_type: rec.match_type === "source" ? "member_hash" : "attested_copy_hash",
+          collection_id: rec.collection_id,
+          short_url: col.short_url || `https://hipprotocol.org/c/${rec.collection_id}`,
+          collection_hash: col.collection_hash || null,
+          member_index: rec.member_index,
+        });
+      }
+      // else: first-writer collection is pending/missing — skip per C1.
+    } else if (rec.type === "standalone") {
+      // S103 standalone proof record. matchedVia may live on the wrapper
+      // (legacy alias: namespace) or be absent (implies "content" match).
+      const std = rec.record || rec;
+      const matchedVia = rec.matchedVia || std.matchedVia || "content";
+      entries.push({
+        record_type: "standalone",
+        role: "first_writer",
+        credential_id: std.credential_id || null,
+        timestamp_iso: std.attested_at || std.created_at || null,
+        hash_type: matchedVia === "alias" ? "attested_copy_hash" : "member_hash",
+        standalone_record_ref: { hash: hexHash, matchedVia },
+      });
+    }
+  }
+
+  for (const c of claims) {
+    const col = activeCol.get(c.collectionId);
+    if (!col) continue; // Decision C1: skip pending/missing target
+    const v = c.value || {};
+    entries.push({
+      record_type: "collection_member",
+      role: "subsequent",
+      credential_id: v.credential_id || null,
+      timestamp_iso: v.created_at || null,
+      hash_type: v.hash_type || null,
+      collection_id: c.collectionId,
+      short_url: col.short_url || `https://hipprotocol.org/c/${c.collectionId}`,
+      collection_hash: v.collection_hash || col.collection_hash || null,
+      member_index: typeof v.member_index === "number" ? v.member_index : null,
+    });
+  }
+
+  if (entries.length === 0) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  // 6. Ascending sort on timestamp_iso (lex sort is correct for ISO-8601).
+  //    null/missing timestamps sort last for deterministic output.
+  entries.sort((a, b) => {
+    const ta = a.timestamp_iso || "\uffff";
+    const tb = b.timestamp_iso || "\uffff";
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+    return 0;
+  });
+
+  return jsonResponse({
+    hash: hexHash,
+    total: entries.length,
+    entries,
+  }, 200, origin);
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── S106.6CW Collection read handlers (Phase 1) ──
+// §3.4.2 GET /api/collection/{id}
+// §3.4.3 GET /api/collection/{id}/member/{i}
+//
+// Both are pure reads against collection:{id}. Pending-skip per S106.5
+// Decision C1 / §3.3.4 reader contract: status !== "active" ⇒ 404.
+// Malformed {id} (not 20-char base32-lowercase per §3.3.4 step 1 and
+// S106.6 Ambiguity F) ⇒ 400. Malformed {i} (not a non-negative decimal
+// integer) ⇒ 400. Member index out of range ⇒ 404. CORS: public (§3.4.8).
+// ════════════════════════════════════════════════════════════════
+
+// §3.4.2 — Fetch a collection record. Primary read path for proof.html.
+// Response on success: {collection_id, manifest, signature, collection_hash,
+// short_url, status, created_at, member_sidecar}. resolution_conflicts is
+// an S106-internal field persisted for idempotent POST replay and is NOT
+// surfaced here (not part of the §3.4.2 shape).
+async function handleCollectionGet(id, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isCollectionId(id)) {
+    return jsonResponse({ error: "invalid_collection_id" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`collection:${id}`);
+  if (!raw) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "not_found" }, 404, origin); }
+
+  // Decision C1 pending-skip — treat pending / malformed status identically
+  // to "not found" so failed-mid-write POSTs never leak via reads.
+  if (!record || record.status !== "active") {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  return jsonResponse({
+    collection_id: record.collection_id,
+    manifest: record.manifest,
+    signature: record.signature,
+    collection_hash: record.collection_hash,
+    short_url: record.short_url,
+    status: record.status,
+    created_at: record.created_at,
+    member_sidecar: record.member_sidecar || {},
+    chain_sidecar: record.chain_sidecar || null, // S106.7CW — surface chain metadata if present
+  }, 200, origin);
+}
+
+// §3.4.3 — Thin fetch for a single member. Cheaper/narrower than fetching the
+// full collection record; present for tooling that cares about only one member.
+// Optional fields per S106 Decision 1 and S106.6 Ambiguity C: filename is
+// omitted when absent from the signed manifest (do NOT emit filename: ""),
+// collection_title is omitted when absent from manifest, and download_url_hint
+// is omitted when absent from member_sidecar[index].
+async function handleCollectionMember(id, indexStr, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isCollectionId(id)) {
+    return jsonResponse({ error: "invalid_collection_id" }, 400, origin);
+  }
+
+  // {i} MUST be a non-negative decimal integer with no leading zeros (except "0"
+  // itself) — this also rejects "01", "+1", "-1", " 1", "1.0", "1e2", hex, etc.
+  if (typeof indexStr !== "string" || !/^(0|[1-9][0-9]*)$/.test(indexStr)) {
+    return jsonResponse({ error: "invalid_member_index" }, 400, origin);
+  }
+  const index = parseInt(indexStr, 10);
+  if (!Number.isFinite(index) || index < 0) {
+    return jsonResponse({ error: "invalid_member_index" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`collection:${id}`);
+  if (!raw) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "not_found" }, 404, origin); }
+
+  if (!record || record.status !== "active") {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  const members = record.manifest && Array.isArray(record.manifest.members)
+    ? record.manifest.members : [];
+  if (index >= members.length) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  const m = members[index] || {};
+
+  // Build response preserving §3.4.3 field order for a stable wire shape.
+  // collection_id, index, (filename?), size, mime, member_hash,
+  // attested_copy_hash, collection_short_url, (collection_title?),
+  // (download_url_hint?).
+  const out = {
+    collection_id: record.collection_id,
+    index,
+  };
+  if (typeof m.filename === "string" && m.filename.length > 0) {
+    out.filename = m.filename;
+  }
+  out.size = m.size;
+  out.mime = m.mime;
+  out.member_hash = m.member_hash;
+  out.attested_copy_hash = m.attested_copy_hash;
+  out.collection_short_url = record.short_url;
+  if (record.manifest && typeof record.manifest.title === "string"
+      && record.manifest.title.length > 0) {
+    out.collection_title = record.manifest.title;
+  }
+  const sidecar = (record.member_sidecar && typeof record.member_sidecar === "object")
+    ? record.member_sidecar : {};
+  const sc = sidecar[String(index)];
+  if (sc && typeof sc.download_url_hint === "string" && sc.download_url_hint.length > 0) {
+    out.download_url_hint = sc.download_url_hint;
+  }
+
+  return jsonResponse(out, 200, origin);
+}
+
+// §3.4.7 — GET /c/{short_id} short-URL resolver.
+//
+// S106.6CW Phase 0 Decision 2 Option C: the S106 POST handler writes
+// `short_url = https://hipprotocol.org/c/${collection_id}` (worker.js
+// handleRegisterCollectionProof) with NO reverse index key — the
+// {short_id} in the URL IS the 20-char base32-lowercase collection_id.
+// So this handler validates + fetches collection:{sid} directly, with
+// no migration and no scan. Cost: 1 KV read.
+//
+// Behavior:
+//   • {short_id} doesn't match the 20-char base32-lowercase shape    → 400.
+//   • collection:{sid} missing, malformed, or status !== "active"    → 404.
+//   • otherwise 302 → /proof.html?hash={collection_hash} so proof.html's
+//     shared dispatch re-hits /api/proof/{hash} and renders the card.
+//
+// Defensive: we verify collection_hash is 64-hex before emitting it in
+// the Location header — a malformed record shouldn't leak a garbage URL.
+async function handleShortUrl(shortId, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isCollectionId(shortId)) {
+    return jsonResponse({ error: "invalid_short_id" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`collection:${shortId}`);
+  if (!raw) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "not_found" }, 404, origin); }
+
+  // Decision C1 pending-skip + sanity on collection_hash.
+  if (!record
+      || record.status !== "active"
+      || typeof record.collection_hash !== "string"
+      || !/^[0-9a-f]{64}$/.test(record.collection_hash)) {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Location": `https://hipprotocol.org/proof.html?hash=${record.collection_hash}`,
+      ...corsHeaders(origin),
+    },
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// S106.8CW §3.4.4 — PATCH /api/collection/{id}/sidecar.
+// ══════════════════════════════════════════════════════════════════════
+// Credential-signed mutation of member_sidecar (download-URL hints only).
+// collection_hash, signature, manifest, status, chain_sidecar all unchanged.
+// Returns 200 { "updated_indices": [...] } ascending numeric (Ambiguity A).
+//
+// Signed payload: SHA-256(JCS({collection_id, sidecar_updates, credential_id,
+// timestamp})). collection_id comes from the URL path, NOT the body —
+// prevents mismatched-URL replay.
+//
+// Validation order (Phase 0 kickoff §2.1, preserves spec §3.4.4 ordering
+// with rate-limit inserted before signature verify so brute-force attempts
+// consume budget):
+//   1. Parse JSON                                         → 400 malformed_body
+//   2. Shape-check {id}                                   → 400 invalid_collection_id
+//   3. Read collection; missing OR status!=="active"      → 404 not_found (D1 pending-skip)
+//   4. credential_id matches creator credential_id        → else 403 credential_mismatch
+//   5. timestamp within ±5 min of worker clock            → else 400 clock_drift
+//   6. Rate-limit (patch_rate:{collection_id}, 10/hr,
+//      fixed-hour window, Ambiguity D)                    → else 429 rate_limited
+//   7. JCS-canonicalize + SHA-256 + Ed25519-verify against
+//      trust:{id}.public_key (hex→bytes via G.2 helper)   → else 422 invalid_signature
+//   8. Validate sidecar_updates keys: non-empty, string-
+//      form integer /^(0|[1-9][0-9]*)$/, in [0, len)      → 400 invalid_sidecar_key
+//                                                            or sidecar_index_out_of_range
+//   9. Validate each value is a plain object              → 400 invalid_sidecar_value
+//  10. Shallow-merge per-index (Ambiguity B/C: replace
+//      inner object), write back collection:{id}
+//  11. Return 200 { updated_indices: [...asc] }
+async function handleCollectionSidecarPatch(id, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── Step 2: shape-check {id} before any body parse or KV read ──
+  if (!isCollectionId(id)) {
+    return jsonResponse({ error: "invalid_collection_id" }, 400, origin);
+  }
+
+  // ── Step 1: parse body ──
+  let body;
+  try { body = await request.json(); }
+  catch (_) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+  const { sidecar_updates, credential_id, timestamp, signature } = body;
+  if (typeof credential_id !== "string" || credential_id.length === 0
+      || typeof timestamp !== "string" || timestamp.length === 0
+      || typeof signature !== "string" || signature.length === 0
+      || !sidecar_updates || typeof sidecar_updates !== "object"
+      || Array.isArray(sidecar_updates)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+
+  // ── Step 3: read collection; gate on status === "active" (D1 pending-skip) ──
+  const collectionKey = `collection:${id}`;
+  const raw = await env.DEDUP_KV.get(collectionKey);
+  if (!raw) return jsonResponse({ error: "not_found" }, 404, origin);
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "not_found" }, 404, origin); }
+  if (!record || record.status !== "active") {
+    return jsonResponse({ error: "not_found" }, 404, origin);
+  }
+
+  // ── Step 4: credential_id match ──
+  const recordCredId = record.manifest && record.manifest.creator
+    && record.manifest.creator.credential_id;
+  if (credential_id !== recordCredId) {
+    return jsonResponse({ error: "credential_mismatch" }, 403, origin);
+  }
+
+  // ── Step 5: timestamp drift ±5 min (300_000 ms) ──
+  const ts = new Date(timestamp);
+  if (Number.isNaN(ts.getTime())
+      || Math.abs(Date.now() - ts.getTime()) > 300000) {
+    return jsonResponse({ error: "clock_drift" }, 400, origin);
+  }
+
+  // ── Step 6: rate-limit (D2 per-collection, Ambiguity D fixed-hour window) ──
+  const rateKey = `patch_rate:${id}`;
+  const nowMs = Date.now();
+  const WINDOW_MS = 3600000;
+  const LIMIT = 10;
+  let windowStartMs = nowMs;
+  let count = 0;
+  try {
+    const rateRaw = await env.DEDUP_KV.get(rateKey);
+    if (rateRaw) {
+      const parsed = JSON.parse(rateRaw);
+      if (parsed && typeof parsed.window_start_ms === "number"
+          && typeof parsed.count === "number"
+          && nowMs - parsed.window_start_ms <= WINDOW_MS) {
+        windowStartMs = parsed.window_start_ms;
+        count = parsed.count;
+      }
+    }
+  } catch (_) { /* fall through: stale/malformed counter → fresh window */ }
+  if (count >= LIMIT) {
+    return jsonResponse({ error: "rate_limited" }, 429, origin);
+  }
+  // Persist the incremented counter BEFORE sig-verify so brute-force forged
+  // signatures also consume budget. Write is best-effort: failure to persist
+  // doesn't block the PATCH (worst case: one uncounted request).
+  try {
+    await env.DEDUP_KV.put(rateKey,
+      JSON.stringify({ window_start_ms: windowStartMs, count: count + 1 }),
+      { expirationTtl: 7200 }); // 2h TTL — KV self-cleans stale windows
+  } catch (_) { /* intentional: rate-limit persistence is not load-bearing */ }
+
+  // ── Step 7: Ed25519 signature verify ──
+  // Public key comes from trust:{id}, NOT the body — creator's stored key is
+  // authoritative. Spec §3.4.4 step 5 + §3.4.8 "signature-based".
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
+  if (!trustRaw) {
+    // Credential absent from trust. Spec doesn't enumerate this case for
+    // PATCH; 403 credential_mismatch is the closest semantic proxy (the
+    // signing key cannot match because it doesn't exist).
+    return jsonResponse({ error: "credential_mismatch" }, 403, origin);
+  }
+  let trustRecord;
+  try { trustRecord = JSON.parse(trustRaw); }
+  catch (_) { return jsonResponse({ error: "credential_mismatch" }, 403, origin); }
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "credential_revoked",
+      revoked_at: trustRecord.superseded_at || null,
+    }, 403, origin);
+  }
+  const pubKeyBytes = normalizePubkeyFromHex(trustRecord.public_key || "");
+  if (!pubKeyBytes) {
+    // Legacy trust record without public_key — PATCH cannot proceed without
+    // the authoritative key. Reject as credential_mismatch (not 500) since
+    // this is a data-shape gap specific to the caller's credential, not a
+    // worker bug.
+    return jsonResponse({ error: "credential_mismatch" }, 403, origin);
+  }
+
+  // Canonicalize {collection_id, sidecar_updates, credential_id, timestamp}
+  // — collection_id bound to URL path, not body.
+  const canonicalBytes = jcsCanonicalize({
+    collection_id: id,
+    sidecar_updates,
+    credential_id,
+    timestamp,
+  });
+  const digestBytes = await sha256Bytes(canonicalBytes);
+  let verified = false;
+  try {
+    verified = await verifyEd25519FromBytes(pubKeyBytes, signature, digestBytes);
+  } catch (_) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+  if (!verified) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+
+  // ── Step 8: validate keys ──
+  const members = (record.manifest && Array.isArray(record.manifest.members))
+    ? record.manifest.members : [];
+  const memberCount = members.length;
+  const updateKeys = Object.keys(sidecar_updates);
+  if (updateKeys.length === 0) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+  for (const k of updateKeys) {
+    if (typeof k !== "string" || !/^(0|[1-9][0-9]*)$/.test(k)) {
+      return jsonResponse({ error: "invalid_sidecar_key", key: k }, 400, origin);
+    }
+    const idx = parseInt(k, 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= memberCount) {
+      return jsonResponse({
+        error: "sidecar_index_out_of_range",
+        key: k,
+      }, 400, origin);
+    }
+  }
+
+  // ── Step 9: validate values (each must be a plain object) ──
+  for (const k of updateKeys) {
+    const v = sidecar_updates[k];
+    if (!v || typeof v !== "object" || Array.isArray(v)) {
+      return jsonResponse({ error: "invalid_sidecar_value", key: k }, 400, origin);
+    }
+  }
+
+  // ── Step 10: shallow-merge per-index and write back ──
+  // Ambiguity B/C: PATCH replaces the per-index object entirely (inner object
+  // is the unit of update). Existing per-index entries not in sidecar_updates
+  // are preserved via the spread. Existing inner fields on touched indices
+  // are dropped if not restated in the PATCH body.
+  const priorSidecar = (record.member_sidecar
+    && typeof record.member_sidecar === "object"
+    && !Array.isArray(record.member_sidecar))
+    ? record.member_sidecar : {};
+  const newSidecar = { ...priorSidecar };
+  for (const k of updateKeys) {
+    newSidecar[k] = sidecar_updates[k];
+  }
+  const updatedRecord = { ...record, member_sidecar: newSidecar };
+  try {
+    await env.DEDUP_KV.put(collectionKey, JSON.stringify(updatedRecord));
+  } catch (_) {
+    return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // ── Step 11: response (Ambiguity A — ascending numeric) ──
+  const updated_indices = updateKeys.map(Number).sort((a, b) => a - b);
+  return jsonResponse({ updated_indices }, 200, origin);
+}
+
+// §3.4.6 — Creator's collection list for the dashboard UI (S106.7CW Phase 4).
+//
+// Spec-vs-impl divergence resolved at S106.7 Phase 0 (Decision D7):
+// §3.4.6 specifies "GET /api/collection-by-credential/{credential_id}" with
+// "Authorization: Bearer <credential_token>". HIPKit has no bearer-token
+// credential auth — every credential-authenticated endpoint in this worker
+// (handlePortfolio, handleCredentialAttestations) uses verifyAppAuth with a
+// body-signed {credential_id, public_key, timestamp, signature}. Mirroring
+// that pattern here: POST (not GET), body-signed auth, URL credential_id
+// must match the authenticated one.
+//
+// Request body (JSON): verifyAppAuth fields + optional { page }.
+// Response:
+//   {
+//     credential_id, total, page, page_size: 50,
+//     collections: [ {collection_id, title, issued_at, member_count,
+//                     cover_index, short_url, created_at, chain_id}, ... ]
+//   }
+// Page size is fixed at 50 per spec §3.4.6.
+async function handleCollectionByCredential(request, env, credentialIdFromUrl) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  const auth = await verifyAppAuth(request, "/api/collection-by-credential", env);
+  if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status, origin);
+
+  const { credential_id, body } = auth;
+
+  // URL id must match authenticated credential. Defense-in-depth — mirrors
+  // the handleCredentialAttestations check (L4756-4760 pre-session).
+  if (credentialIdFromUrl && credentialIdFromUrl !== credential_id) {
+    return jsonResponse({
+      error: "URL credential_id does not match authenticated credential",
+    }, 400, origin);
+  }
+
+  // Pagination: spec §3.4.6 says page=0, page_size=50. page_size is fixed.
+  let page = parseInt(body.page, 10);
+  if (!Number.isFinite(page) || page < 0) page = 0;
+  const pageSize = 50;
+
+  const indexRaw = await env.DEDUP_KV.get(`collection_by_credential:${credential_id}`);
+  if (!indexRaw) {
+    return jsonResponse({
+      credential_id,
+      total: 0,
+      page,
+      page_size: pageSize,
+      collections: [],
+    }, 200, origin);
+  }
+
+  let index;
+  try { index = JSON.parse(indexRaw); } catch (_) { index = null; }
+  if (!Array.isArray(index)) {
+    return jsonResponse({
+      credential_id,
+      total: 0,
+      page,
+      page_size: pageSize,
+      collections: [],
+    }, 200, origin);
+  }
+
+  const total = index.length;
+  const start = page * pageSize;
+  const slice = (start >= total) ? [] : index.slice(start, start + pageSize);
+
+  // Defensively project only the §3.4.6 response fields; the stored shape
+  // already matches this projection (set at write time in §3.5.4), but
+  // projecting here insulates us from future storage drift.
+  const collections = slice.map(e => ({
+    collection_id: e.collection_id,
+    title: e.title,
+    issued_at: e.issued_at,
+    member_count: e.member_count,
+    cover_index: e.cover_index,
+    short_url: e.short_url,
+    created_at: e.created_at,
+    chain_id: (typeof e.chain_id === "string") ? e.chain_id : null,
+  }));
+
+  return jsonResponse({
+    credential_id,
+    total,
+    page,
+    page_size: pageSize,
+    collections,
   }, 200, origin);
 }
 
@@ -3576,6 +5455,252 @@ async function handleCredentialAttestations(request, env, credentialIdFromUrl) {
 }
 
 
+// ══════════════════════════════════════════════════════════════════════
+// S106.8CW §2.2 — Pending-GC sweep helper (nightly cron + admin dry-run).
+// ══════════════════════════════════════════════════════════════════════
+// Finds collection:{id} rows where status === "pending" and created_at is
+// older than 24h. Deletes the primary record plus any KV artifacts the
+// pending write sequence (§3.3.4 steps 6b–6e) managed to land.
+//
+// Guarantees (kickoff §2.2):
+//   • Active collections are untouched (status-gate).
+//   • Collections pending <24h are untouched (age-gate).
+//   • hash:{hex} rows owned by other collections are untouched — each row
+//     is re-read before delete; we only remove entries whose type ===
+//     "collection_member" AND whose collection_id === this pending row's id.
+//   • collection_hash_index:{hex} is deleted only if it still points at us.
+//   • chain_registry:{chain_id} is intentionally NOT modified (best-effort
+//     cache; self-corrects on next extension per S106.7 Decision 6).
+//   • Parent has_children is NOT modified — pending children were never
+//     added per §3.9.9 step 5b timing (appended in 6h, after the status
+//     flip at 6f that a pending row never reaches).
+//   • Malformed rows are logged + skipped (D4) — deletion risks losing
+//     data a future migration might salvage.
+//
+// Observability: single-line JSON log per notable event
+//   {kind: "malformed_pending_row", key, ...}
+//   {kind: "gc_list_error", message}
+//   {kind: "gc_delete_error", key, message}
+//   {kind: "gc_pending_summary", started_at, finished_at, dry_run,
+//     swept_count, skipped_count, malformed_count, errors_count, elapsed_ms}
+//
+// Returns { summary, candidates[], would_skip[], malformed[] } — the
+// {candidates, would_skip, malformed} arrays are used by the
+// POST /admin/gc-pending-dry-run endpoint to surface what WOULD be swept.
+async function sweepPendingCollections(env, { dryRun = false } = {}) {
+  const GC_AGE_MS = 24 * 3600 * 1000;
+  const nowMs = Date.now();
+  const started_at = new Date(nowMs).toISOString();
+  let swept_count = 0;
+  let skipped_count = 0;
+  let malformed_count = 0;
+  let errors_count = 0;
+  const candidates = [];
+  const would_skip = [];
+  const malformed = [];
+
+  let cursor = undefined;
+  let listComplete = false;
+  while (!listComplete) {
+    let page;
+    try {
+      const listOpts = { prefix: "collection:" };
+      if (cursor) listOpts.cursor = cursor;
+      page = await env.DEDUP_KV.list(listOpts);
+    } catch (e) {
+      errors_count++;
+      console.log(JSON.stringify({
+        kind: "gc_list_error",
+        message: String(e).slice(0, 500),
+      }));
+      break;
+    }
+    for (const k of (page.keys || [])) {
+      const name = k.name;
+      let raw;
+      try { raw = await env.DEDUP_KV.get(name); }
+      catch (_) { errors_count++; continue; }
+      if (!raw) { skipped_count++; continue; }
+      let rec;
+      try { rec = JSON.parse(raw); }
+      catch (_) {
+        malformed_count++;
+        malformed.push({ key: name, reason: "parse_error" });
+        console.log(JSON.stringify({ kind: "malformed_pending_row", key: name, reason: "parse_error" }));
+        continue;
+      }
+      if (!rec || typeof rec !== "object" || Array.isArray(rec)) {
+        malformed_count++;
+        malformed.push({ key: name, reason: "not_object" });
+        console.log(JSON.stringify({ kind: "malformed_pending_row", key: name, reason: "not_object" }));
+        continue;
+      }
+      if (rec.status !== "pending") { skipped_count++; continue; }
+      if (typeof rec.created_at !== "string" || rec.created_at.length === 0) {
+        skipped_count++;
+        would_skip.push({ key: name, reason: "missing_created_at" });
+        continue;
+      }
+      const createdMs = Date.parse(rec.created_at);
+      if (!Number.isFinite(createdMs)) {
+        skipped_count++;
+        would_skip.push({ key: name, reason: "malformed_created_at", created_at: rec.created_at });
+        continue;
+      }
+      const ageMs = nowMs - createdMs;
+      if (ageMs < GC_AGE_MS) {
+        skipped_count++;
+        would_skip.push({ key: name, reason: "age_below_ttl", age_ms: ageMs });
+        continue;
+      }
+
+      // This row is a GC target.
+      const collectionId = typeof rec.collection_id === "string" && rec.collection_id.length > 0
+        ? rec.collection_id
+        : name.replace(/^collection:/, "");
+      const collectionHash = typeof rec.collection_hash === "string"
+        && /^[0-9a-f]{64}$/.test(rec.collection_hash)
+        ? rec.collection_hash : null;
+      const credId = (rec.manifest && rec.manifest.creator
+        && typeof rec.manifest.creator.credential_id === "string")
+        ? rec.manifest.creator.credential_id : null;
+      const members = (rec.manifest && Array.isArray(rec.manifest.members))
+        ? rec.manifest.members : [];
+      const target = {
+        key: name,
+        collection_id: collectionId,
+        collection_hash: collectionHash,
+        credential_id: credId,
+        member_count: members.length,
+        age_ms: ageMs,
+        created_at: rec.created_at,
+      };
+      candidates.push(target);
+      if (dryRun) continue;
+
+      // ── Execute the delete ──
+      try {
+        // 1. hash:{hex} rows — only delete entries we own.
+        for (const m of members) {
+          for (const field of ["member_hash", "attested_copy_hash"]) {
+            const hex = m && m[field];
+            if (typeof hex !== "string" || !/^[0-9a-f]{64}$/.test(hex)) continue;
+            const hashKey = `hash:${hex}`;
+            try {
+              const hashRaw = await env.DEDUP_KV.get(hashKey);
+              if (!hashRaw) continue;
+              let hashRec;
+              try { hashRec = JSON.parse(hashRaw); }
+              catch (_) { continue; } // don't touch malformed rows
+              if (hashRec && hashRec.type === "collection_member"
+                  && hashRec.collection_id === collectionId) {
+                await env.DEDUP_KV.delete(hashKey);
+              }
+            } catch (_) { errors_count++; }
+          }
+        }
+
+        // 2. hash_claim:*:{collection_id} rows (S106.5, only for conflicted
+        //    members). We don't know the hexes without a scan; walk the
+        //    hash_claim: namespace once per GC target. This is O(total
+        //    hash_claims) per target but GC-rare so acceptable. If hash_claim
+        //    scale ever becomes an issue, revisit with an inverted index.
+        try {
+          let claimCursor = undefined;
+          let claimComplete = false;
+          const suffix = ":" + collectionId;
+          while (!claimComplete) {
+            const listOpts = { prefix: "hash_claim:" };
+            if (claimCursor) listOpts.cursor = claimCursor;
+            const claimPage = await env.DEDUP_KV.list(listOpts);
+            for (const ck of (claimPage.keys || [])) {
+              if (ck.name.endsWith(suffix)) {
+                try { await env.DEDUP_KV.delete(ck.name); }
+                catch (_) { errors_count++; }
+              }
+            }
+            claimCursor = claimPage.cursor;
+            claimComplete = !!claimPage.list_complete || !claimCursor;
+          }
+        } catch (_) { errors_count++; }
+
+        // 3. collection_hash_index:{hex} — delete iff it still points at us.
+        //    Value is a bare string (not JSON), per handleRegisterCollectionProof
+        //    step 6c (worker.js L3251: put(..., collectionId)).
+        if (collectionHash) {
+          const idxKey = `collection_hash_index:${collectionHash}`;
+          try {
+            const idxRaw = await env.DEDUP_KV.get(idxKey);
+            if (idxRaw && idxRaw === collectionId) {
+              await env.DEDUP_KV.delete(idxKey);
+            }
+          } catch (_) { errors_count++; }
+        }
+
+        // 4. Remove us from collection_by_credential:{credential_id}.
+        if (credId) {
+          const credIdxKey = `collection_by_credential:${credId}`;
+          try {
+            const credRaw = await env.DEDUP_KV.get(credIdxKey);
+            if (credRaw) {
+              const list = JSON.parse(credRaw);
+              if (Array.isArray(list)) {
+                const filtered = list.filter(
+                  e => !(e && typeof e === "object" && e.collection_id === collectionId)
+                );
+                if (filtered.length !== list.length) {
+                  await env.DEDUP_KV.put(credIdxKey, JSON.stringify(filtered));
+                }
+              }
+            }
+          } catch (_) { errors_count++; }
+        }
+
+        // 5. Finally, delete collection:{id} itself.
+        await env.DEDUP_KV.delete(name);
+        swept_count++;
+      } catch (e) {
+        errors_count++;
+        console.log(JSON.stringify({
+          kind: "gc_delete_error",
+          key: name,
+          message: String(e).slice(0, 500),
+        }));
+      }
+    }
+    cursor = page.cursor;
+    listComplete = !!page.list_complete || !cursor;
+  }
+
+  const summary = {
+    kind: "gc_pending_summary",
+    started_at,
+    finished_at: new Date().toISOString(),
+    dry_run: dryRun,
+    swept_count,
+    skipped_count,
+    malformed_count,
+    errors_count,
+    elapsed_ms: Date.now() - nowMs,
+  };
+  console.log(JSON.stringify(summary));
+  return { summary, candidates, would_skip, malformed };
+}
+
+// S106.8CW Phase 3b — Admin dry-run handler for the GC sweep. Lets Peter
+// verify sweep behavior against real prod KV without waiting for the cron
+// or having to wrangler-put synthetic pending rows. Guarded by ADMIN_KEY
+// (same bearer-token pattern as handleCreateApiKey).
+async function handleAdminGcPendingDryRun(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ") || authHeader.slice(7) !== env.ADMIN_KEY) {
+    return jsonResponse({ error: "Unauthorized" }, 401, origin);
+  }
+  const result = await sweepPendingCollections(env, { dryRun: true });
+  return jsonResponse(result, 200, origin);
+}
+
 // ── Main Router ──
 
 export default {
@@ -3669,6 +5794,11 @@ export default {
       return handleRegisterProof(request, env);
     }
 
+    // S106 §3.4.1: Collection Proof registration
+    if (method === "POST" && path === "/register-collection-proof") {
+      return handleRegisterCollectionProof(request, env);
+    }
+
     // S38: Unseal a sealed proof record
     if (method === "POST" && path === "/unseal-proof") {
       return handleUnsealProof(request, env);
@@ -3705,6 +5835,47 @@ export default {
       return handleBatchProof(request, env);
     }
 
+    // S106.5CW: GET /api/proof/{hex}/history — §3.3.5 history endpoint.
+    // MUST match before the /api/proof/{hash} prefix handler below so the
+    // trailing /history isn't folded into the hash parameter.
+    if (method === "GET") {
+      const historyMatch = path.match(/^\/api\/proof\/([0-9a-f]{64})\/history$/);
+      if (historyMatch) {
+        return handleProofHistory(historyMatch[1], request, env);
+      }
+    }
+
+    // S106.6CW: GET /api/collection/{id}/member/{i} — §3.4.3. MUST match
+    // before the /api/collection/{id} route below so the trailing /member/{i}
+    // isn't folded into the id parameter. Loose [^/]+ capture so malformed
+    // ids/indices hit the handler's 400 path rather than the 404 route-miss.
+    if (method === "GET") {
+      const memberMatch = path.match(/^\/api\/collection\/([^\/]+)\/member\/([^\/]+)$/);
+      if (memberMatch) {
+        return handleCollectionMember(memberMatch[1], memberMatch[2], request, env);
+      }
+    }
+
+    // S106.6CW: GET /api/collection/{id} — §3.4.2.
+    if (method === "GET") {
+      const colMatch = path.match(/^\/api\/collection\/([^\/]+)$/);
+      if (colMatch) {
+        return handleCollectionGet(colMatch[1], request, env);
+      }
+    }
+
+    // S106.8CW §3.4.4 — PATCH /api/collection/{id}/sidecar.
+    // Credential-signed mutation of member_sidecar. collection_hash,
+    // signature, manifest, status, chain_sidecar all unchanged. Loose [^/]+
+    // capture so malformed ids hit the handler's 400 path rather than a
+    // route-miss 404.
+    if (method === "PATCH") {
+      const patchMatch = path.match(/^\/api\/collection\/([^\/]+)\/sidecar$/);
+      if (patchMatch) {
+        return handleCollectionSidecarPatch(patchMatch[1], request, env);
+      }
+    }
+
     // Direct JSON API endpoint for proof data (used by proof.html fetch)
     if (method === "GET" && path.startsWith("/api/proof/")) {
       const contentHash = path.replace("/api/proof/", "").toLowerCase().trim();
@@ -3722,6 +5893,14 @@ export default {
       return handleCreateApiKey(request, env);
     }
 
+    // S106.8CW Phase 3b — Admin dry-run for the pending-GC sweep.
+    // Bearer ADMIN_KEY. Returns {summary, candidates, would_skip, malformed}
+    // without performing any deletes. Used to verify sweep behavior against
+    // real prod KV before/after cron schedule activates.
+    if (method === "POST" && path === "/admin/gc-pending-dry-run") {
+      return handleAdminGcPendingDryRun(request, env);
+    }
+
     // S85CW Change 3: Portfolio — paginated proofs for authenticated credential
     if (method === "POST" && path === "/api/portfolio") {
       return handlePortfolio(request, env);
@@ -3733,6 +5912,17 @@ export default {
       const credAttMatch = path.match(/^\/api\/credential\/([0-9a-f]{64})\/attestations$/);
       if (credAttMatch) {
         return handleCredentialAttestations(request, env, credAttMatch[1]);
+      }
+    }
+
+    // S106.7CW §3.4.6 — Creator's collection list for dashboard UI.
+    // POST (not GET per spec) to mirror existing verifyAppAuth pattern;
+    // see handleCollectionByCredential doc comment for the spec-vs-impl
+    // divergence rationale (Phase 0 Decision D7).
+    if (method === "POST") {
+      const collByCredMatch = path.match(/^\/api\/collection-by-credential\/([0-9a-f]{64})$/);
+      if (collByCredMatch) {
+        return handleCollectionByCredential(request, env, collByCredMatch[1]);
       }
     }
 
@@ -3833,6 +6023,14 @@ export default {
       });
     }
 
+    // S106.6 §3.4.7: Short collection URL → proof.html redirect.
+    // {short_id} == {collection_id} (S106 POST writes short_url=/c/{collection_id},
+    // no separate reverse index). Pending-skip per S106.5 Decision C1.
+    if (method === "GET" && path.startsWith("/c/")) {
+      const shortId = path.slice(3);
+      return handleShortUrl(shortId, request, env);
+    }
+
     // S83: GitHub Pages pass-through for static files.
     // When hipprotocol.org is routed through the worker, requests for static files
     // (HTML, CSS, JS, images) must be proxied to GitHub Pages so they still load.
@@ -3881,5 +6079,18 @@ export default {
         method: method,
       }, 500, topOrigin);
     }
+  },
+
+  // ── S106.8CW §2.2 — Nightly pending-GC cron ──────────────────────────
+  // Cloudflare Cron Trigger fires this handler at the schedule configured
+  // in the Cloudflare dashboard (Decision E.1: dashboard-configured, NOT
+  // wrangler.toml — no wrangler.toml exists in hip-protocol). Target
+  // schedule: "0 4 * * *" (nightly 04:00 UTC, Decision 5).
+  //
+  // Uses waitUntil so the sweep can outlive the event dispatch but still
+  // benefit from ctx lifecycle (logs, graceful teardown). env is the same
+  // binding object as fetch — DEDUP_KV accessible identically (Ambiguity E).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sweepPendingCollections(env, { dryRun: false }));
   },
 };
