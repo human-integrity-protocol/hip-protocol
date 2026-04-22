@@ -123,9 +123,15 @@ async function hmacSHA256(key, data) {
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// S83: Verify a HIPKit app auth request (Ed25519 signature).
+// S83 / S114CW: Verify a HIPKit app auth request (Ed25519 signature).
 // The client signs "HIPKIT|{endpoint}|{credentialId}|{timestamp}" with its Ed25519 private key.
 // Returns { ok, credential_id, public_key, trust_record, body } or { ok:false, error, status }.
+//
+// S114CW BLOCKS ANNOUNCE #1 closure: this helper now performs full server-side
+// cryptographic verification. Prior to S114CW it only checked field presence +
+// timestamp freshness + credential existence, which was authentication in name
+// only — knowledge of any public (credential_id, public_key) pair was sufficient
+// to pass. Per charter "If it says verify, it must verify."
 async function verifyAppAuth(request, endpoint, env) {
   let body;
   try { body = await request.json(); } catch (_) {
@@ -137,17 +143,46 @@ async function verifyAppAuth(request, endpoint, env) {
     return { ok: false, error: "Missing auth fields: credential_id, public_key, timestamp, signature", status: 400 };
   }
 
+  // Format validation — both fields must be 64-char lowercase hex.
+  if (!/^[0-9a-f]{64}$/.test(credential_id)) {
+    return { ok: false, error: "credential_id must be 64-char lowercase hex", status: 400 };
+  }
+  if (!/^[0-9a-f]{64}$/.test(public_key)) {
+    return { ok: false, error: "public_key must be 64-char lowercase hex (Ed25519 raw)", status: 400 };
+  }
+
   // Timestamp must be within 5 minutes
   const ts = new Date(timestamp);
   if (isNaN(ts.getTime()) || Math.abs(Date.now() - ts.getTime()) > 300000) {
     return { ok: false, error: "Timestamp expired or invalid", status: 401 };
   }
 
-  // Note: Cloudflare Workers do not expose SubtleCrypto Ed25519 verify in all
-  // deployments, so we do not verify the signature server-side. The signature is
-  // included for audit logging and future verification. Auth relies on the caller
-  // proving knowledge of the credential_id + public_key + valid timestamp.
-  // This matches the pattern used by handleRegisterProof and handleApiAttest.
+  // Binding check: SHA-256(public_key) === credential_id.
+  // This prevents credential_id grafting — a caller cannot present some other
+  // credential's public_key alongside a target credential_id, because the
+  // hash-to-id invariant is enforced by issuance and now revalidated here.
+  const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const computedIdBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+  const computedId = Array.from(new Uint8Array(computedIdBuf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+  if (computedId !== credential_id) {
+    return { ok: false, error: "Key binding failed: SHA-256(public_key) !== credential_id", status: 403 };
+  }
+
+  // Ed25519 signature verification over canonical.
+  // SubtleCrypto Ed25519 IS available on Workers (proven by verifyEd25519FromBytes
+  // at worker.js:429 and series endpoints shipped S111). Stale comment removed.
+  const canonical = "HIPKIT|" + endpoint + "|" + credential_id + "|" + timestamp;
+  const msgBytes = new TextEncoder().encode(canonical);
+  let sigOk;
+  try {
+    sigOk = await verifyEd25519FromBytes(pubKeyBytes, signature, msgBytes);
+  } catch (_e) {
+    return { ok: false, error: "Malformed signature", status: 400 };
+  }
+  if (!sigOk) {
+    return { ok: false, error: "Invalid signature", status: 403 };
+  }
 
   // Credential must exist in trust system
   const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
@@ -2564,15 +2599,19 @@ async function handleTransferPull(code, request, env) {
 //   Gate 3 — First-write-wins: once a content_hash is registered, it is locked.
 //             A second credential attempting the same hash gets 409 Conflict with
 //             the existing record returned. No overwrite, ever.
-//   Gate 4 — Signature: the client signs the canonical string
-//             content_hash|perceptual_hash_or_NULL|credential_id|attested_at|classification
-//             with its Ed25519 private key. The worker stores the signature so any
-//             party can independently verify the record without trusting this server.
+//   Gate 4 — Signature: the client signs a canonical string with its Ed25519
+//             private key. Two canonicals are accepted to preserve parity with
+//             both hipprotocol.org/index.html (legacy) and hipkit-net/hip-attest.js
+//             (HIPKit format). See the attest-canonical block below for exact
+//             byte shapes. The worker also stores the signature verbatim so any
+//             party can independently re-verify without trusting this server.
 //
-// The worker does NOT verify the Ed25519 signature itself (Cloudflare Workers do not
-// expose SubtleCrypto Ed25519 verify in all deployments). The signature is stored
-// verbatim and verified client-side by proof card viewers. This is correct: the
-// signature is a self-verifying artifact — its validity is independent of this server.
+// S114CW BLOCKS ANNOUNCE #1 closure: the worker now DOES verify the Ed25519
+// signature server-side. SubtleCrypto Ed25519 is available on Workers today
+// (proven by verifyEd25519FromBytes and the series endpoints). Prior comment
+// claiming otherwise was stale. `/api/verify` returning `verified: true` on
+// KV presence alone was a charter-level semantic violation. No more.
+// public_key is now REQUIRED (was optional pre-S114CW).
 
 // S88: Sanitize an optional display file name before storage.
 // Rules: string only; strip ASCII control chars and path separators (\\ /);
@@ -2615,9 +2654,10 @@ async function handleRegisterProof(request, env) {
   const sanitizedFileName = sanitizeFileName(file_name);
 
   // ── Validate required fields ──
-  if (!content_hash || !credential_id || !attested_at || !classification || !signature) {
+  // S114CW: public_key is now REQUIRED (was optional) — needed for sig verify.
+  if (!content_hash || !credential_id || !public_key || !attested_at || !classification || !signature) {
     return jsonResponse({
-      error: "Missing required fields: content_hash, credential_id, attested_at, classification, signature"
+      error: "Missing required fields: content_hash, credential_id, public_key, attested_at, classification, signature"
     }, 400, origin);
   }
 
@@ -2647,21 +2687,55 @@ async function handleRegisterProof(request, env) {
   }
 
   // public_key must be a 64-char hex string (Ed25519 = 32 bytes = 64 hex chars)
-  // Optional for backward compatibility, but strongly recommended
-  if (public_key) {
-    if (!/^[0-9a-f]{64}$/.test(public_key)) {
-      return jsonResponse({ error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)" }, 400, origin);
+  // S114CW: REQUIRED (was optional pre-S114CW).
+  if (!/^[0-9a-f]{64}$/.test(public_key)) {
+    return jsonResponse({ error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)" }, 400, origin);
+  }
+  // Verify public_key matches credential_id: credential_id = SHA-256(public_key)
+  const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const _cidBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+  const _cidComputed = Array.from(new Uint8Array(_cidBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  if (_cidComputed !== credential_id) {
+    return jsonResponse({
+      error: "public_key does not match credential_id. credential_id must be SHA-256(public_key)."
+    }, 400, origin);
+  }
+
+  // ── S114CW BLOCKS ANNOUNCE #1: Ed25519 signature verification ──
+  // Two canonicals are accepted because hipprotocol.org/index.html and
+  // hipkit-net/hip-attest.js produce DIFFERENT signed messages for the same
+  // attestation body. proof.html (the client-side verifier) already accepts
+  // both at read time — we mirror that pattern at write time so historical
+  // records stay verifiable AND both client surfaces continue to work without
+  // a coordinated client patch.
+  //
+  //   HIPKit format (hipkit-net/hip-attest.js L17–23):
+  //     content_hash | credential_id | classification | attested_at | protocol_version
+  //
+  //   Legacy format (hip-protocol/index.html L2574):
+  //     content_hash | perceptual_hash_or_NULL | credential_id | attested_at | classification
+  //
+  // Try HIPKit first (matches proof.html ordering). On verify:false, try legacy.
+  // Throws (malformed base64 / bad sig length) map to 400. verify:false on both
+  // maps to 403 invalid_signature. verify:true on either is success.
+  const attestPV = protocol_version || "1.2";
+  const canonHIPKit = [content_hash, credential_id, classification, attested_at, attestPV].join("|");
+  const canonLegacy = [content_hash, (perceptual_hash || "NULL"), credential_id, attested_at, classification].join("|");
+  const _enc = new TextEncoder();
+  let _sigOk = false;
+  try {
+    _sigOk = await verifyEd25519FromBytes(pubKeyBytes, signature, _enc.encode(canonHIPKit));
+    if (!_sigOk) {
+      _sigOk = await verifyEd25519FromBytes(pubKeyBytes, signature, _enc.encode(canonLegacy));
     }
-    // Verify public_key matches credential_id: credential_id = SHA-256(public_key)
-    const enc = new TextEncoder();
-    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
-    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
-    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
-    if (computedId !== credential_id) {
-      return jsonResponse({
-        error: "public_key does not match credential_id. credential_id must be SHA-256(public_key)."
-      }, 400, origin);
-    }
+  } catch (_e) {
+    return jsonResponse({ error: "Malformed signature" }, 400, origin);
+  }
+  if (!_sigOk) {
+    return jsonResponse({
+      error: "invalid_signature",
+      detail: "Signature does not verify against either HIPKit or legacy canonical form."
+    }, 403, origin);
   }
 
   // classification must be a known HIP value
@@ -5479,17 +5553,42 @@ async function handleUnsealProof(request, env) {
     return jsonResponse({ error: "Only the original credential holder can unseal this proof." }, 403, origin);
   }
 
-  // If public_key provided now (backfill), validate it matches credential_id
-  if (public_key) {
-    if (!/^[0-9a-f]{64}$/.test(public_key)) {
-      return jsonResponse({ error: "public_key must be a 64-character lowercase hex string." }, 400, origin);
-    }
-    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
-    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
-    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
-    if (computedId !== credential_id) {
-      return jsonResponse({ error: "public_key does not match credential_id." }, 400, origin);
-    }
+  // If public_key provided now (backfill), validate it matches credential_id.
+  // S114CW: also validate shape if it came from the stored record.
+  const effectivePubKey = public_key || record.public_key;
+  if (!effectivePubKey) {
+    return jsonResponse({
+      error: "public_key required (not stored on pre-S38 record) — caller must provide it to prove credential possession before unsealing."
+    }, 400, origin);
+  }
+  if (!/^[0-9a-f]{64}$/.test(effectivePubKey)) {
+    return jsonResponse({ error: "public_key must be a 64-character lowercase hex string." }, 400, origin);
+  }
+  const pubKeyBytesU = new Uint8Array(effectivePubKey.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const hashBufU = await crypto.subtle.digest("SHA-256", pubKeyBytesU);
+  const computedIdU = Array.from(new Uint8Array(hashBufU)).map(b => b.toString(16).padStart(2, "0")).join("");
+  if (computedIdU !== credential_id) {
+    return jsonResponse({ error: "public_key does not match credential_id." }, 400, origin);
+  }
+
+  // ── S114CW BLOCKS ANNOUNCE #1: Ed25519 signature verification ──
+  // Canonical: "UNSEAL|{content_hash}|{credential_id}" (matches
+  // hip-protocol/index.html L2696). Pre-S114CW this endpoint accepted the
+  // signature field without verifying it — any party knowing content_hash +
+  // credential_id + public_key (all public) could unseal someone else's record.
+  const canonUnseal = "UNSEAL|" + content_hash + "|" + credential_id;
+  const encU = new TextEncoder();
+  let _unsealOk;
+  try {
+    _unsealOk = await verifyEd25519FromBytes(pubKeyBytesU, signature, encU.encode(canonUnseal));
+  } catch (_e) {
+    return jsonResponse({ error: "Malformed signature" }, 400, origin);
+  }
+  if (!_unsealOk) {
+    return jsonResponse({
+      error: "invalid_signature",
+      detail: "Unseal signature does not verify against canonical \"UNSEAL|{content_hash}|{credential_id}\"."
+    }, 403, origin);
   }
 
   // Unseal the record
@@ -5792,23 +5891,51 @@ async function handleApiAttest(request, env) {
     }, 400, origin);
   }
 
-  // Optional: validate public_key if provided
-  if (public_key) {
-    if (!/^[0-9a-f]{64}$/.test(public_key)) {
-      return jsonResponse({
-        error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)"
-      }, 400, origin);
+  // S114CW: public_key is now REQUIRED (was optional). Needed for sig verify.
+  if (!public_key) {
+    return jsonResponse({
+      error: "Missing required field: public_key (64-char lowercase hex, Ed25519 raw)"
+    }, 400, origin);
+  }
+  if (!/^[0-9a-f]{64}$/.test(public_key)) {
+    return jsonResponse({
+      error: "public_key must be a 64-character lowercase hex string (Ed25519 public key)"
+    }, 400, origin);
+  }
+  // Verify public_key matches credential_id
+  const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const _cidBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+  const _cidComputed = Array.from(new Uint8Array(_cidBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  if (_cidComputed !== credential_id) {
+    return jsonResponse({
+      error: "public_key does not match the credential bound to this API key."
+    }, 400, origin);
+  }
+
+  // ── S114CW BLOCKS ANNOUNCE #1: Ed25519 signature verification ──
+  // Dual-canonical accept, mirroring handleRegisterProof (see that handler's
+  // rationale block). The X-API-Key header authenticates the caller's API
+  // key → credential binding; the Ed25519 signature authenticates that the
+  // credential holder (key possessor) consented to THIS specific attestation.
+  // Both gates must pass.
+  const _attestPV = protocol_version || "1.2";
+  const _canonHIPKit = [content_hash, credential_id, classification, attestedAt, _attestPV].join("|");
+  const _canonLegacy = [content_hash, (perceptual_hash || "NULL"), credential_id, attestedAt, classification].join("|");
+  const _enc = new TextEncoder();
+  let _sigOk = false;
+  try {
+    _sigOk = await verifyEd25519FromBytes(pubKeyBytes, signature, _enc.encode(_canonHIPKit));
+    if (!_sigOk) {
+      _sigOk = await verifyEd25519FromBytes(pubKeyBytes, signature, _enc.encode(_canonLegacy));
     }
-    // Verify public_key matches credential_id
-    const enc = new TextEncoder();
-    const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
-    const hashBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
-    const computedId = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
-    if (computedId !== credential_id) {
-      return jsonResponse({
-        error: "public_key does not match the credential bound to this API key."
-      }, 400, origin);
-    }
+  } catch (_e) {
+    return jsonResponse({ error: "Malformed signature" }, 400, origin);
+  }
+  if (!_sigOk) {
+    return jsonResponse({
+      error: "invalid_signature",
+      detail: "Signature does not verify against either HIPKit or legacy canonical form."
+    }, 403, origin);
   }
 
   // ── Gate 1: Credential must exist and be in good standing ──
@@ -5999,6 +6126,17 @@ async function handleApiAttest(request, env) {
 // has been attested via HIP. No authentication required.
 // This is the stable public API for integrators (CMS, galleries, auction houses, etc.).
 // The raw proof record is available via GET /api/proof/{hash} for advanced use.
+//
+// S114CW BLOCKS ANNOUNCE #1 closure: `verified: true` now REQUIRES a successful
+// Ed25519 signature re-verification against the stored public_key + binding
+// invariant SHA-256(public_key) === credential_id. Prior to S114CW this endpoint
+// returned `verified: true` on pure KV presence — a charter-level semantic
+// violation. Records stored before S114CW that were accepted without write-path
+// verify will now surface their true state: `verified: false, reason: "signature_invalid"`.
+// Pre-S38 records (no public_key stored) cannot be re-verified server-side; we
+// return `verified: true, signature_verified: "skipped_no_public_key"` to be
+// explicit about what happened — integrators who require cryptographic
+// verification can run client-side verify via proof.html.
 
 async function handleVerify(contentHash, request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
@@ -6023,10 +6161,59 @@ async function handleVerify(contentHash, request, env) {
 
   const record = JSON.parse(raw);
 
-  // Sealed records: confirm existence but withhold details
+  // Sealed records: confirm existence but withhold details. Still run sig
+  // re-verify if public_key is stored — sealed != exempt from verification.
+  const short_url = record.short_id
+    ? `https://hipprotocol.org/p/${record.short_id}`
+    : null;
+
+  // ── S114CW signature re-verification ──
+  let signatureVerified;         // true | false | "skipped_no_public_key"
+  let verifyFailureReason = null;
+
+  if (!record.public_key || !record.signature) {
+    signatureVerified = "skipped_no_public_key";
+  } else {
+    try {
+      const pubKeyBytes = new Uint8Array(record.public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+      // Binding check
+      const cidBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+      const cidComputed = Array.from(new Uint8Array(cidBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+      if (cidComputed !== record.credential_id) {
+        signatureVerified = false;
+        verifyFailureReason = "key_binding_failed";
+      } else {
+        // Dual-canonical verify, matching proof.html.
+        const pv = record.protocol_version || "1.2";
+        const canonHIPKit = [record.content_hash, record.credential_id, record.classification, record.attested_at, pv].join("|");
+        const canonLegacy = [record.content_hash, (record.perceptual_hash || "NULL"), record.credential_id, record.attested_at, record.classification].join("|");
+        const enc = new TextEncoder();
+        let ok = await verifyEd25519FromBytes(pubKeyBytes, record.signature, enc.encode(canonHIPKit));
+        if (!ok) {
+          ok = await verifyEd25519FromBytes(pubKeyBytes, record.signature, enc.encode(canonLegacy));
+        }
+        signatureVerified = ok === true;
+        if (!signatureVerified) verifyFailureReason = "signature_invalid";
+      }
+    } catch (_e) {
+      signatureVerified = false;
+      verifyFailureReason = "signature_malformed";
+    }
+  }
+
+  // Sealed branch (post-verify).
   if (record.sealed) {
+    if (signatureVerified === false) {
+      return jsonResponse({
+        verified: false,
+        content_hash: contentHash,
+        signature_verified: false,
+        reason: verifyFailureReason,
+      }, 200, origin);
+    }
     return jsonResponse({
       verified: true,
+      signature_verified: signatureVerified,
       record: {
         content_hash: contentHash,
         sealed: true,
@@ -6036,13 +6223,19 @@ async function handleVerify(contentHash, request, env) {
     }, 200, origin);
   }
 
-  // Public record: return integration-friendly verification response
-  const short_url = record.short_id
-    ? `https://hipprotocol.org/p/${record.short_id}`
-    : null;
+  // Public record: honor sig-verify result.
+  if (signatureVerified === false) {
+    return jsonResponse({
+      verified: false,
+      content_hash: contentHash,
+      signature_verified: false,
+      reason: verifyFailureReason,
+    }, 200, origin);
+  }
 
   return jsonResponse({
     verified: true,
+    signature_verified: signatureVerified,
     record: {
       content_hash: contentHash,
       classification: record.classification,
