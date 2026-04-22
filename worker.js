@@ -312,6 +312,22 @@ function isCollectionId(s) {
   return typeof s === "string" && /^[a-z2-7]{20}$/.test(s);
 }
 
+// S111CW SERIES-SPEC-v1 §1.1: series_id shape is identical to collection_id
+// (20-char RFC 4648 base32-lowercase), but the DERIVATION is different.
+// collection_id is DETERMINISTIC (base32(SHA-256(JCS(manifest))[:12])) and
+// idempotent-on-replay because the manifest carries the member list, so
+// same-bytes-in → same-id-out. series_id is CLIENT-RANDOM (~100 bits from
+// crypto.getRandomValues), because a series manifest does NOT encode its
+// members — two creators with coincidentally-identical titles/descriptions/
+// timestamps would otherwise squash each other, and first-writer-wins in
+// §2.4 only makes sense with randomly-generated ids. The server does NOT
+// generate series_id; the client sends it in the request body and the
+// server validates shape here + collision-checks against series:{id} in
+// the creation handler.
+function isSeriesId(s) {
+  return typeof s === "string" && /^[a-z2-7]{20}$/.test(s);
+}
+
 // JCS (RFC 8785) canonical JSON serializer — string output.
 // Pure function; throws on non-JSON values (undefined, BigInt, NaN, ±Infinity, lone surrogates).
 function jcsSerializeString(s) {
@@ -419,6 +435,28 @@ async function verifyEd25519FromBytes(pubkeyBytes, signatureB64, messageBytes) {
   if (sig.length !== 64) throw new Error("verifyEd25519FromBytes: signature must be 64 bytes, got " + sig.length);
   const key = await crypto.subtle.importKey("raw", pubkeyBytes, { name: "Ed25519" }, false, ["verify"]);
   return await crypto.subtle.verify({ name: "Ed25519" }, key, sig, messageBytes);
+}
+
+// S111CW SERIES-SPEC-v1 shared signature verification helper.
+// Used by /register-series (payload = manifest), /register-series-member
+// (payload = series_add event minus signature), and /close-series (payload
+// = series_close event minus signature). Per spec §7: every signed payload
+// is JCS-canonicalized, SHA-256-hashed, and Ed25519-verified against the
+// creator's base64 public key. Same cryptographic posture as
+// handleRegisterCollectionProof §3.2.5 but generalized over payload shape.
+//
+// The CALLER is responsible for stripping the `signature` field before
+// passing the payload — this helper does not mutate its input. Callers
+// that need to strip should do:
+//   const { signature, ...payload } = event;
+//   const ok = await verifySeriesSignature(payload, signature, pubKeyB64);
+//
+// Returns boolean. Throws on malformed base64, bad pubkey/signature length,
+// or JCS-unrepresentable payload — callers SHOULD try/catch and map
+// throws to 422 invalid_signature per spec §7.
+async function verifySeriesSignature(payload, signatureB64, publicKeyB64) {
+  const digest = await sha256Bytes(jcsCanonicalize(payload));
+  return await verifyEd25519(publicKeyB64, signatureB64, digest);
 }
 
 // Manifest validator per S105CW-COLLECTION-SPEC §3.1 + §3.2.
@@ -2263,6 +2301,172 @@ async function addToCredProofsIndex(env, credential_id, content_hash) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// S111CW — SERIES-SPEC-v1 KV schema + index helpers (Phase A)
+// ════════════════════════════════════════════════════════════════
+//
+// This block documents the six new KV key families introduced by
+// SERIES-SPEC-v1 + the S111 secondary-index optimization:
+//
+//   series:{series_id}
+//       Creation record. Value = JSON { series_id, manifest, signature,
+//       status: "open"|"closed", created_at, closed_at, member_count,
+//       last_event_at }. Manifest is immutable; status + closed_at +
+//       member_count + last_event_at are server-maintained (§1.1). Written
+//       by /register-series, updated in place by /register-series-member
+//       (member_count, last_event_at) and /close-series (status, closed_at).
+//
+//   series_event:{event_hash}
+//       Independently-signed add or close event. event_hash =
+//       SHA-256(JCS(event-minus-signature)). Value = JSON of the full
+//       event including its signature. Immutable after write (§1.2 +
+//       §1.3).
+//
+//   series_events:{series_id}
+//       Append-only ordering index. Value = JSON array of
+//       { event_hash, event_type: "series_add"|"series_close",
+//         applied_at: <server-clock ISO-8601> }. Newest-last per §1.4.
+//       applied_at is the authoritative display order — per-event
+//       added_at/closed_at client clocks are NOT used for ordering.
+//
+//   series_members:{series_id}  (S111 secondary index, permitted by spec §7.2)
+//       O(1) duplicate-member check for /register-series-member step 10
+//       without scanning the full series_events list. Value = JSON
+//       { members: [<member_hash>, ...], updated_at }. Spec §7.2 text:
+//       "Reference implementation may optimize this with a secondary
+//       index series_members:{series_id} — implementation detail." So
+//       this is in-spec. Idempotent append (indexOf guard).
+//
+//   affiliations:{content_hash}
+//       Multi-affiliation index (§1.5). Value = JSON array of
+//       { type: "series"|"collection", id, credential_id, added_at }.
+//       Dedup on {type, id} tuple. Written by /register-series-member
+//       (series affiliation) and by handleRegisterCollectionProof
+//       retrofit (collection affiliation — Phase B change). Newest-last
+//       append; clients reverse for newest-first rendering.
+//
+//   creator_series:{credential_id}
+//       Portfolio-enumeration index (§1.6). Value = JSON array of
+//       { series_id, created_at, status_at_write: "open" }. Newest-last.
+//       status_at_write is a CREATION-TIME SNAPSHOT — clients rendering
+//       a portfolio MUST re-read series:{series_id} for live status.
+//
+// All four write helpers below are NON-FATAL on failure (same posture as
+// addToCredProofsIndex above). A failed index write does NOT roll back
+// the primary record write; it just means an accelerator index is
+// temporarily stale, and an index-repair script would reconcile. This
+// matches the spec's §1.5.1 and §1.6 "consistent with addToCredProofsIndex
+// posture" language.
+
+// writeAffiliation: append one entry to affiliations:{content_hash},
+// dedup on {type, id} tuple (§1.5: "If the same {type, id, credential_id}
+// triple is already present, the server MUST NOT append a duplicate").
+// Entry shape: { type: "series"|"collection", id, credential_id, added_at }.
+// Newest-last append per spec.
+async function writeAffiliation(env, content_hash, entry) {
+  if (!content_hash || !entry || !entry.type || !entry.id) return;
+  try {
+    const key = `affiliations:${content_hash}`;
+    const raw = await env.DEDUP_KV.get(key);
+    let list = [];
+    if (raw) {
+      try { list = JSON.parse(raw); } catch (_) { list = []; }
+      if (!Array.isArray(list)) list = [];
+    }
+    // Dedup on {type, id} tuple per §1.5. credential_id is not part of
+    // the dedup key — two different credentials adding the same file
+    // to the same series_id cannot happen (only the creator writes),
+    // and two collections with the same id cannot exist (content-addressed).
+    for (const e of list) {
+      if (e && e.type === entry.type && e.id === entry.id) return;
+    }
+    list.push(entry);
+    await env.DEDUP_KV.put(key, JSON.stringify(list));
+  } catch (_) {
+    // Non-fatal per §1.5.1 + addToCredProofsIndex posture.
+  }
+}
+
+// writeCreatorSeriesIndex: append one entry to creator_series:{credential_id}
+// for portfolio enumeration (§1.6). Entry shape:
+// { series_id, created_at, status_at_write: "open" }. Newest-last append.
+// status_at_write is a creation-time snapshot and is NOT updated here
+// on subsequent closes — clients re-read series:{series_id} for live state.
+async function writeCreatorSeriesIndex(env, credential_id, entry) {
+  if (!credential_id || !entry || !entry.series_id) return;
+  try {
+    const key = `creator_series:${credential_id}`;
+    const raw = await env.DEDUP_KV.get(key);
+    let list = [];
+    if (raw) {
+      try { list = JSON.parse(raw); } catch (_) { list = []; }
+      if (!Array.isArray(list)) list = [];
+    }
+    // Idempotent on series_id — first-writer-wins per §2.4 means a
+    // legitimate collision overwrite already fails at the series:{id}
+    // pre-existence check, but guard here for safety in the narrow
+    // TOCTOU window where a double-creation might both reach the
+    // creator_series write.
+    for (const e of list) {
+      if (e && e.series_id === entry.series_id) return;
+    }
+    list.push(entry);
+    await env.DEDUP_KV.put(key, JSON.stringify(list));
+  } catch (_) {
+    // Non-fatal per §1.6 + addToCredProofsIndex posture.
+  }
+}
+
+// addToSeriesMembersIndex: append member_hash to series_members:{series_id}
+// for O(1) duplicate-member checks in /register-series-member step 10.
+// Spec §7.2 explicitly permits this secondary index as an implementation
+// detail. Idempotent append (indexOf guard).
+async function addToSeriesMembersIndex(env, series_id, member_hash) {
+  if (!series_id || !member_hash) return;
+  try {
+    const key = `series_members:${series_id}`;
+    const raw = await env.DEDUP_KV.get(key);
+    let record;
+    if (raw) {
+      try { record = JSON.parse(raw); } catch (_) { record = null; }
+    }
+    if (!record || !Array.isArray(record.members)) {
+      record = { members: [], updated_at: null };
+    }
+    if (record.members.indexOf(member_hash) !== -1) {
+      return; // already indexed — idempotent no-op
+    }
+    record.members.push(member_hash);
+    record.updated_at = new Date().toISOString();
+    await env.DEDUP_KV.put(key, JSON.stringify(record));
+  } catch (_) {
+    // Non-fatal: same posture as addToCredProofsIndex. Worst case is a
+    // false-miss on the duplicate check, which would double-write a
+    // series_event and double-increment member_count. That's recoverable
+    // via index repair; not a protocol violation.
+  }
+}
+
+// isSeriesMember: O(1) lookup against series_members:{series_id}. Returns
+// boolean. Used by /register-series-member step 10 to reject duplicates
+// per §7.2 "member_already_in_series" (400). On index miss (e.g., the
+// index write failed on a prior add), returns false — the caller SHOULD
+// treat false as "probably-not-a-member" with a fallback scan of
+// series_events:{series_id} only if strict dedup is required. For v1 we
+// trust the index.
+async function isSeriesMember(env, series_id, member_hash) {
+  if (!series_id || !member_hash) return false;
+  try {
+    const raw = await env.DEDUP_KV.get(`series_members:${series_id}`);
+    if (!raw) return false;
+    const record = JSON.parse(raw);
+    if (!record || !Array.isArray(record.members)) return false;
+    return record.members.indexOf(member_hash) !== -1;
+  } catch (_) {
+    return false;
+  }
+}
+
 
 // S96: POST /retire-credential — Voluntary credential retirement (Level 2)
 // Sets superseded_by:"self-retired" on the trust record, blocking all future
@@ -3558,6 +3762,1013 @@ async function handleRegisterCollectionProof(request, env) {
   };
   if (warnings.length) response.warnings = warnings;
   return jsonResponse(response, 200, origin);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// S111CW — SERIES-SPEC-v1 write handlers (Phase B)
+// ══════════════════════════════════════════════════════════════════════
+// Three POST endpoints implementing SERIES-SPEC-v1 §7.1, §7.2, §7.3.
+// All three follow the handleRegisterCollectionProof auth pattern:
+// manifest/event carries creator.credential_id + creator.public_key;
+// server reads trust:{id} for retirement check; Ed25519 verify is done
+// server-side via verifySeriesSignature (Phase A helper).
+//
+// Validation-order fidelity: each handler executes checks in the exact
+// order spec §7.1/§7.2/§7.3 prescribes, so error codes match spec.
+// Per-handler comments call out the numbered step from the spec.
+
+// validateSeriesManifest — pure structural/field validator per spec
+// §1.1 + §4.6. Returns { ok, errors[], canonicalBytes }. Does NOT read
+// KV, does NOT verify signatures (endpoint's job), does NOT clock-drift
+// the issued_at. Mirrors validateManifest() (collections) but for the
+// series manifest shape.
+function validateSeriesManifest(manifest) {
+  const errors = [];
+  const push = (code, detail, field) => {
+    const e = { code };
+    if (detail !== undefined) e.detail = detail;
+    if (field !== undefined) e.field = field;
+    errors.push(e);
+  };
+
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    push("invalid_manifest", "manifest must be a JSON object");
+    return { ok: false, errors, canonicalBytes: null };
+  }
+
+  // schema_version — v1 locked to hip-series-1.0 per §1.1.
+  if (manifest.schema_version !== "hip-series-1.0") {
+    push("invalid_manifest_field", 'schema_version must be "hip-series-1.0"', "schema_version");
+  }
+
+  // issued_at — required ISO-8601 UTC, must parse (no drift check per spec).
+  if (typeof manifest.issued_at !== "string"
+      || Number.isNaN(Date.parse(manifest.issued_at))) {
+    push("invalid_manifest_field", "issued_at must be a valid ISO-8601 UTC timestamp", "issued_at");
+  }
+
+  // title — 1 to 200 chars, trimmed. §4.6 says server MUST trim before
+  // verification; clients MUST also trim before signing. We do NOT mutate
+  // manifest here — we validate its as-signed form. Clients that signed
+  // an untrimmed title will fail here rather than silently letting the
+  // server trim and re-sign something the creator didn't approve.
+  if (typeof manifest.title !== "string") {
+    push("invalid_manifest_field", "title must be a string", "title");
+  } else if (manifest.title !== manifest.title.trim()) {
+    push("invalid_manifest_field", "title must have no leading/trailing whitespace", "title");
+  } else if (manifest.title.length < 1 || manifest.title.length > 200) {
+    push("invalid_manifest_field", "title must be 1 to 200 characters", "title");
+  }
+
+  // description — 0 to 2000 chars, trimmed. Optional but when present must
+  // satisfy the trimmed/length constraint. §4.5 says zero-length is legal
+  // as "" (empty string); absent is also legal.
+  if (manifest.description !== undefined) {
+    if (typeof manifest.description !== "string") {
+      push("invalid_manifest_field", "description must be a string", "description");
+    } else if (manifest.description !== manifest.description.trim()) {
+      push("invalid_manifest_field", "description must have no leading/trailing whitespace", "description");
+    } else if (manifest.description.length > 2000) {
+      push("invalid_manifest_field", "description must be 0 to 2000 characters", "description");
+    }
+  }
+
+  // cover_member_hash — optional 64-hex lowercase if present.
+  if (manifest.cover_member_hash !== undefined) {
+    if (!isHex64Lower(manifest.cover_member_hash)) {
+      push("invalid_manifest_field", "cover_member_hash must be 64 lowercase hex chars", "cover_member_hash");
+    }
+  }
+
+  // creator — required object with credential_id, tier, public_key.
+  if (typeof manifest.creator !== "object" || manifest.creator === null || Array.isArray(manifest.creator)) {
+    push("invalid_manifest_field", "creator must be an object", "creator");
+  } else {
+    if (!isHex64Lower(manifest.creator.credential_id)) {
+      push("invalid_manifest_field", "creator.credential_id must be 64 lowercase hex chars", "creator.credential_id");
+    }
+    if (manifest.creator.tier !== 1 && manifest.creator.tier !== 2 && manifest.creator.tier !== 3) {
+      push("invalid_manifest_field", "creator.tier must be 1, 2, or 3", "creator.tier");
+    }
+    const pubBytes = normalizePubkeyFromB64(manifest.creator.public_key);
+    if (!pubBytes) {
+      push("invalid_manifest_field", "creator.public_key must be a base64 Ed25519 public key (32 bytes)", "creator.public_key");
+    }
+  }
+
+  if (errors.length) return { ok: false, errors, canonicalBytes: null };
+
+  // Canonicalize (may throw on JCS-unrepresentable values — caller should
+  // try/catch the whole function call if it wants to map throws cleanly).
+  let canonicalBytes;
+  try {
+    canonicalBytes = jcsCanonicalize(manifest);
+  } catch (e) {
+    return { ok: false, errors: [{ code: "invalid_manifest", detail: "manifest not JCS-representable: " + e.message }], canonicalBytes: null };
+  }
+  return { ok: true, errors: [], canonicalBytes };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// POST /register-series — SERIES-SPEC-v1 §7.1
+// ──────────────────────────────────────────────────────────────────────
+// Creation. Client generates series_id (client-random, §1.1); server
+// validates shape + collision-checks + validates manifest + verifies
+// signature + writes series:{id} + appends to creator_series:{cred_id}.
+//
+// Validation order (spec §7.1):
+//   1. Parse JSON                             → 400 malformed_body
+//   2. Shape-check series_id                  → 400 invalid_series_id
+//   3. Pre-existence on series:{id}           → 400 series_id_collision
+//   4. Credential trust-record check          → 401 unknown_credential
+//                                              403 credential_revoked
+//                                              403 credential_tier_mismatch
+//                                              403 credential_key_mismatch
+//   5. TI ≥ 60                                → 403 trust_index_below_floor
+//   6. Rate-limit (unified attest budget)     → 429 rate_limited
+//   7. Manifest field validation              → 400 invalid_manifest /
+//                                                400 invalid_manifest_field
+//   8. JCS + SHA-256 + Ed25519-verify         → 422 invalid_signature
+//   9. Write series:{id} (status="open",
+//      created_at, member_count=0,
+//      closed_at=null, last_event_at=created)
+//  10. Append creator_series:{cred_id} idx    (non-fatal)
+//  11. Increment rate counters
+async function handleRegisterSeries(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── 1. Parse body ──
+  let rawBody;
+  try { rawBody = await request.text(); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (rawBody.length > 1_048_576) {
+    return jsonResponse({ error: "manifest_too_large" }, 413, origin);
+  }
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+
+  const { series_id, manifest, signature } = body;
+  if (typeof signature !== "string" || signature.length === 0) {
+    return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+
+  // ── 2. Shape-check series_id ──
+  if (!isSeriesId(series_id)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+
+  // ── 3. Pre-existence check (first-writer-wins per §2.4) ──
+  const seriesKey = `series:${series_id}`;
+  const existing = await env.DEDUP_KV.get(seriesKey);
+  if (existing) {
+    return jsonResponse({ error: "series_id_collision" }, 400, origin);
+  }
+
+  // ── 4. Credential trust-record check (mirrors handleRegisterCollectionProof) ──
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    // Must reach this shape-check before reading credential_id from it.
+    return jsonResponse({ error: "invalid_manifest" }, 400, origin);
+  }
+  if (typeof manifest.creator !== "object" || manifest.creator === null) {
+    return jsonResponse({ error: "invalid_manifest_field", field: "creator" }, 400, origin);
+  }
+  const credentialId = manifest.creator.credential_id;
+  if (!isHex64Lower(credentialId)) {
+    return jsonResponse({ error: "invalid_manifest_field", field: "creator.credential_id" }, 400, origin);
+  }
+  const manifestPubKeyBytes = normalizePubkeyFromB64(manifest.creator.public_key);
+  if (!manifestPubKeyBytes) {
+    return jsonResponse({ error: "invalid_manifest_field", field: "creator.public_key" }, 400, origin);
+  }
+
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credentialId}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "unknown_credential" }, 401, origin);
+  }
+  let trustRecord;
+  try { trustRecord = JSON.parse(trustRaw); }
+  catch (_) { return jsonResponse({ error: "unknown_credential" }, 401, origin); }
+
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "credential_retired",
+      revoked_at: trustRecord.superseded_at || null,
+    }, 403, origin);
+  }
+  if (trustRecord.tier !== manifest.creator.tier) {
+    return jsonResponse({
+      error: "credential_tier_mismatch",
+      actual_tier: trustRecord.tier,
+    }, 403, origin);
+  }
+  // Public key match (manifest is base64, trust is hex — compare as bytes).
+  if (trustRecord.public_key) {
+    const storedBytes = normalizePubkeyFromHex(trustRecord.public_key);
+    if (!storedBytes || !bytesEqual(storedBytes, manifestPubKeyBytes)) {
+      return jsonResponse({ error: "credential_key_mismatch" }, 403, origin);
+    }
+  } else {
+    // Legacy trust record without public_key: verify SHA-256(pubkey) === credential_id.
+    const computedDigest = await crypto.subtle.digest("SHA-256", manifestPubKeyBytes);
+    const computedIdHex = bytesToHexLower(new Uint8Array(computedDigest));
+    if (computedIdHex !== credentialId) {
+      return jsonResponse({ error: "credential_key_mismatch" }, 403, origin);
+    }
+  }
+
+  // ── 5. TI ≥ 60 attest floor (HP-SPEC-v1_3 §TI) ──
+  if ((trustRecord.trust_index ?? trustRecord.trust_score ?? 0) < 60) {
+    return jsonResponse({
+      error: "trust_index_below_floor",
+      detail: `Credential TI (${trustRecord.trust_index ?? trustRecord.trust_score ?? 0}) is below the 60 attest floor.`,
+    }, 403, origin);
+  }
+
+  // ── 6. Rate-limit — shared with register-proof per §2.1 "unified attest budget" ──
+  // Uses the same prate:{cred_hash} key + tier-differentiated 24h limits as
+  // handleRegisterProof. NOTE: spec §2.1 states unified 20/24h + 100/7d; the
+  // actual impl here uses T1=50/T2=25/T3=10 (pre-existing drift flagged in
+  // CLAUDE.md). S111 matches running behavior for consistency; the limit-
+  // number reconciliation is a separate decision.
+  const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + credentialId);
+  const rateKey = `prate:${credHash}`;
+  const rateRaw = await env.DEDUP_KV.get(rateKey);
+  let rateCount = 0;
+  if (rateRaw) {
+    try { rateCount = JSON.parse(rateRaw).count || 0; } catch (_) { rateCount = 0; }
+  }
+  const tierLimits = { 1: 50, 2: 25, 3: 10 };
+  const limit = tierLimits[trustRecord.tier] || 10;
+  if (rateCount >= limit) {
+    return jsonResponse({
+      error: "rate_limited",
+      detail: `Rate limit exceeded. Maximum ${limit} writes per 24 hours for Tier ${trustRecord.tier}.`,
+      limit,
+      current: rateCount,
+    }, 429, origin);
+  }
+
+  // ── 7. Full manifest field validation per §4.6 ──
+  const mv = validateSeriesManifest(manifest);
+  if (!mv.ok) {
+    const first = mv.errors[0] || { code: "invalid_manifest" };
+    return jsonResponse(first, 400, origin);
+  }
+  const manifestBytes = mv.canonicalBytes;
+
+  // ── 8. Ed25519 verify over SHA-256(JCS(manifest)) ──
+  const digestBytes = await sha256Bytes(manifestBytes);
+  let verified = false;
+  try {
+    verified = await verifyEd25519(manifest.creator.public_key, signature, digestBytes);
+  } catch (_) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+  if (!verified) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+
+  // ── 9. Write series:{id} ──
+  const createdAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const seriesRecord = {
+    series_id,
+    manifest,
+    signature,
+    status: "open",
+    created_at: createdAt,
+    closed_at: null,
+    member_count: 0,
+    last_event_at: createdAt,
+  };
+  await env.DEDUP_KV.put(seriesKey, JSON.stringify(seriesRecord));
+
+  // ── 10. Append creator_series:{cred_id} (non-fatal) ──
+  await writeCreatorSeriesIndex(env, credentialId, {
+    series_id,
+    created_at: createdAt,
+    status_at_write: "open",
+  });
+
+  // ── 11. Increment rate counters (24h + 7d, same pattern as handleRegisterProof) ──
+  await env.DEDUP_KV.put(rateKey, JSON.stringify({
+    count: rateCount + 1,
+    last_registration: createdAt,
+  }), { expirationTtl: 86400 });
+  const weeklyHash = await hmacSHA256(env.DEDUP_SECRET, "wrate:" + credentialId);
+  const weeklyKey = `wrate:${weeklyHash}`;
+  const weeklyRaw = await env.DEDUP_KV.get(weeklyKey);
+  const weeklyCount = weeklyRaw ? (JSON.parse(weeklyRaw).count || 0) : 0;
+  await env.DEDUP_KV.put(weeklyKey, JSON.stringify({
+    count: weeklyCount + 1,
+    last_registration: createdAt,
+  }), { expirationTtl: 604800 });
+
+  return jsonResponse({
+    series_id,
+    status: "open",
+    created_at: createdAt,
+    short_url: `https://hipprotocol.org/s/${series_id}`,
+  }, 200, origin);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// POST /register-series-member — SERIES-SPEC-v1 §7.2
+// ──────────────────────────────────────────────────────────────────────
+// Add a member to an open series. Request body: { event, signature }.
+// The event.signature is derived from body.signature (spec §7.2 stores
+// the signed event with signature inside series_event:{event_hash}).
+//
+// Validation order (spec §7.2):
+//   1. Parse JSON                             → 400 malformed_body
+//   2. event.event_type === "series_add"      → 400 invalid_event_type
+//   3. event.member_type === "file"           → 400 invalid_member_type
+//   4. Shape-check series_id, member_hash,
+//      added_by_credential_id                 → 400 invalid_*
+//   5. Read series:{id}                       → 404 series_not_found
+//   6. status === "open"                      → 400 series_closed
+//   7. added_by_credential_id ===
+//      series.manifest.creator.credential_id  → 403 not_series_creator
+//   8. trust_record.superseded_by not set     → 403 credential_retired
+//   9. Read proof:{member_hash}               → 404 member_proof_not_found
+//  10. Duplicate check (series_members idx)   → 400 member_already_in_series
+//  11. Rate-limit                             → 429 rate_limited
+//  12. JCS + SHA-256 + Ed25519-verify         → 422 invalid_signature
+//  13. Write series_event:{event_hash}
+//  14. Append series_events:{series_id}
+//  15. Increment series.member_count,
+//      update series.last_event_at
+//  16. Add to series_members:{series_id} idx
+//  17. Write affiliations:{member_hash}       (non-fatal, dedup)
+//  18. Increment rate counters
+async function handleRegisterSeriesMember(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── 1. Parse body ──
+  let rawBody;
+  try { rawBody = await request.text(); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (rawBody.length > 262_144) { // 256 KB — events are tiny vs manifests
+    return jsonResponse({ error: "event_too_large" }, 413, origin);
+  }
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+
+  const { event, signature } = body;
+  if (typeof event !== "object" || event === null || Array.isArray(event)) {
+    return jsonResponse({ error: "missing_field", field: "event" }, 400, origin);
+  }
+  if (typeof signature !== "string" || signature.length === 0) {
+    return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+
+  // ── 2. event.event_type === "series_add" ──
+  if (event.event_type !== "series_add") {
+    return jsonResponse({ error: "invalid_event_type" }, 400, origin);
+  }
+  // schema_version sanity — v1 locked.
+  if (event.schema_version !== "hip-series-event-1.0") {
+    return jsonResponse({ error: "invalid_event_schema_version" }, 400, origin);
+  }
+  // added_at parseable (provenance only — no drift check).
+  if (typeof event.added_at !== "string" || Number.isNaN(Date.parse(event.added_at))) {
+    return jsonResponse({ error: "invalid_event_field", field: "added_at" }, 400, origin);
+  }
+
+  // ── 3. event.member_type === "file" (§1.2 forward-compat) ──
+  if (event.member_type !== "file") {
+    return jsonResponse({ error: "invalid_member_type" }, 400, origin);
+  }
+
+  // ── 4. Shape-check ids ──
+  if (!isSeriesId(event.series_id)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+  if (!isHex64Lower(event.member_hash)) {
+    return jsonResponse({ error: "invalid_member_hash" }, 400, origin);
+  }
+  if (!isHex64Lower(event.added_by_credential_id)) {
+    return jsonResponse({ error: "invalid_credential_id" }, 400, origin);
+  }
+
+  // ── 5. Read series:{id} ──
+  const seriesKey = `series:${event.series_id}`;
+  const seriesRaw = await env.DEDUP_KV.get(seriesKey);
+  if (!seriesRaw) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+  let seriesRecord;
+  try { seriesRecord = JSON.parse(seriesRaw); }
+  catch (_) { return jsonResponse({ error: "series_not_found" }, 404, origin); }
+  if (!seriesRecord || !seriesRecord.manifest || !seriesRecord.manifest.creator) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  // ── 6. status === "open" ──
+  if (seriesRecord.status !== "open") {
+    return jsonResponse({ error: "series_closed" }, 400, origin);
+  }
+
+  // ── 7. Credential must match the series creator ──
+  if (event.added_by_credential_id !== seriesRecord.manifest.creator.credential_id) {
+    return jsonResponse({ error: "not_series_creator" }, 403, origin);
+  }
+
+  // ── 8. Trust-record retirement check ──
+  const trustRaw = await env.DEDUP_KV.get(`trust:${event.added_by_credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "unknown_credential" }, 401, origin);
+  }
+  let trustRecord;
+  try { trustRecord = JSON.parse(trustRaw); }
+  catch (_) { return jsonResponse({ error: "unknown_credential" }, 401, origin); }
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "credential_retired",
+      revoked_at: trustRecord.superseded_at || null,
+    }, 403, origin);
+  }
+
+  // ── 9. Read proof:{member_hash} ──
+  const memberProofRaw = await env.DEDUP_KV.get(`proof:${event.member_hash}`);
+  if (!memberProofRaw) {
+    return jsonResponse({ error: "member_proof_not_found" }, 404, origin);
+  }
+
+  // ── 10. Duplicate check via series_members secondary index ──
+  if (await isSeriesMember(env, event.series_id, event.member_hash)) {
+    return jsonResponse({ error: "member_already_in_series" }, 400, origin);
+  }
+
+  // ── 11. Rate-limit (unified attest budget, same as creation) ──
+  const credHash = await hmacSHA256(env.DEDUP_SECRET, "prate:" + event.added_by_credential_id);
+  const rateKey = `prate:${credHash}`;
+  const rateRaw = await env.DEDUP_KV.get(rateKey);
+  let rateCount = 0;
+  if (rateRaw) {
+    try { rateCount = JSON.parse(rateRaw).count || 0; } catch (_) { rateCount = 0; }
+  }
+  const tierLimits = { 1: 50, 2: 25, 3: 10 };
+  const limit = tierLimits[trustRecord.tier] || 10;
+  if (rateCount >= limit) {
+    return jsonResponse({
+      error: "rate_limited",
+      limit,
+      current: rateCount,
+    }, 429, origin);
+  }
+
+  // ── 12. Ed25519-verify event signature against series creator's public key ──
+  // Per spec §7.2: signed payload is JCS(event), server computes event_hash =
+  // SHA-256(JCS(event)). Verification uses series.manifest.creator.public_key
+  // (the cryptographically-authoritative key locked at series creation).
+  const creatorPubKeyB64 = seriesRecord.manifest.creator.public_key;
+  let verified = false;
+  try {
+    verified = await verifySeriesSignature(event, signature, creatorPubKeyB64);
+  } catch (_) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+  if (!verified) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+
+  // ── 13. Compute event_hash + write series_event:{event_hash} ──
+  // event_hash per §1.2 = SHA-256(JCS(event minus signature)). Since the
+  // request separates event and signature, body.event already excludes the
+  // signature — no stripping needed. Hex lowercase per WF-SPEC.
+  const eventHashHex = await sha256Hex(jcsCanonicalize(event));
+  const appliedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  // Stored form = event + signature field (per §7.6 response shape).
+  const storedEvent = { ...event, signature };
+  await env.DEDUP_KV.put(`series_event:${eventHashHex}`, JSON.stringify(storedEvent));
+
+  // ── 14. Append series_events:{series_id} ──
+  const eventsListKey = `series_events:${event.series_id}`;
+  const eventsListRaw = await env.DEDUP_KV.get(eventsListKey);
+  let eventsList = [];
+  if (eventsListRaw) {
+    try { eventsList = JSON.parse(eventsListRaw); } catch (_) { eventsList = []; }
+    if (!Array.isArray(eventsList)) eventsList = [];
+  }
+  eventsList.push({
+    event_hash: eventHashHex,
+    event_type: "series_add",
+    applied_at: appliedAt,
+  });
+  await env.DEDUP_KV.put(eventsListKey, JSON.stringify(eventsList));
+
+  // ── 15. Update series:{id} with member_count + last_event_at ──
+  seriesRecord.member_count = (seriesRecord.member_count || 0) + 1;
+  seriesRecord.last_event_at = appliedAt;
+  await env.DEDUP_KV.put(seriesKey, JSON.stringify(seriesRecord));
+
+  // ── 16. Add to series_members:{series_id} (secondary index for dupe check) ──
+  await addToSeriesMembersIndex(env, event.series_id, event.member_hash);
+
+  // ── 17. Write affiliations:{member_hash} (non-fatal) ──
+  await writeAffiliation(env, event.member_hash, {
+    type: "series",
+    id: event.series_id,
+    credential_id: event.added_by_credential_id,
+    added_at: appliedAt,
+  });
+
+  // ── 18. Increment rate counters ──
+  await env.DEDUP_KV.put(rateKey, JSON.stringify({
+    count: rateCount + 1,
+    last_registration: appliedAt,
+  }), { expirationTtl: 86400 });
+  const weeklyHash = await hmacSHA256(env.DEDUP_SECRET, "wrate:" + event.added_by_credential_id);
+  const weeklyKey = `wrate:${weeklyHash}`;
+  const weeklyRaw = await env.DEDUP_KV.get(weeklyKey);
+  const weeklyCount = weeklyRaw ? (JSON.parse(weeklyRaw).count || 0) : 0;
+  await env.DEDUP_KV.put(weeklyKey, JSON.stringify({
+    count: weeklyCount + 1,
+    last_registration: appliedAt,
+  }), { expirationTtl: 604800 });
+
+  return jsonResponse({
+    event_hash: eventHashHex,
+    series_id: event.series_id,
+    member_hash: event.member_hash,
+    applied_at: appliedAt,
+    member_count: seriesRecord.member_count,
+  }, 200, origin);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// POST /close-series — SERIES-SPEC-v1 §7.3
+// ──────────────────────────────────────────────────────────────────────
+// Close an open series. Terminal, idempotent-rejecting operation:
+// closing an already-closed series returns 400 series_already_closed
+// per §1.3. NOT rate-limited per §2.3.
+//
+// Validation order (spec §7.3):
+//   1. Parse JSON                             → 400 malformed_body
+//   2. event.event_type === "series_close"    → 400 invalid_event_type
+//   3. Shape-check series_id,
+//      closed_by_credential_id                → 400 invalid_*
+//   4. Read series:{id}                       → 404 series_not_found
+//   5. status === "open"                      → 400 series_already_closed
+//   6. closed_by_credential_id ===
+//      series.manifest.creator.credential_id  → 403 not_series_creator
+//   7. Trust-record retirement check          → 403 credential_retired
+//   8. JCS + SHA-256 + Ed25519-verify         → 422 invalid_signature
+//   9. Write series_event:{event_hash}
+//  10. Append series_events:{series_id}
+//  11. Update series.status="closed",
+//      series.closed_at = event.closed_at
+async function handleCloseSeries(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  // ── 1. Parse body ──
+  let rawBody;
+  try { rawBody = await request.text(); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (rawBody.length > 262_144) {
+    return jsonResponse({ error: "event_too_large" }, 413, origin);
+  }
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch (_) { return jsonResponse({ error: "malformed_body" }, 400, origin); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "malformed_body" }, 400, origin);
+  }
+
+  const { event, signature } = body;
+  if (typeof event !== "object" || event === null || Array.isArray(event)) {
+    return jsonResponse({ error: "missing_field", field: "event" }, 400, origin);
+  }
+  if (typeof signature !== "string" || signature.length === 0) {
+    return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+
+  // ── 2. event.event_type === "series_close" ──
+  if (event.event_type !== "series_close") {
+    return jsonResponse({ error: "invalid_event_type" }, 400, origin);
+  }
+  if (event.schema_version !== "hip-series-event-1.0") {
+    return jsonResponse({ error: "invalid_event_schema_version" }, 400, origin);
+  }
+  if (typeof event.closed_at !== "string" || Number.isNaN(Date.parse(event.closed_at))) {
+    return jsonResponse({ error: "invalid_event_field", field: "closed_at" }, 400, origin);
+  }
+
+  // ── 3. Shape-check ids ──
+  if (!isSeriesId(event.series_id)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+  if (!isHex64Lower(event.closed_by_credential_id)) {
+    return jsonResponse({ error: "invalid_credential_id" }, 400, origin);
+  }
+
+  // ── 4. Read series:{id} ──
+  const seriesKey = `series:${event.series_id}`;
+  const seriesRaw = await env.DEDUP_KV.get(seriesKey);
+  if (!seriesRaw) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+  let seriesRecord;
+  try { seriesRecord = JSON.parse(seriesRaw); }
+  catch (_) { return jsonResponse({ error: "series_not_found" }, 404, origin); }
+  if (!seriesRecord || !seriesRecord.manifest || !seriesRecord.manifest.creator) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  // ── 5. status === "open" ──
+  if (seriesRecord.status !== "open") {
+    return jsonResponse({ error: "series_already_closed" }, 400, origin);
+  }
+
+  // ── 6. Credential must match the series creator ──
+  if (event.closed_by_credential_id !== seriesRecord.manifest.creator.credential_id) {
+    return jsonResponse({ error: "not_series_creator" }, 403, origin);
+  }
+
+  // ── 7. Trust-record retirement check ──
+  const trustRaw = await env.DEDUP_KV.get(`trust:${event.closed_by_credential_id}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "unknown_credential" }, 401, origin);
+  }
+  let trustRecord;
+  try { trustRecord = JSON.parse(trustRaw); }
+  catch (_) { return jsonResponse({ error: "unknown_credential" }, 401, origin); }
+  if (trustRecord.superseded_by) {
+    return jsonResponse({
+      error: "credential_retired",
+      revoked_at: trustRecord.superseded_at || null,
+    }, 403, origin);
+  }
+
+  // ── 8. Ed25519-verify event signature against series creator's public key ──
+  const creatorPubKeyB64 = seriesRecord.manifest.creator.public_key;
+  let verified = false;
+  try {
+    verified = await verifySeriesSignature(event, signature, creatorPubKeyB64);
+  } catch (_) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+  if (!verified) {
+    return jsonResponse({ error: "invalid_signature" }, 422, origin);
+  }
+
+  // ── 9. Compute event_hash + write series_event:{event_hash} ──
+  const eventHashHex = await sha256Hex(jcsCanonicalize(event));
+  const appliedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const storedEvent = { ...event, signature };
+  await env.DEDUP_KV.put(`series_event:${eventHashHex}`, JSON.stringify(storedEvent));
+
+  // ── 10. Append series_events:{series_id} ──
+  const eventsListKey = `series_events:${event.series_id}`;
+  const eventsListRaw = await env.DEDUP_KV.get(eventsListKey);
+  let eventsList = [];
+  if (eventsListRaw) {
+    try { eventsList = JSON.parse(eventsListRaw); } catch (_) { eventsList = []; }
+    if (!Array.isArray(eventsList)) eventsList = [];
+  }
+  eventsList.push({
+    event_hash: eventHashHex,
+    event_type: "series_close",
+    applied_at: appliedAt,
+  });
+  await env.DEDUP_KV.put(eventsListKey, JSON.stringify(eventsList));
+
+  // ── 11. Flip series status + stamp closed_at ──
+  seriesRecord.status = "closed";
+  seriesRecord.closed_at = event.closed_at;
+  seriesRecord.last_event_at = appliedAt;
+  await env.DEDUP_KV.put(seriesKey, JSON.stringify(seriesRecord));
+
+  return jsonResponse({
+    event_hash: eventHashHex,
+    series_id: event.series_id,
+    status: "closed",
+    closed_at: event.closed_at,
+  }, 200, origin);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// S111CW Phase C — SERIES-SPEC-v1 read endpoints (§7.4–§7.8)
+// ══════════════════════════════════════════════════════════════════════
+// Five public, no-auth read handlers. All five are idempotent and safe
+// to cache at the edge (Cloudflare's default caching is sufficient; none
+// write back to KV). Shared posture:
+//
+//   • Shape-validate the path parameter first (400 on malformed input).
+//   • Read the primary KV record (404 when the resource doesn't exist,
+//     per each §7.X's step list — these are 404s, not 400s, even though
+//     the shape was valid).
+//   • For paginated endpoints (§7.6, §7.7), cap at 500 newest-first with
+//     `truncated: true` when the underlying list is longer. Indices are
+//     stored newest-last (append-only) per §1.4/§1.6, so we reverse
+//     in-handler before slicing.
+//   • Dereference companion records (event_hash → series_event, series_id
+//     → series) via Promise.all to avoid CPU-time exhaustion on a 500-
+//     entry page — 500 sequential KV reads would comfortably exceed the
+//     10 ms CPU budget. Malformed/missing companion records are skipped
+//     silently rather than failing the whole page.
+//
+// No /c/-style OG-preview HTML path here. §7.4 returns a pure 302 redirect
+// — the landing HTML (series.html, S112+) owns card rendering.
+
+// ──────────────────────────────────────────────────────────────────────
+// GET /s/{series_id} — SERIES-SPEC-v1 §7.4
+// ──────────────────────────────────────────────────────────────────────
+// Short-URL resolver, symmetric with /c/{collection_id}. Emits 302 to
+// the card-rendering landing page. Spec §7.4 proposes
+// `series.html?id={series_id}` as the default destination; we honor it
+// (implementations MAY diverge, but no reason to here).
+//
+// HEAD is accepted per §7.4: "handlers SHOULD also accept HEAD and return
+// the same 302 Location header with no body, to support link-checkers
+// and crawlers." Routing is the same — the Response has a null body,
+// which works for both. Cloudflare's runtime strips any body for HEAD
+// responses regardless.
+//
+// Validation order (§7.4):
+//   1. Method is GET/HEAD — enforced by dispatch gate.
+//   2. Shape-check series_id          → 400 invalid_series_id
+//   3. Read series:{series_id}        → 404 series_not_found
+//   4. Parse + status ∈ {open,closed} → 404 series_not_found
+async function handleSeriesShortUrl(shortId, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isSeriesId(shortId)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`series:${shortId}`);
+  if (!raw) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "series_not_found" }, 404, origin); }
+
+  // Defensive: unexpected status values (not "open"/"closed") hit 404
+  // rather than leaking a garbage redirect. Mirrors handleShortUrl's
+  // "collection_hash is 64-hex before emitting" defensive check.
+  if (!record
+      || (record.status !== "open" && record.status !== "closed")) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Location": `https://hipprotocol.org/series.html?id=${shortId}`,
+      ...corsHeaders(origin),
+    },
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// GET /api/series/{series_id} — SERIES-SPEC-v1 §7.5
+// ──────────────────────────────────────────────────────────────────────
+// JSON read of the series creation record. Public, no auth. Response
+// shape matches §7.5 verbatim; short_url is stamped on the response
+// (not stored in KV — derivable from series_id) for client convenience.
+//
+// Validation order (§7.5):
+//   1. Shape-check series_id         → 400 invalid_series_id
+//   2. Read series:{series_id}       → 404 series_not_found
+async function handleGetSeries(seriesId, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isSeriesId(seriesId)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`series:${seriesId}`);
+  if (!raw) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  let record;
+  try { record = JSON.parse(raw); }
+  catch (_) { return jsonResponse({ error: "series_not_found" }, 404, origin); }
+  if (!record || !record.series_id) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  // Stamp short_url at response time per §7.5. Not part of the stored
+  // record — always derivable from series_id.
+  record.short_url = `https://hipprotocol.org/s/${seriesId}`;
+
+  return jsonResponse(record, 200, origin);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// GET /api/series/{series_id}/events — SERIES-SPEC-v1 §7.6
+// ──────────────────────────────────────────────────────────────────────
+// Paginated event list, 500 cap, newest-first. Each entry dereferences
+// to the full signed event record in series_event:{event_hash} so
+// consumers can independently verify signatures against the creator's
+// public key (fetched via /api/series/{id} → manifest.creator.public_key).
+//
+// The stored index series_events:{series_id} is newest-last per §1.4.
+// We reverse in-handler, cap at 500, then Promise.all the individual
+// series_event fetches. 500 sequential KV reads would bust the CPU
+// budget; parallel reads complete comfortably under 10 ms.
+//
+// Validation order (§7.6):
+//   1. Shape-check series_id                 → 400 invalid_series_id
+//   2. Read series:{series_id}               → 404 series_not_found
+//   3. Read series_events:{series_id} — OK if missing (returns [])
+async function handleGetSeriesEvents(seriesId, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isSeriesId(seriesId)) {
+    return jsonResponse({ error: "invalid_series_id" }, 400, origin);
+  }
+
+  const seriesRaw = await env.DEDUP_KV.get(`series:${seriesId}`);
+  if (!seriesRaw) {
+    return jsonResponse({ error: "series_not_found" }, 404, origin);
+  }
+
+  const indexRaw = await env.DEDUP_KV.get(`series_events:${seriesId}`);
+  let index = [];
+  if (indexRaw) {
+    try { index = JSON.parse(indexRaw); } catch (_) { index = []; }
+    if (!Array.isArray(index)) index = [];
+  }
+
+  // Stored newest-last → reverse for newest-first.
+  const reversed = index.slice().reverse();
+  const CAP = 500;
+  const truncated = reversed.length > CAP;
+  const capped = truncated ? reversed.slice(0, CAP) : reversed;
+
+  // Parallel dereference of each event_hash → series_event:{hash}.
+  const eventRaws = await Promise.all(
+    capped.map(e => {
+      if (!e || typeof e.event_hash !== "string") return null;
+      return env.DEDUP_KV.get(`series_event:${e.event_hash}`);
+    })
+  );
+
+  const events = [];
+  for (let i = 0; i < capped.length; i++) {
+    const e = capped[i];
+    const raw = eventRaws[i];
+    if (!raw) continue; // missing companion record — skip silently
+    let eventRec;
+    try { eventRec = JSON.parse(raw); } catch (_) { continue; }
+    if (!eventRec) continue;
+    events.push({
+      event_hash: e.event_hash,
+      event_type: e.event_type,
+      applied_at: e.applied_at,
+      event: eventRec,
+    });
+  }
+
+  return jsonResponse({
+    series_id: seriesId,
+    events,
+    truncated,
+  }, 200, origin);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// GET /api/creator/{credential_id}/series — SERIES-SPEC-v1 §7.7
+// ──────────────────────────────────────────────────────────────────────
+// Portfolio enumeration: all series authored by a given credential.
+// 500 cap newest-first. Each entry carries a live `series_snapshot`
+// joined from series:{id} at response time (per §7.7 "clients that want
+// the full record call /api/series/{series_id} per entry — snapshots
+// MAY be omitted if the read budget is constrained").
+//
+// We include snapshots by default. Same parallel-read posture as §7.6
+// — 500 creator_series entries become 500 parallel KV reads. A future
+// optimization could cache the snapshot in creator_series itself and
+// refresh on /close-series; deferred (spec permits either shape).
+//
+// Validation order (§7.7):
+//   1. Shape-check credential_id              → 400 invalid_credential_id
+//   2. Read trust:{credential_id}             → 404 creator_not_found
+//   3. Read creator_series:{credential_id} — OK if missing (returns [])
+async function handleGetCreatorSeries(credentialId, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isHex64Lower(credentialId)) {
+    return jsonResponse({ error: "invalid_credential_id" }, 400, origin);
+  }
+
+  // §7.7 step 2: "A well-formed credential_id that was never issued." → 404.
+  const trustRaw = await env.DEDUP_KV.get(`trust:${credentialId}`);
+  if (!trustRaw) {
+    return jsonResponse({ error: "creator_not_found" }, 404, origin);
+  }
+
+  const indexRaw = await env.DEDUP_KV.get(`creator_series:${credentialId}`);
+  let index = [];
+  if (indexRaw) {
+    try { index = JSON.parse(indexRaw); } catch (_) { index = []; }
+    if (!Array.isArray(index)) index = [];
+  }
+
+  const reversed = index.slice().reverse();
+  const CAP = 500;
+  const truncated = reversed.length > CAP;
+  const capped = truncated ? reversed.slice(0, CAP) : reversed;
+
+  // Parallel snapshot dereference.
+  const seriesRaws = await Promise.all(
+    capped.map(e => {
+      if (!e || typeof e.series_id !== "string") return null;
+      return env.DEDUP_KV.get(`series:${e.series_id}`);
+    })
+  );
+
+  const seriesList = [];
+  for (let i = 0; i < capped.length; i++) {
+    const e = capped[i];
+    const entry = {
+      series_id: e.series_id,
+      created_at: e.created_at,
+      status_at_write: e.status_at_write || "open",
+    };
+    const raw = seriesRaws[i];
+    if (raw) {
+      try {
+        const rec = JSON.parse(raw);
+        if (rec && rec.manifest) {
+          const snap = {
+            title: rec.manifest.title,
+            status: rec.status,
+            member_count: rec.member_count || 0,
+            closed_at: rec.closed_at || null,
+          };
+          if (rec.manifest.cover_member_hash) {
+            snap.cover_member_hash = rec.manifest.cover_member_hash;
+          }
+          entry.series_snapshot = snap;
+        }
+      } catch (_) { /* snapshot omitted on malformed companion */ }
+    }
+    seriesList.push(entry);
+  }
+
+  return jsonResponse({
+    credential_id: credentialId,
+    series: seriesList,
+    truncated,
+  }, 200, origin);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// GET /api/affiliations/{content_hash} — SERIES-SPEC-v1 §7.8
+// ──────────────────────────────────────────────────────────────────────
+// Multi-affiliation index lookup. Always 200 with an `affiliations`
+// array — per §7.8, this endpoint's purpose is "list affiliations,"
+// not "verify attestation." A missing affiliations:{hash} key returns
+// an empty array, not 404.
+//
+// Stored newest-last per §1.5; reversed here for newest-first rendering
+// (§7.8 final paragraph).
+//
+// S111 known gap: handleRegisterCollectionProof does NOT yet call
+// writeAffiliation, so this endpoint surfaces series affiliations only.
+// Collection affiliations for post-S111 collections require a one-line
+// retrofit (writeAffiliation loop over manifest.members at registration
+// time); deferred per kickoff §3 Q3 recommendation "(a) new-only" — see
+// Phase C wrap-up note for the decision point.
+//
+// Validation order (§7.8):
+//   1. Shape-check content_hash               → 400 invalid_content_hash
+//   2. Read affiliations:{content_hash} — OK if missing (returns [])
+async function handleGetAffiliations(contentHash, request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  if (!isHex64Lower(contentHash)) {
+    return jsonResponse({ error: "invalid_content_hash" }, 400, origin);
+  }
+
+  const raw = await env.DEDUP_KV.get(`affiliations:${contentHash}`);
+  let list = [];
+  if (raw) {
+    try { list = JSON.parse(raw); } catch (_) { list = []; }
+    if (!Array.isArray(list)) list = [];
+  }
+
+  // Stored newest-last per §1.5; reverse for newest-first rendering.
+  const affiliations = list.slice().reverse();
+
+  return jsonResponse({
+    content_hash: contentHash,
+    affiliations,
+  }, 200, origin);
 }
 
 // GET /api/proof/{hex}/history — §3.3.5 S106.5CW multi-attestor visibility.
@@ -5799,6 +7010,55 @@ export default {
       return handleRegisterCollectionProof(request, env);
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // S111CW — SERIES-SPEC-v1 dispatch (§7.1–§7.3 writes, §7.5–§7.8 reads).
+    // ══════════════════════════════════════════════════════════════════
+    // /s/{series_id} is wired in the short-URL block below (GET+HEAD),
+    // alongside /c/{collection_id}. These three writes + four reads are
+    // clustered here for locality with /register-collection-proof. Reads
+    // ordered longest-path-first so /api/series/{id}/events matches
+    // before /api/series/{id}.
+    if (method === "POST" && path === "/register-series") {
+      return handleRegisterSeries(request, env);
+    }
+    if (method === "POST" && path === "/register-series-member") {
+      return handleRegisterSeriesMember(request, env);
+    }
+    if (method === "POST" && path === "/close-series") {
+      return handleCloseSeries(request, env);
+    }
+
+    // §7.6 — GET /api/series/{series_id}/events. MUST match before §7.5.
+    if (method === "GET") {
+      const seriesEventsMatch = path.match(/^\/api\/series\/([^\/]+)\/events$/);
+      if (seriesEventsMatch) {
+        return handleGetSeriesEvents(seriesEventsMatch[1], request, env);
+      }
+    }
+    // §7.5 — GET /api/series/{series_id}.
+    if (method === "GET") {
+      const seriesGetMatch = path.match(/^\/api\/series\/([^\/]+)$/);
+      if (seriesGetMatch) {
+        return handleGetSeries(seriesGetMatch[1], request, env);
+      }
+    }
+    // §7.7 — GET /api/creator/{credential_id}/series. Loose [^/]+ capture
+    // so malformed credential_ids hit the handler's 400 path, not a
+    // route-miss 404 (same posture as /api/collection/{id}).
+    if (method === "GET") {
+      const creatorSeriesMatch = path.match(/^\/api\/creator\/([^\/]+)\/series$/);
+      if (creatorSeriesMatch) {
+        return handleGetCreatorSeries(creatorSeriesMatch[1], request, env);
+      }
+    }
+    // §7.8 — GET /api/affiliations/{content_hash}.
+    if (method === "GET") {
+      const affiliationsMatch = path.match(/^\/api\/affiliations\/([^\/]+)$/);
+      if (affiliationsMatch) {
+        return handleGetAffiliations(affiliationsMatch[1], request, env);
+      }
+    }
+
     // S38: Unseal a sealed proof record
     if (method === "POST" && path === "/unseal-proof") {
       return handleUnsealProof(request, env);
@@ -6026,9 +7286,21 @@ export default {
     // S106.6 §3.4.7: Short collection URL → proof.html redirect.
     // {short_id} == {collection_id} (S106 POST writes short_url=/c/{collection_id},
     // no separate reverse index). Pending-skip per S106.5 Decision C1.
-    if (method === "GET" && path.startsWith("/c/")) {
+    //
+    // S111CW: HEAD accepted per RFC 9110 §9.3.2 + S110 carryover #32.
+    // Previously GET-only; HEAD fell through to bottom-of-dispatch 404,
+    // causing false-negative link-check probes (observed S110 §0).
+    if ((method === "GET" || method === "HEAD") && path.startsWith("/c/")) {
       const shortId = path.slice(3);
       return handleShortUrl(shortId, request, env);
+    }
+
+    // S111CW §7.4 — Short series URL → series.html redirect. Symmetric
+    // with /c/{id}; see handleSeriesShortUrl doc comment for the HEAD
+    // rationale and the series.html-vs-proof.html landing-path choice.
+    if ((method === "GET" || method === "HEAD") && path.startsWith("/s/")) {
+      const shortId = path.slice(3);
+      return handleSeriesShortUrl(shortId, request, env);
     }
 
     // S83: GitHub Pages pass-through for static files.
