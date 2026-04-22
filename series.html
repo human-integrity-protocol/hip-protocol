@@ -340,9 +340,7 @@ async function renderSeries(series, eventsData){
   html += '<div class="sig-block sig-pending" id="sig-status">Verifying series manifest signature…</div>';
   html += '</div>'; // end series-card
 
-  html += '<div class="boundary">This record shows a verified HIP credential holder published an append-only series at '+fmtDate(series.created_at)+'. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable. Each member is independently attested in the underlying <code style="font-family:Azeret Mono,monospace">proof:{hash}</code> registry. The series manifest signature was verified live in your browser against the canonical JCS digest.</div>';
-
-  // Member section.
+  // Member section — rendered immediately after the card, before the boundary disclaimer.
   html += '<div class="member-section">'
     + '<div class="member-section-title">Members ('+members.length+(truncated?', truncated at 500':'')+')</div>'
     + '<div class="member-section-desc">Ordered by <code style="font-family:Azeret Mono,monospace">added_at</code> ascending — earliest first. Click a member hash to open its proof card.</div>';
@@ -370,6 +368,8 @@ async function renderSeries(series, eventsData){
     html += '<div class="truncated-note">Showing first 500 events. Older entries are not rendered on this page.</div>';
   }
   html += '</div>'; // end member-section
+
+  html += '<div class="boundary">This record shows a verified HIP credential holder published an append-only series at '+fmtDate(series.created_at)+'. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable. Each member is independently attested in the underlying <code style="font-family:Azeret Mono,monospace">proof:{hash}</code> registry. The series manifest signature was verified live in your browser against the canonical JCS digest.</div>';
 
   html += '<div style="text-align:center;margin-top:16px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
 
