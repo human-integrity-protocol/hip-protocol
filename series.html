@@ -1,0 +1,471 @@
+<!--
+  Copyright © 2026 Peter Rieveschl. All rights reserved.
+  HIP Protocol Site — https://hipprotocol.org
+  S112CW — SERIES-SPEC-v1 landing page. Rendered on /s/{series_id} redirects
+  and direct ?id= loads. Reads /api/series/{id} + /api/series/{id}/events,
+  independently verifies the series manifest signature client-side.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HIP Series — Human Integrity Protocol</title>
+<meta name="description" content="A HIP series — an open, append-only, creator-bound stream of attestations on the Human Integrity Protocol.">
+<meta property="og:title" content="HIP Series — Verified Human-Origin Content">
+<meta property="og:description" content="An append-only, creator-bound series of human-origin attestations on the Human Integrity Protocol.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://hipprotocol.org/og-proof.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="HIP Series — Append-only human-origin attestation stream.">
+<meta property="og:site_name" content="Human Integrity Protocol">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="HIP Series — Verified Human-Origin Content">
+<meta name="twitter:description" content="Open, append-only, creator-bound stream of attestations. Verify with math, not trust.">
+<meta name="twitter:image" content="https://hipprotocol.org/og-proof.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✋</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600&family=Azeret+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:#0A0A0A;font-family:'Space Grotesk',sans-serif;color:#E8E8E0;min-height:100vh;-webkit-font-smoothing:antialiased}
+a{color:#E05A00;text-decoration:none}
+a:hover{text-decoration:underline}
+::selection{background:rgba(224,90,0,0.3);color:#fff}
+.mono{font-family:'Azeret Mono','SF Mono',monospace}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(10,10,10,0.95);backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.nav-brand{font-family:'Azeret Mono',monospace;font-size:13px;font-weight:500;letter-spacing:1px;color:#E8E8E0;display:flex;align-items:center;gap:10px}
+.nav-brand .hip{color:#E8E8E0}.nav-brand .sep{color:#E05A00}
+.nav-links{display:flex;gap:20px;align-items:center}
+.nav-links a{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:0.5px;color:#666;transition:color 0.15s}
+.nav-links a:hover{color:#E8E8E0;text-decoration:none}
+.wrap{max-width:760px;margin:0 auto;padding:48px 24px 80px}
+.state-box{text-align:center;padding:80px 24px}
+.state-box h2{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:400;color:#E8E8E0;margin-bottom:12px}
+.state-box p{font-size:15px;color:#666;line-height:1.7;max-width:480px;margin:0 auto}
+.spinner{display:inline-block;width:32px;height:32px;border:3px solid rgba(255,255,255,0.06);border-top-color:#E05A00;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:24px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.badge-wrap{display:flex;justify-content:center;margin-bottom:32px}
+.badge-img{width:80px;height:80px;filter:invert(1)}
+.badge-img.verified{filter:invert(0) sepia(1) saturate(5) hue-rotate(5deg) brightness(0.9);opacity:0.9}
+.badge-img.closed{filter:invert(0) sepia(1) saturate(2) hue-rotate(190deg) brightness(0.8);opacity:0.7}
+.badge-img.unverified{filter:invert(1);opacity:0.25}
+/* Series card — teal/orange theme, closer to collection gradient but distinct */
+.series-card{background:#111;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:32px;margin-bottom:24px;position:relative;overflow:hidden}
+.series-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#E05A00,#f59e0b 55%,rgba(245,158,11,0.3))}
+.series-card.closed-card::before{background:linear-gradient(90deg,#6B9FD4,rgba(107,159,212,0.3))}
+.series-card.invalid-card::before{background:linear-gradient(90deg,#ef4444,rgba(239,68,68,0.3))}
+.card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px;flex-wrap:wrap}
+.card-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#E05A00;margin-bottom:6px}
+.card-title{font-family:'Space Grotesk',sans-serif;font-size:clamp(22px,4vw,30px);font-weight:500;color:#E8E8E0;line-height:1.2;word-break:break-word}
+.card-description{font-size:14px;color:#bbb;line-height:1.7;margin-bottom:24px;white-space:pre-wrap;word-break:break-word}
+.status-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:100px;font-family:'Azeret Mono',monospace;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;white-space:nowrap}
+.pill-open{background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);color:#f59e0b}
+.pill-closed{background:rgba(107,159,212,0.12);border:1px solid rgba(107,159,212,0.3);color:#6B9FD4}
+.pill-invalid{background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);color:#ef4444}
+.pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.field-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:560px){.field-grid,.field-grid-3{grid-template-columns:1fr}}
+.field-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:5px}
+.field-val{font-size:15px;color:#E8E8E0;font-weight:500;line-height:1.4}
+.field-val.mono{font-size:11px;color:#888;word-break:break-all;font-family:'Azeret Mono',monospace}
+.field-val.tier-1{color:#E05A00}.field-val.tier-2{color:#f59e0b}.field-val.tier-3{color:#888}
+.divider{height:1px;background:rgba(255,255,255,0.06);margin:20px 0}
+.sig-block{padding:14px 16px;border-radius:8px;margin-bottom:20px;font-size:13px;line-height:1.6}
+.sig-ok{background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.15);color:#4ade80}
+.sig-fail{background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);color:#ef4444}
+.sig-pending{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);color:#666}
+.member-section{background:#0d0d0d;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:24px;margin-bottom:16px}
+.member-section-title{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:4px}
+.member-section-desc{font-size:13px;color:#555;line-height:1.6;margin-bottom:16px}
+.member-table{width:100%;border-collapse:collapse;margin:0;font-size:12px}
+.member-table th{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#555;text-align:left;padding:10px;border-bottom:1px solid rgba(255,255,255,0.06);font-weight:500}
+.member-table td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:#bbb;vertical-align:top}
+.member-table tr:hover td{background:rgba(245,158,11,0.03)}
+.member-table .mt-idx{color:#555;font-family:'Azeret Mono',monospace;width:36px}
+.member-table .mt-when{font-size:11px;color:#888;font-family:'Azeret Mono',monospace;white-space:nowrap}
+.member-table .mt-hash{font-family:'Azeret Mono',monospace;font-size:11px;color:#777;word-break:break-all}
+.member-table a{color:#E05A00}
+.empty-row td{padding:24px 10px;color:#555;text-align:center;font-size:13px}
+.boundary{padding:14px 16px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);font-size:12px;color:#555;line-height:1.7;margin-bottom:24px;font-style:italic}
+.footer{text-align:center;padding:40px 24px 20px;font-size:12px;color:#444;border-top:1px solid rgba(255,255,255,0.04)}
+.footer a{color:#666}
+.footer a:hover{color:#E8E8E0}
+.copy-btn{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#666;cursor:pointer;font-family:'Azeret Mono',monospace;font-size:10px;padding:4px 10px;border-radius:4px;margin-left:8px;transition:all 0.2s;vertical-align:middle}
+.copy-btn:hover{background:rgba(255,255,255,0.08);color:#E8E8E0}
+.short-url-block{background:rgba(224,90,0,0.04);border:1px solid rgba(224,90,0,0.18);border-radius:8px;padding:14px 16px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.short-url-block .lbl{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#E05A00}
+.short-url-block .val{font-family:'Azeret Mono',monospace;font-size:13px;color:#E8E8E0;word-break:break-all}
+.not-found{text-align:center;padding:80px 24px}
+.truncated-note{font-size:11px;color:#888;font-style:italic;margin-top:10px}
+.chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:100px;font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:0.5px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);color:#888}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="hip">HIP</span><span class="sep">://</span><span style="color:#555;font-size:11px">SERIES</span>
+  </div>
+  <div class="nav-links">
+    <a href="https://hipprotocol.org">hipprotocol.org</a>
+    <a href="https://hipprotocol.org#attest">Attest Your Work</a>
+  </div>
+</nav>
+
+<div class="wrap" id="main">
+  <div class="state-box" id="loading">
+    <div class="spinner"></div>
+    <p style="color:#555;font-family:'Azeret Mono',monospace;font-size:12px;letter-spacing:1px">LOADING SERIES RECORD</p>
+  </div>
+</div>
+
+<div class="footer" id="footer" style="display:none">
+  <p style="margin-bottom:8px">This verification is only valid at <strong style="color:#E8E8E0">hipprotocol.org</strong></p>
+  <p><a href="https://hipprotocol.org">hipprotocol.org</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol">GitHub</a> · Genesis Block 940,558</p>
+  <p style="margin-top:12px;opacity:0.5;font-size:10px">© 2026 Peter Rieveschl. Site implementation all rights reserved.</p>
+</div>
+
+<script>
+// ── Constants ──
+var WORKER_URL = "https://hip-tier1-worker.hipprotocol.workers.dev";
+// Shared HIP badge (same b64 bytes used by proof.html).
+var BADGE_B64 = "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";
+
+// ── Helpers ──
+var hex = function(b){return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,"0")}).join("")};
+var unhex = function(h){var b=new Uint8Array(h.length/2);for(var i=0;i<h.length;i+=2)b[i/2]=parseInt(h.substr(i,2),16);return b};
+var b64d = function(s){var b=atob(s);var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+
+// RFC 8785 JCS canonicalization — matches worker.js verifySeriesSignature + smoke harness exactly.
+var canonJSON = function(o){
+  if(o===null||o===undefined) return "null";
+  if(typeof o==="boolean") return o?"true":"false";
+  if(typeof o==="number"){ if(!isFinite(o)) throw new Error("JCS: non-finite number"); return Object.is(o,-0)?"0":String(o) }
+  if(typeof o==="string") return JSON.stringify(o);
+  if(Array.isArray(o)) return "["+o.map(canonJSON).join(",")+"]";
+  return "{"+Object.keys(o).sort().filter(function(k){return o[k]!==undefined}).map(function(k){return JSON.stringify(k)+":"+canonJSON(o[k])}).join(",")+"}";
+};
+
+async function sha256Bytes(bytes){
+  var buf = await crypto.subtle.digest("SHA-256", bytes);
+  return new Uint8Array(buf);
+}
+
+async function sha256Hex(bytes){
+  return hex(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+function qs(id){return document.getElementById(id)}
+function escHtml(s){ if(s==null) return ""; return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;") }
+function short(h, n){ n = n || 12; return (typeof h === "string" && h.length > n) ? h.substring(0,n) + "…" : (h || ""); }
+function b64ToHex(b64){ try{ return hex(b64d(b64)); }catch(e){ return null; } }
+function fmtDate(iso){ if(!iso) return "—"; try{ return new Date(iso).toUTCString().replace(" GMT","")+" UTC" }catch(e){ return iso } }
+function tierLabel(t){ return t===1?"Tier 1 — Government ID":t===2?"Tier 2 — Peer Vouched":t===3?"Tier 3 — Biometric Presence":"Unknown" }
+function tierClass(t){ return t===1?"tier-1":t===2?"tier-2":"tier-3" }
+function badgeImg(cls){ return '<img src="data:image/png;base64,'+BADGE_B64+'" class="badge-img '+cls+'" alt="HIP Badge" width="80" height="80">' }
+
+async function verifyEd25519Bytes(publicKeyHex, msgBytes, signatureB64){
+  try{
+    var pubKeyBytes = unhex(publicKeyHex);
+    var key = await crypto.subtle.importKey("raw", pubKeyBytes, {name:"Ed25519"}, false, ["verify"]);
+    var sigBytes = b64d(signatureB64);
+    return await crypto.subtle.verify("Ed25519", key, sigBytes, msgBytes);
+  }catch(e){ return null; }
+}
+
+// ── series_id from URL ──
+// Supports: /s/{id}  or  /series/{id}  or  ?id={id}  or  ?series_id={id}
+function getSeriesIdFromURL(){
+  var path = window.location.pathname;
+  var m = path.match(/\/s\/([a-z2-7]{20})/);
+  if(m) return m[1];
+  m = path.match(/\/series\/([a-z2-7]{20})/);
+  if(m) return m[1];
+  var params = new URLSearchParams(window.location.search);
+  var id = params.get("id") || params.get("series_id");
+  if(id && /^[a-z2-7]{20}$/.test(id)) return id;
+  return null;
+}
+
+// ── Copy-to-clipboard helper ──
+function copyText(text, btn){
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ flashCopied(btn) }).catch(function(){ fallbackCopy(text, btn) });
+    } else {
+      fallbackCopy(text, btn);
+    }
+  }catch(e){ fallbackCopy(text, btn); }
+}
+function fallbackCopy(text, btn){
+  try{
+    var ta = document.createElement("textarea"); ta.value = text; ta.style.position="fixed"; ta.style.opacity="0";
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy") }catch(e){}
+    document.body.removeChild(ta);
+    flashCopied(btn);
+  }catch(e){}
+}
+function flashCopied(btn){
+  if(!btn) return;
+  var orig = btn.textContent;
+  btn.textContent = "✓ copied";
+  setTimeout(function(){ try{ btn.textContent = orig }catch(e){} }, 1400);
+}
+window._hipCopy = function(event, text){ copyText(text, event && event.currentTarget); };
+
+// ── Main render ──
+async function init(){
+  var id = getSeriesIdFromURL();
+  if(!id){
+    renderNotFound("No series_id provided. The URL should be /s/{series_id} or ?id={series_id}.");
+    return;
+  }
+
+  var seriesResp, seriesData;
+  try{
+    seriesResp = await fetch(WORKER_URL + "/api/series/" + id);
+  }catch(e){
+    renderError("Could not reach the HIP series registry. Please check your connection and try again.");
+    return;
+  }
+
+  if(seriesResp.status === 404){
+    renderNotFound("No series record exists for this ID. It may have been published to a different environment, or the link may be mistyped.");
+    return;
+  }
+
+  try{ seriesData = await seriesResp.json(); }
+  catch(e){ renderError("Series record could not be parsed."); return }
+
+  if(!seriesResp.ok || !seriesData || !seriesData.series_id){
+    renderError("Series record is missing or malformed (HTTP " + seriesResp.status + ").");
+    return;
+  }
+
+  // Events fetch is best-effort — don't block the card render on it.
+  var eventsData = null;
+  try{
+    var evResp = await fetch(WORKER_URL + "/api/series/" + id + "/events");
+    if(evResp.ok) eventsData = await evResp.json();
+  }catch(e){ eventsData = null; }
+
+  await renderSeries(seriesData, eventsData);
+}
+
+async function renderSeries(series, eventsData){
+  var m = series.manifest || {};
+  var creator = m.creator || {};
+  var status = series.status || "open";
+  var isClosed = (status === "closed");
+  var title = (typeof m.title === "string" && m.title.length > 0) ? m.title : "Untitled Series";
+  var description = (typeof m.description === "string" && m.description.length > 0) ? m.description : "";
+  var cover = (typeof m.cover_member_hash === "string" && /^[0-9a-f]{64}$/.test(m.cover_member_hash)) ? m.cover_member_hash : null;
+  var tier = creator.tier || 0;
+  var shortUrl = series.short_url || ("https://hipprotocol.org/s/" + series.series_id);
+
+  // Build sorted member list (ascending by added_at).
+  var members = [];
+  var truncated = !!(eventsData && eventsData.truncated);
+  if(eventsData && Array.isArray(eventsData.events)){
+    for(var i=0;i<eventsData.events.length;i++){
+      var ev = eventsData.events[i];
+      if(!ev || ev.event_type !== "series_add") continue;
+      var e = ev.event || {};
+      if(!e.member_hash) continue;
+      members.push({
+        member_hash: e.member_hash,
+        added_at: e.added_at || ev.applied_at || null,
+        event_hash: ev.event_hash || null,
+      });
+    }
+    members.sort(function(a,b){
+      var ta = a.added_at ? Date.parse(a.added_at) : 0;
+      var tb = b.added_at ? Date.parse(b.added_at) : 0;
+      return ta - tb;
+    });
+  }
+
+  var badgeCls = isClosed ? "closed" : "verified";
+  var cardCls  = isClosed ? "closed-card" : "";
+  var pillCls  = isClosed ? "pill-closed" : "pill-open";
+  var pillText = isClosed ? "CLOSED" : "OPEN";
+
+  var html = '<div class="badge-wrap">'+badgeImg(badgeCls)+'</div>';
+
+  html += '<div class="series-card '+cardCls+'" id="series-main">'
+    + '<div class="card-header">'
+    +   '<div><div class="card-label">Series · hipprotocol.org</div><div class="card-title">'+escHtml(title)+'</div></div>'
+    +   '<div class="status-pill '+pillCls+'"><span class="pill-dot"></span>'+pillText+'</div>'
+    + '</div>';
+
+  if(description){
+    html += '<div class="card-description">'+escHtml(description)+'</div>';
+  }
+
+  html += '<div class="field-grid-3">'
+    + '<div class="field"><div class="field-label">Creator Tier</div><div class="field-val '+tierClass(tier)+'">'+tierLabel(tier)+'</div></div>'
+    + '<div class="field"><div class="field-label">Created</div><div class="field-val" style="font-size:13px">'+fmtDate(series.created_at)+'</div></div>'
+    + '<div class="field"><div class="field-label">'+(isClosed?'Closed':'Last event')+'</div><div class="field-val" style="font-size:13px">'+fmtDate(isClosed?series.closed_at:series.last_event_at)+'</div></div>'
+    + '</div>';
+
+  html += '<div class="field-grid-3">'
+    + '<div class="field"><div class="field-label">Members</div><div class="field-val">'+(typeof series.member_count === "number" ? series.member_count : members.length)+'</div></div>'
+    + '<div class="field"><div class="field-label">Status</div><div class="field-val">'+escHtml(status)+'</div></div>'
+    + '<div class="field"><div class="field-label">Series ID</div><div class="field-val mono">'+escHtml(series.series_id)+'</div></div>'
+    + '</div>';
+
+  html += '<div class="short-url-block">'
+    + '<div><div class="lbl">Short link</div><div class="val">'+escHtml(shortUrl)+'</div></div>'
+    + '<button class="copy-btn" onclick="_hipCopy(event,'+JSON.stringify(shortUrl)+')">copy</button>'
+    + '</div>';
+
+  html += '<div class="divider"></div>';
+
+  // Creator block.
+  html += '<div class="field" style="margin-bottom:10px"><div class="field-label">Creator Credential</div><div class="field-val mono">'+escHtml(creator.credential_id || "—")+'</div></div>';
+  if(creator.public_key){
+    html += '<div class="field" style="margin-bottom:10px"><div class="field-label">Creator Public Key (Ed25519, base64)</div><div class="field-val mono">'+escHtml(creator.public_key)+'</div></div>';
+  }
+  if(cover){
+    html += '<div class="field" style="margin-bottom:10px"><div class="field-label">Cover Member</div><div class="field-val mono"><a href="/proof/'+escHtml(cover)+'">'+escHtml(cover)+'</a></div></div>';
+  }
+
+  html += '<div class="divider"></div>';
+  html += '<div class="sig-block sig-pending" id="sig-status">Verifying series manifest signature…</div>';
+  html += '</div>'; // end series-card
+
+  html += '<div class="boundary">This record shows a verified HIP credential holder published an append-only series at '+fmtDate(series.created_at)+'. HIP does not verify the truthfulness of attestations — it records them permanently and makes them publicly queryable. Each member is independently attested in the underlying <code style="font-family:Azeret Mono,monospace">proof:{hash}</code> registry. The series manifest signature was verified live in your browser against the canonical JCS digest.</div>';
+
+  // Member section.
+  html += '<div class="member-section">'
+    + '<div class="member-section-title">Members ('+members.length+(truncated?', truncated at 500':'')+')</div>'
+    + '<div class="member-section-desc">Ordered by <code style="font-family:Azeret Mono,monospace">added_at</code> ascending — earliest first. Click a member hash to open its proof card.</div>';
+
+  html += '<div style="overflow-x:auto"><table class="member-table"><thead><tr>'
+    + '<th>#</th><th>Added</th><th>Member Hash</th>'
+    + '</tr></thead><tbody>';
+
+  if(members.length === 0){
+    html += '<tr class="empty-row"><td colspan="3">No members yet. This series is '+(isClosed?'closed with zero members.':'open — the creator has not added any files yet.')+'</td></tr>';
+  } else {
+    for(var j=0;j<members.length;j++){
+      var mm = members[j];
+      var isCover = cover && mm.member_hash === cover;
+      var coverMark = isCover ? ' <span title="Cover" style="color:#E05A00">★</span>' : '';
+      html += '<tr>'
+        + '<td class="mt-idx">'+(j+1)+coverMark+'</td>'
+        + '<td class="mt-when">'+fmtDate(mm.added_at)+'</td>'
+        + '<td class="mt-hash"><a href="/proof/'+escHtml(mm.member_hash)+'">'+escHtml(mm.member_hash)+'</a></td>'
+        + '</tr>';
+    }
+  }
+  html += '</tbody></table></div>';
+  if(truncated){
+    html += '<div class="truncated-note">Showing first 500 events. Older entries are not rendered on this page.</div>';
+  }
+  html += '</div>'; // end member-section
+
+  html += '<div style="text-align:center;margin-top:16px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></div>';
+
+  qs("main").innerHTML = html;
+  var footer = qs("footer"); if(footer) footer.style.display = "";
+
+  await verifySeriesSignature(series);
+}
+
+// Series signature verification — matches worker.js verifySeriesSignature at worker.js ~L457:
+//   Ed25519-verify(signature, SHA-256(JCS(manifest)), creator.public_key)
+async function verifySeriesSignature(series){
+  var el = qs("sig-status");
+  if(!el) return;
+  var m = series.manifest || {};
+  var creator = m.creator || {};
+
+  if(!series.signature){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ No signature present</strong> — this series record cannot be cryptographically verified.";
+    return;
+  }
+  if(!creator.public_key){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Public key missing</strong> — the manifest does not declare a creator public key; full verification unavailable.";
+    return;
+  }
+
+  var pubKeyHex = b64ToHex(creator.public_key);
+  if(!pubKeyHex){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Public key malformed</strong> — base64 decode failed.";
+    return;
+  }
+
+  // Key binding: sha256(pubkey_bytes) === credential_id
+  var computedCid = await sha256Hex(unhex(pubKeyHex));
+  if(computedCid !== creator.credential_id){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Key mismatch</strong> — manifest.creator.public_key does not hash to manifest.creator.credential_id. This record may be tampered with.";
+    return;
+  }
+
+  // Build digest over JCS(manifest). The worker signs SHA-256(JCS(manifest))
+  // — same posture as the smoke harness. (CRYPTO-SPEC-v1_1 §3.2.5.)
+  var canon, digestBytes;
+  try{
+    canon = canonJSON(m);
+    digestBytes = await sha256Bytes(new TextEncoder().encode(canon));
+  }catch(e){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Canonicalization failed</strong> — manifest contains a non-serializable value.";
+    return;
+  }
+
+  var verified = await verifyEd25519Bytes(pubKeyHex, digestBytes, series.signature);
+
+  if(verified === true){
+    var digestHex = hex(digestBytes);
+    el.className = "sig-block sig-ok";
+    el.innerHTML = "<strong>✓ Series signature verified</strong> — Ed25519 over SHA-256(JCS(manifest))."
+      + "<div style='margin-top:8px;font-size:11px;opacity:0.7'>Public key: <code style='font-family:Azeret Mono,monospace'>"+pubKeyHex.substring(0,24)+"…</code></div>"
+      + "<div style='margin-top:4px;font-size:11px;opacity:0.7'>Signed digest: <code style='font-family:Azeret Mono,monospace'>"+digestHex.substring(0,24)+"…</code></div>"
+      + "<div style='margin-top:4px;font-size:11px;opacity:0.7'>Key binding: SHA-256(public_key) = credential_id ✓</div>";
+  } else if(verified === false){
+    el.className = "sig-block sig-fail";
+    el.innerHTML = "<strong>⚠ Signature invalid</strong> — the Ed25519 signature does not match the creator's public key and the canonical manifest digest. This record may be tampered with.";
+  } else {
+    el.className = "sig-block sig-pending";
+    el.innerHTML = "<strong>⚡ Signature verification unavailable</strong> — your browser does not support Ed25519 verification in SubtleCrypto. Try Chrome, Firefox, Safari 17+, or Edge.";
+  }
+}
+
+function renderNotFound(detail){
+  qs("main").innerHTML = ''
+    + '<div class="not-found">'
+    +   '<div class="badge-wrap">'+badgeImg("unverified")+'</div>'
+    +   '<h2 style="font-family:\'Space Grotesk\',sans-serif;font-size:24px;font-weight:400;margin-bottom:10px">Series not found</h2>'
+    +   '<p style="color:#666;line-height:1.7;max-width:520px;margin:0 auto">'+escHtml(detail||"")+'</p>'
+    +   '<p style="margin-top:24px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></p>'
+    + '</div>';
+  var footer = qs("footer"); if(footer) footer.style.display = "";
+}
+
+function renderError(detail){
+  qs("main").innerHTML = ''
+    + '<div class="state-box">'
+    +   '<div class="badge-wrap">'+badgeImg("unverified")+'</div>'
+    +   '<h2>Couldn\'t load series</h2>'
+    +   '<p>'+escHtml(detail||"")+'</p>'
+    +   '<p style="margin-top:24px"><a href="https://hipprotocol.org" style="font-size:13px;color:#555">← hipprotocol.org</a></p>'
+    + '</div>';
+  var footer = qs("footer"); if(footer) footer.style.display = "";
+}
+
+init();
+</script>
+</body>
+</html>

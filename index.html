@@ -1566,6 +1566,233 @@ function QrTransferPanel(props) {
 }
 
 // ============================================================
+// S112: SERIES CREATION FLOW — SERIES-SPEC-v1 client
+// ============================================================
+// Creates a series on hipprotocol.org using the authenticated credential.
+// Digest-sign pattern: sign(Ed25519, priv, SHA-256(JCS(manifest))), matching
+// worker.js verifySeriesSignature (L457) + the S111 Part 2 smoke harness.
+// Cover image picker is populated from hip_attest_local (the bounded
+// client-side cache of previous attestations on this origin). If empty,
+// the picker is disabled with an explanation.
+// ============================================================
+var SERIES_BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+var randomSeriesId = function() {
+  var bytes = crypto.getRandomValues(new Uint8Array(20));
+  var out = "";
+  for (var i=0;i<20;i++) out += SERIES_BASE32[bytes[i] & 0x1f];
+  return out;
+};
+
+function SeriesCreationFlow(props){
+var cred = props.cred;
+var ts=useState("");var title=ts[0];var setTitle=ts[1];
+var ds=useState("");var description=ds[0];var setDescription=ds[1];
+var chs=useState("");var coverHash=chs[0];var setCoverHash=chs[1];
+var bs=useState(false);var busy=bs[0];var setBusy=bs[1];
+var errS=useState(null);var err=errS[0];var setErrLocal=errS[1];
+var rs=useState(null);var result=rs[0];var setResult=rs[1];
+var cs=useState(false);var copied=cs[0];var setCopied=cs[1];
+// hip_attest_local cache for cover image picker (filter to this credential)
+var avs=useState([]);var avail=avs[0];var setAvail=avs[1];
+useEffect(function(){
+  try {
+    var raw = JSON.parse(localStorage.getItem("hip_attest_local") || "[]");
+    var mine = (raw||[]).filter(function(x){
+      return x && x.credential_id === cred.credentialId && /^[0-9a-f]{64}$/.test(x.content_hash||"");
+    });
+    // Newest first
+    mine.sort(function(a,b){
+      var ta = a.attested_at || ""; var tb = b.attested_at || "";
+      return tb.localeCompare(ta);
+    });
+    setAvail(mine);
+  } catch (_) { setAvail([]); }
+}, []);
+
+var submit = async function() {
+  setErrLocal(null);
+  var t = (title||"").trim();
+  var d = (description||"").trim();
+  if (t.length < 1 || t.length > 200) {
+    setErrLocal("Title must be between 1 and 200 characters.");
+    return;
+  }
+  if (d.length > 2000) {
+    setErrLocal("Description must be 2000 characters or fewer.");
+    return;
+  }
+  if (HIP_CRYPTO_OK === false) {
+    setErrLocal("Your browser doesn't support Ed25519 cryptography. Try Chrome, Firefox, Safari 17+, or Edge.");
+    return;
+  }
+  setBusy(true);
+  try {
+    // Import private key if not cached
+    var priv = cred._priv;
+    if (!priv) {
+      priv = await crypto.subtle.importKey("pkcs8", b64d(cred.privateKey), "Ed25519", false, ["sign"]);
+    }
+    // Build manifest. Field ordering mirrors the smoke harness for parity.
+    var issuedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    var pubB64 = b64e(unhex(cred.publicKey));
+    var manifest = {
+      schema_version: "hip-series-1.0",
+      issued_at: issuedAt,
+      title: t,
+      description: d,
+      creator: {
+        credential_id: cred.credentialId,
+        tier: cred.tier,
+        public_key: pubB64,
+      },
+    };
+    if (coverHash && /^[0-9a-f]{64}$/.test(coverHash)) {
+      manifest.cover_member_hash = coverHash;
+    }
+    // Digest-sign: SHA-256(JCS(manifest)) → Ed25519 sign
+    var canon = canonJSON(manifest);
+    var digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canon)));
+    var sigBuf = await crypto.subtle.sign("Ed25519", priv, digest);
+    var signature = b64e(sigBuf);
+
+    var series_id = randomSeriesId();
+    var resp = await fetch(HIP_WORKER_URL + "/register-series", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ series_id: series_id, manifest: manifest, signature: signature }),
+    });
+    var json = null;
+    try { json = await resp.json(); } catch(_) { json = null; }
+    if (!resp.ok) {
+      var ecode = (json && json.error) || "unknown_error";
+      var friendly;
+      if (ecode === "series_id_collision") {
+        friendly = "That series ID is already taken — try submitting again (a fresh ID will be generated).";
+      } else if (ecode === "trust_index_below_floor") {
+        friendly = "Your credential's trust index is below the 60 required to create a series. Attest a few files first to build your behavioral score, or upgrade your credential tier.";
+      } else if (ecode === "rate_limited") {
+        friendly = (json && json.detail) || "You've hit the daily rate limit. Try again tomorrow.";
+      } else if (ecode === "credential_retired") {
+        friendly = "This credential has been retired and can no longer create series.";
+      } else if (ecode === "unknown_credential") {
+        friendly = "The server doesn't recognize this credential. Make sure the credential is initialized (try attesting a file first).";
+      } else if (ecode === "credential_key_mismatch" || ecode === "credential_tier_mismatch") {
+        friendly = "There's a mismatch between your stored credential and the server record. Try reloading the page.";
+      } else if (ecode === "invalid_signature") {
+        friendly = "Signature verification failed. This shouldn't happen — please try again, and if it persists, report it.";
+      } else if (typeof ecode === "string" && ecode.indexOf("invalid_manifest") === 0) {
+        friendly = "The server rejected the manifest shape. Try shortening the title or description.";
+      } else {
+        friendly = "Couldn't create the series (" + ecode + "). Try again in a moment.";
+      }
+      setErrLocal(friendly);
+      setBusy(false);
+      return;
+    }
+    // Success — store full result
+    setResult({
+      series_id: json.series_id || series_id,
+      short_url: json.short_url || ("https://hipprotocol.org/s/" + (json.series_id || series_id)),
+      created_at: json.created_at || issuedAt,
+      title: t,
+    });
+    setBusy(false);
+  } catch (ex) {
+    setErrLocal("Error creating series: " + (ex && ex.message ? ex.message : String(ex)));
+    setBusy(false);
+  }
+};
+
+var copyShortUrl = function() {
+  if (!result) return;
+  var url = result.short_url;
+  var done = function() { setCopied(true); setTimeout(function(){ setCopied(false); }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function(){
+      // Fallback: select a textarea
+      var ta = document.createElement("textarea");
+      ta.value = url; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch(_){}
+      document.body.removeChild(ta);
+    });
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = url; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } catch(_){}
+    document.body.removeChild(ta);
+  }
+};
+
+// Success card
+if (result) {
+  return e("div", {style:{display:"flex",flexDirection:"column",gap:12}},
+    e("div", {style:{padding:"18px 20px",border:"1px solid rgba(74,222,128,0.25)",borderRadius:8,background:"rgba(74,222,128,0.04)"}},
+      e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:"#4ade80",marginBottom:8,textTransform:"uppercase"}}, "✓ SERIES CREATED"),
+      e("div", {style:{fontFamily:serif,fontSize:20,fontWeight:600,color:t1,lineHeight:1.3,marginBottom:10}}, result.title),
+      e("p", {style:{fontSize:13,color:t2,lineHeight:1.6,marginBottom:12}}, "Your series is live and open. Share this short URL — anyone can view the series card and its members."),
+      e("div", {style:wizResult},
+        e("div", {style:wizRL}, "Series ID"),
+        e(CopyHash, {value:result.series_id, chars:20}),
+        e("div", {style:wizRL}, "Short URL"),
+        e("div", {style:{display:"flex",alignItems:"center",gap:6,minWidth:0}},
+          e("code", {style:{fontSize:12,fontFamily:mo,color:go,wordBreak:"break-all",flex:"1 1 auto",minWidth:0}}, result.short_url),
+          e("button", {onClick:copyShortUrl, style:{flexShrink:0,background:"none",border:"1px solid "+(copied?"#4ade80":bd),borderRadius:4,padding:"4px 10px",cursor:"pointer",fontFamily:mo,fontSize:11,color:copied?"#4ade80":t2,transition:"all 0.15s"}, title:"Copy short URL"}, copied?"✓ Copied":"Copy")),
+        e("div", {style:wizRL}, "Status"),
+        e("code", {style:wizRV}, "open · awaiting members")),
+      e("div", {style:{display:"flex",gap:8,marginTop:14,flexWrap:"wrap"}},
+        e("a", {href:result.short_url, target:"_blank", rel:"noopener", style:Object.assign({},btnG,{textDecoration:"none",flex:"1 1 auto",minWidth:160})}, "View series page →"),
+        e("button", {onClick:function(){setResult(null);setTitle("");setDescription("");setCoverHash("");setErrLocal(null);}, style:Object.assign({},btnO,{flex:"1 1 auto",minWidth:160,cursor:"pointer"})}, "Create another"))),
+    ToolAlert("info", e("span", null, e("strong", null, "What's next? "), "You can add members to this series by attesting files — a \"Add to series…\" button will appear on each successful Proof Card. Closing the series is permanent (no more adds); that's also done from the series card.")),
+    e("button", {onClick:props.onBack, style:Object.assign({},btnSm,{alignSelf:"flex-start"})}, "← Back to credential"));
+}
+
+// Form
+var coverDisabled = avail.length === 0;
+return e("div", {style:{display:"flex",flexDirection:"column",gap:12}},
+  e("button", {onClick:props.onBack, style:Object.assign({},btnSm,{alignSelf:"flex-start",marginBottom:4})}, "← Back"),
+  e("div", {style:{padding:18,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,background:gg}},
+    e("div", {style:{fontFamily:mo,fontSize:11,letterSpacing:2,color:go,marginBottom:10,textTransform:"uppercase"}}, "CREATE A SERIES"),
+    e("p", {style:{fontSize:14,color:t2,lineHeight:1.7,marginBottom:8}}, "A series is an ",e("strong",{style:{color:t1}},"open, append-only collection")," of files you've attested. Unlike a closed collection (signed all-at-once), a series grows over time — add members whenever you attest new files, and close it when it's done."),
+    e("p", {style:{fontSize:13,color:t2,lineHeight:1.6}}, "Metadata is set once at creation and cannot be changed. Membership is recorded on the protocol and can't be removed.")),
+  err && ToolAlert("danger", err),
+  e("div", null,
+    e("label", {style:{display:"block",fontFamily:mo,fontSize:11,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}}, "Title · required · 1–200 chars"),
+    e("input", {type:"text",value:title,maxLength:200,
+      onChange:function(ev){setTitle(ev.target.value)},
+      placeholder:"e.g. Mammoth 2026 — spring ascent",
+      style:Object.assign({},wizTxt,{fontFamily:sans,fontSize:14})}),
+    e("div", {style:{fontFamily:mo,fontSize:10,color:t2,marginTop:4,textAlign:"right"}}, title.length + " / 200")),
+  e("div", null,
+    e("label", {style:{display:"block",fontFamily:mo,fontSize:11,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}}, "Description · optional · 0–2000 chars"),
+    e("textarea", {value:description,maxLength:2000,rows:4,
+      onChange:function(ev){setDescription(ev.target.value)},
+      placeholder:"What this series is about. You can explain scope, timeline, or intent — this is shown on the public series page.",
+      style:Object.assign({},wizTxt,{minHeight:96})}),
+    e("div", {style:{fontFamily:mo,fontSize:10,color:t2,marginTop:4,textAlign:"right"}}, description.length + " / 2000")),
+  e("div", null,
+    e("label", {style:{display:"block",fontFamily:mo,fontSize:11,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}}, "Cover image · optional"),
+    coverDisabled
+      ? e("div", {style:{padding:"12px 14px",border:"1px dashed "+bd,borderRadius:6,fontSize:12,color:t2,lineHeight:1.6,background:"rgba(255,255,255,0.015)"}},
+          "No previously attested files available on this site. The cover image has to be an already-attested file (by this credential). Attest a file first, then come back to use it as a cover — or skip this field.")
+      : e("select", {value:coverHash,
+          onChange:function(ev){setCoverHash(ev.target.value)},
+          style:Object.assign({},wizTxt,{fontFamily:mo,fontSize:12,padding:"10px 12px",cursor:"pointer"})},
+          e("option", {value:""}, "— None —"),
+          avail.map(function(x, idx){
+            var label = (x.filename || "untitled") + "  ·  " + x.content_hash.substring(0,10) + "…";
+            if (x.attested_at) label += "  ·  " + x.attested_at.substring(0,10);
+            return e("option", {key:idx, value:x.content_hash}, label);
+          })),
+    !coverDisabled && e("div", {style:{fontFamily:mo,fontSize:10,color:t2,marginTop:4}}, avail.length + " attestation" + (avail.length===1?"":"s") + " available")),
+  e("div", {style:{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}},
+    e("button", {onClick:submit, disabled:busy||title.trim().length===0, style:(busy||title.trim().length===0)?btnDis:Object.assign({},btnG,{cursor:"pointer",flex:"1 1 auto",minWidth:200})},
+      busy ? "Signing + submitting…" : "Sign and create series"),
+    e("button", {onClick:props.onBack, disabled:busy, style:Object.assign({},btnO,{cursor:busy?"not-allowed":"pointer",flex:"0 1 auto"})}, "Cancel")),
+  e("div", {style:{padding:"12px 14px",background:"rgba(0,0,0,0.02)",borderRadius:6,fontSize:12,color:t2,lineHeight:1.6,marginTop:4}},
+    e("strong", {style:{color:t1}}, "Heads-up: "), "Creating a series counts against your daily attest rate limit (same budget as attestations). Your credential's trust index must be at least 60 to create a series."));
+}
+
+// ============================================================
 // CREDENTIAL PANEL
 // ============================================================
 function CredPanel(props){
@@ -1596,7 +1823,7 @@ useEffect(function(){detectWA().then(setWaEnv).catch(function(){setWaEnv({ok:fal
 // S100: "vouch-recipient" deep link → open T2 flow as recipient
 var irs=useState(null);var initialRole=irs[0];var setInitialRole=irs[1];
 useEffect(function(){
-  if(props.initialMode && (!cred || props.initialMode === "vouch" || props.initialMode === "vouch-recipient")) {
+  if(props.initialMode && (!cred || props.initialMode === "vouch" || props.initialMode === "vouch-recipient" || props.initialMode === "create-series")) {
     if(props.initialMode === "vouch-recipient") { setMode("t2"); setInitialRole("r"); }
     else { setMode(props.initialMode); }
     if(props.clearInitialMode) props.clearInitialMode();
@@ -1745,6 +1972,11 @@ if(mode==="vouch"){
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 err&&ToolAlert("danger",err),
 e(T2VouchFlow,{voucherCred:cred,onDone:function(newCred){setMode(null)},onBack:function(){setMode(null);setErr(null)},setErr:setErr}))}
+// S112: Series creation mode — any tier with a loaded credential (server enforces TI>=60).
+if(mode==="create-series"){
+return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+err&&ToolAlert("danger",err),
+e(SeriesCreationFlow,{cred:cred,onBack:function(){setMode(null);setErr(null)}}))}
 var tn=cred.tier===1?"TIER 1 — GOVERNMENT ID":cred.tier===2?"TIER 2 — PEER VOUCH":cred.tier===3?"TIER 3 — DEVICE BIOMETRIC":"CREDENTIAL";
 return e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
 // S21: Biometric confirmation banner (shows immediately after biometric creation)
@@ -1795,6 +2027,12 @@ e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
 e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}},"PEER VOUCH"),
 e("button",{onClick:function(){setMode("vouch")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(96,165,250,0.03)",color:go,border:"1px solid rgba(96,165,250,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
 e(Ico,{name:"scale",size:16,color:"#60a5fa"}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Vouch for Someone"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"Issue a Tier 2 credential to someone you know · your reputation is at stake")))),
+// S112: Create Series button — available to all tiers (worker enforces TI>=60 floor).
+e("div",{style:{marginTop:4}},
+e("div",{style:{height:1,background:bd,margin:"8px 0"}}),
+e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:1.5,textTransform:"uppercase",color:t2,marginBottom:6}},"PUBLISH A SERIES"),
+e("button",{onClick:function(){setMode("create-series")},style:{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"rgba(224,90,0,0.03)",color:go,border:"1px solid rgba(224,90,0,0.2)",borderRadius:8,cursor:"pointer",fontFamily:sans}},
+e(Ico,{name:"chain",size:16,color:go}),e("div",null,e("div",{style:{fontSize:13,fontWeight:700,color:t1}},"Create a Series"),e("div",{style:{fontSize:11,color:t2,marginTop:1}},"An open, append-only collection of your attested files · grows over time · closed when you're done")))),
 // S34: Show upgrade status if credential was upgraded
 cred.upgradedFrom&&ToolAlert("success",e("span",null,"This credential was ",e("strong",null,"upgraded from Tier "+cred.upgradedFrom)," on ",new Date(cred.upgradedAt).toLocaleDateString(),". Your trust history was preserved — attestation count, credential age, and trust score all carried forward.")),
 ToolAlert("warn",e("span",null,e("strong",null,"Where is your credential?")," It's saved in this browser at ",e("strong",null,window.location.hostname),". If you clear site data, switch browsers, or use a different device, you'll need this backup file to restore it.")),
@@ -3233,13 +3471,17 @@ function App() {
       // S100: Deep link for vouch recipients — opens T2 flow as recipient directly
       setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("vouch-recipient");
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    } else if (hash === "#create-series") {
+      // S112: Deep link for series creation — opens creation flow directly.
+      setToolOpen("attest"); setToolTab("credential"); setInitialCredMode("create-series");
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
     }
     // S65: Auto-open credential tab when arriving via #hip-import= sync link
     if (HIP_IMPORT_RESULT) {
       setToolOpen("attest"); setToolTab("credential");
     }
     // S104 Phase 3.2: any deep link that lands the user on the credential tab counts as "seen"
-    if (hash==="#tier1"||hash==="#tier2"||hash==="#tier3"||hash==="#vouch"||hash==="#vouch-recipient"||HIP_IMPORT_RESULT) {
+    if (hash==="#tier1"||hash==="#tier2"||hash==="#tier3"||hash==="#vouch"||hash==="#vouch-recipient"||hash==="#create-series"||HIP_IMPORT_RESULT) {
       try{if(localStorage.getItem("hip_cred_tab_seen_v1")!=="1"){localStorage.setItem("hip_cred_tab_seen_v1","1");setCredSeen(true)}}catch(_){}
     }
     return function() { window.removeEventListener("scroll",h); clearInterval(t) };
