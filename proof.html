@@ -169,6 +169,7 @@ var BADGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAYAAACtWK6eAAAXgElEQVR4nO2deZB
 var hex = function(b){return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,"0")}).join("")};
 var unhex = function(h){var b=new Uint8Array(h.length/2);for(var i=0;i<h.length;i+=2)b[i/2]=parseInt(h.substr(i,2),16);return b};
 var b64d = function(s){var b=atob(s);var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+var b64e = function(u){var s="";for(var i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return btoa(s)};
 
 function qs(id){return document.getElementById(id)}
 function setHTML(id,h){var el=qs(id);if(el)el.innerHTML=h}
@@ -1102,46 +1103,74 @@ function loadDisputeCred(ev){
     try{
       var obj=JSON.parse(e.target.result);
       if(!obj.credentialId||!obj.version){throw new Error("Not a valid credential")}
+      if(!obj.publicKey||!obj.privateKey){throw new Error("Credential file is missing keys — download a fresh backup.")}
       disputeCredential=obj;
       var lbl=qs("dispute-cred-label");
       if(lbl)lbl.textContent="✓ Credential loaded: "+obj.credentialId.substring(0,16)+"… (Tier "+(obj.tier||"?")+")"
     }catch(ex){
       var lbl=qs("dispute-cred-label");
-      if(lbl)lbl.textContent="Invalid credential file. Try again.";
+      if(lbl)lbl.textContent=(ex&&ex.message)?ex.message:"Invalid credential file. Try again.";
       disputeCredential=null;
     }
   };
   reader.readAsText(f);
 }
 
+// S115CW BLOCKS ANNOUNCE #2 closure: dispute filings now carry an Ed25519
+// signature over canonical "DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"
+// where reason_hash = SHA-256(reason.trim()) hex and timestamp is ISO 8601.
+// The server-side worker rejects any dispute without a valid signature.
 async function submitDispute(hash){
   var el=qs("dispute-result");
   if(!disputeCredential){
     if(el)el.innerHTML='<div class="drop-result match-none">Load your credential file first.</div>';
     return;
   }
-  var reason=(qs("dispute-reason")||{}).value||"";
-  if(reason.trim().length<10){
+  if(!disputeCredential.privateKey||!disputeCredential.publicKey){
+    if(el)el.innerHTML='<div class="drop-result match-none">Credential file is missing keys. Download a fresh backup and retry.</div>';
+    return;
+  }
+  var reasonRaw=(qs("dispute-reason")||{}).value||"";
+  var reason=reasonRaw.trim();
+  if(reason.length<10){
     if(el)el.innerHTML='<div class="drop-result match-none">Reason must be at least 10 characters.</div>';
     return;
   }
+  if(reasonRaw.length>500){
+    if(el)el.innerHTML='<div class="drop-result match-none">Reason must be 500 characters or fewer.</div>';
+    return;
+  }
   var btn=qs("dispute-submit-btn");
-  if(btn){btn.disabled=true;btn.textContent="Submitting…"}
+  if(btn){btn.disabled=true;btn.textContent="Signing…"}
   try{
+    // reason_hash = lowercase hex SHA-256 of trimmed reason (client and server MUST trim consistently)
+    var reasonHash=await sha256(reason);
+    // ISO 8601, milliseconds stripped — matches attested_at / filed_at format across the worker
+    var ts=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
+    var canon="DISPUTE|"+hash+"|"+disputeCredential.credentialId+"|"+reasonHash+"|"+ts;
+    var priv=await crypto.subtle.importKey("pkcs8",b64d(disputeCredential.privateKey),{name:"Ed25519"},false,["sign"]);
+    var sigBuf=await crypto.subtle.sign("Ed25519",priv,new TextEncoder().encode(canon));
+    var sigB64=b64e(new Uint8Array(sigBuf));
+    if(btn)btn.textContent="Submitting…";
     var body={
       content_hash:hash,
       credential_id:disputeCredential.credentialId,
-      reason:reason.trim()
+      public_key:disputeCredential.publicKey,
+      reason:reason,
+      signature:sigB64,
+      timestamp:ts
     };
     var resp=await fetch(WORKER_URL+"/dispute-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     var data=await resp.json();
     if(resp.ok&&data.success){
       if(el)el.innerHTML='<div class="drop-result match-exact"><strong>✓ Dispute filed.</strong> This attestation now shows '+data.dispute_count+' dispute(s). Reload to see the updated record.</div>';
     } else {
-      if(el)el.innerHTML='<div class="drop-result match-none">'+(data.error||"Dispute failed.")+'</div>';
+      var msg=data.error||"Dispute failed.";
+      if(data.detail)msg+=" ("+data.detail+")";
+      if(el)el.innerHTML='<div class="drop-result match-none">'+msg+'</div>';
     }
   }catch(ex){
-    if(el)el.innerHTML='<div class="drop-result match-none">Error: '+ex.message+'</div>';
+    if(el)el.innerHTML='<div class="drop-result match-none">Error: '+(ex&&ex.message?ex.message:String(ex))+'</div>';
   }
   if(btn){btn.disabled=false;btn.textContent="Submit Dispute"}
 }

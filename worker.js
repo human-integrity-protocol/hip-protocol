@@ -5617,7 +5617,23 @@ async function handleUnsealProof(request, env) {
 // POST /dispute-proof — Flag a proof as contested.
 // Anyone with a valid credential can dispute. Rate-limited per credential.
 // Disputes are stored as an array on the proof record.
-// Fields: content_hash, credential_id, reason (text, max 500 chars)
+//
+// S115CW BLOCKS ANNOUNCE #2 closure: server-side Ed25519 signature verification
+// is now required. Prior to S115CW this endpoint accepted the dispute by
+// credential_id alone — any party knowing a victim's credential_id (public)
+// could impersonate a dispute filing. Per charter "If it says verify, it must
+// verify." A dispute is an attributed speech act: the signature binds the
+// credential holder to a specific (content_hash, reason) claim at a specific
+// timestamp.
+//
+// Body fields:  content_hash (hex64), credential_id (hex64), public_key (hex64),
+//               reason (10–500 chars), signature (b64), timestamp (ISO 8601, ±5 min).
+// Canonical:    "DISPUTE|" + content_hash + "|" + credential_id + "|" + reason_hash + "|" + timestamp
+// reason_hash = lowercase hex SHA-256(reason.trim()). Binds the specific claim
+// text to the signature — a captured signature cannot be replayed with a
+// different reason against the same (hash, cred).
+//
+// Rate-limited per credential: 5/24h. Per-credential dedupe on (content_hash, credential_id).
 
 async function handleDisputeProof(request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
@@ -5629,21 +5645,70 @@ async function handleDisputeProof(request, env) {
     return jsonResponse({ error: "Invalid JSON" }, 400, origin);
   }
 
-  const { content_hash, credential_id, reason } = body;
+  const { content_hash, credential_id, public_key, reason, signature, timestamp } = body;
 
-  if (!content_hash || !credential_id || !reason) {
-    return jsonResponse({ error: "Missing required fields: content_hash, credential_id, reason" }, 400, origin);
+  // ── Presence checks ──
+  if (!content_hash || !credential_id || !public_key || !reason || !signature || !timestamp) {
+    return jsonResponse({
+      error: "Missing required fields: content_hash, credential_id, public_key, reason, signature, timestamp"
+    }, 400, origin);
   }
 
+  // ── Hex-shape validation ──
   if (!/^[0-9a-f]{64}$/.test(content_hash)) {
-    return jsonResponse({ error: "Invalid content hash." }, 400, origin);
+    return jsonResponse({ error: "content_hash must be 64-char lowercase hex SHA-256." }, 400, origin);
+  }
+  if (!/^[0-9a-f]{64}$/.test(credential_id)) {
+    return jsonResponse({ error: "credential_id must be 64-char lowercase hex." }, 400, origin);
+  }
+  if (!/^[0-9a-f]{64}$/.test(public_key)) {
+    return jsonResponse({ error: "public_key must be 64-char lowercase hex (Ed25519 raw)." }, 400, origin);
   }
 
+  // ── Reason length (trimmed for min, raw for max so padding doesn't sneak past) ──
   if (typeof reason !== "string" || reason.trim().length < 10 || reason.length > 500) {
     return jsonResponse({ error: "Reason must be 10-500 characters." }, 400, origin);
   }
 
-  // Verify disputer has a valid credential
+  // ── Timestamp freshness (±5 min) — matches verifyAppAuth posture ──
+  const tsD = new Date(timestamp);
+  if (isNaN(tsD.getTime()) || Math.abs(Date.now() - tsD.getTime()) > 300000) {
+    return jsonResponse({ error: "Timestamp expired or invalid (±5 min window)." }, 401, origin);
+  }
+
+  // ── Binding check: SHA-256(public_key) === credential_id ──
+  const pubKeyBytes = new Uint8Array(public_key.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const computedIdBuf = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+  const computedId = Array.from(new Uint8Array(computedIdBuf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+  if (computedId !== credential_id) {
+    return jsonResponse({ error: "Key binding failed: SHA-256(public_key) !== credential_id." }, 403, origin);
+  }
+
+  // ── Reason hash (trimmed — server and client MUST trim consistently) ──
+  const reasonTrimmed = reason.trim();
+  const reasonHashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(reasonTrimmed));
+  const reasonHash = Array.from(new Uint8Array(reasonHashBuf))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+
+  // ── Ed25519 signature verification ──
+  // Canonical: "DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"
+  const canonDispute = "DISPUTE|" + content_hash + "|" + credential_id + "|" + reasonHash + "|" + timestamp;
+  const encD = new TextEncoder();
+  let _disputeOk;
+  try {
+    _disputeOk = await verifyEd25519FromBytes(pubKeyBytes, signature, encD.encode(canonDispute));
+  } catch (_e) {
+    return jsonResponse({ error: "Malformed signature" }, 400, origin);
+  }
+  if (!_disputeOk) {
+    return jsonResponse({
+      error: "invalid_signature",
+      detail: "Dispute signature does not verify against canonical \"DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}\"."
+    }, 403, origin);
+  }
+
+  // ── Verify disputer has a valid, non-superseded credential ──
   const trustRaw = await env.DEDUP_KV.get(`trust:${credential_id}`);
   if (!trustRaw) {
     return jsonResponse({ error: "Only HIP credential holders may file disputes." }, 403, origin);
@@ -5653,7 +5718,7 @@ async function handleDisputeProof(request, env) {
     return jsonResponse({ error: "This credential has been superseded." }, 403, origin);
   }
 
-  // Look up proof record
+  // ── Look up proof record ──
   const proofKey = `proof:${content_hash}`;
   const raw = await env.DEDUP_KV.get(proofKey);
   if (!raw) {
@@ -5662,12 +5727,12 @@ async function handleDisputeProof(request, env) {
 
   const record = JSON.parse(raw);
 
-  // Cannot dispute your own attestation
+  // ── Cannot dispute your own attestation ──
   if (record.credential_id === credential_id) {
     return jsonResponse({ error: "You cannot dispute your own attestation." }, 400, origin);
   }
 
-  // Rate limit disputes: max 5 per credential per 24h
+  // ── Rate limit: max 5 disputes per credential per 24h ──
   const disputeRateKey = `drate:${credential_id}`;
   const drateRaw = await env.DEDUP_KV.get(disputeRateKey);
   let drateCount = 0;
@@ -5678,18 +5743,18 @@ async function handleDisputeProof(request, env) {
     return jsonResponse({ error: "Dispute rate limit exceeded. Maximum 5 disputes per 24 hours." }, 429, origin);
   }
 
-  // Check for duplicate dispute from same credential
+  // ── Duplicate dispute check (same credential can't dispute same proof twice) ──
   const disputes = record.disputes || [];
   if (disputes.some(d => d.credential_id === credential_id)) {
     return jsonResponse({ error: "You have already filed a dispute for this proof." }, 409, origin);
   }
 
-  // Add dispute
+  // ── Append dispute + increment rate limit ──
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const dispute = {
     credential_id,
     credential_tier: trustRecord.tier,
-    reason: reason.trim(),
+    reason: reasonTrimmed,
     filed_at: now,
   };
 
@@ -5698,7 +5763,6 @@ async function handleDisputeProof(request, env) {
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(record));
 
-  // Increment dispute rate limit
   await env.DEDUP_KV.put(disputeRateKey, JSON.stringify({
     count: drateCount + 1,
     last_dispute: now,

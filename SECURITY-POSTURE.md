@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S114CW — 2026-04-22
-**Worker.js HEAD at update:** post-S114CW security-hardening deploy (`worker.js` ~7581 lines)
+**Last updated:** S115CW — 2026-04-22
+**Worker.js HEAD at update:** post-S115CW BLOCKS ANNOUNCE #2 closure deploy (`worker.js` ~7645 lines)
 
 ---
 
@@ -167,20 +167,24 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **Auth model**: Same as #20 (Didit/voucher/WebAuthn). NOT signature-authed — this is a pathway-re-establishment flow.
 - **Gap?**: **NONE.** Correct by design.
 
----
+### 22. `handleDisputeProof` — worker.js ~5622 (`POST /dispute-proof`)
 
-## Known open design questions (not S114CW in scope)
-
-### `handleDisputeProof` — worker.js ~5597 (`POST /dispute-proof`)
-
-- **Current auth**: credential existence check ONLY. NO signature required.
-- **Semantic claim**: a dispute is attributed to a credential ("X disputed this").
-- **Gap**: a dispute can currently be filed against any proof by any party knowing a victim's credential_id (public). Attribution to that credential is cryptographically unjustified.
-- **Fix direction** (future session, not S114CW): require signature over canonical `"DISPUTE|{content_hash}|{credential_id}|{reason_hash}"` or similar; bind to AppAuth pattern.
-- **Severity**: **MEDIUM.** Impersonation on an inherently-adversarial action. Not credit/asset drain, not impersonated attestation. Flag as BLOCKS ANNOUNCE #2 for next session scoping.
+- **Canonical**: `"DISPUTE|" + content_hash + "|" + credential_id + "|" + reason_hash + "|" + timestamp` where `reason_hash = lowercase hex SHA-256(reason.trim())` and `timestamp` is ISO 8601 (±5 min freshness).
+- **Body fields**: content_hash (hex64), credential_id (hex64), public_key (hex64 — NOW REQUIRED), reason (10–500 chars), signature (b64), timestamp (ISO 8601).
+- **Before S115CW**: credential existence check ONLY. NO signature required. Any party knowing a victim's credential_id (public) could impersonate a dispute filing against any proof, up to the 5/24h rate limit and per-credential dedupe.
+- **After S115CW** (BLOCKS ANNOUNCE #2 closure):
+  - ✅ Presence + hex-shape on content_hash, credential_id, public_key.
+  - ✅ Timestamp freshness ±5 min.
+  - ✅ Binding check: SHA-256(public_key) === credential_id.
+  - ✅ Ed25519 signature verified over canonical before any state mutation or proof-record KV read.
+  - ✅ Reason_hash binds the specific claim text to the signature — a captured signature cannot be replayed against the same (hash, cred) with a different reason.
+  - Business logic preserved: superseded_by guard, 5/24h rate limit, per-credential dedupe, own-attestation block.
+- **(c) claim**: "Credential X formally disputes attestation of content Y on the grounds of reason Z at time T."
+- **Gap?**: **NONE.** Closed S115CW. No legacy-unsigned fallback — `proof.html`'s `submitDispute` ships atomically with the worker as the only client surface.
 
 ---
 
 ## Change log
 
+- **S115CW — 2026-04-22.** BLOCKS ANNOUNCE #2 closure: `handleDisputeProof` now requires server-side Ed25519 signature verification over `"DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"`. `public_key` is a required body field; binding check (SHA-256(public_key) === credential_id) enforced. Timestamp freshness ±5 min matches `verifyAppAuth` posture. Client-side: `proof.html` `submitDispute` rewritten to import PKCS8 private key, compute `reason_hash = SHA-256(reason.trim())` and ISO 8601 timestamp, sign canonical, and send signature + public_key + timestamp alongside the existing body. No dual-canonical fallback — `proof.html` is the only client that POSTs `/dispute-proof`; worker + client ship atomically.
 - **S114CW — 2026-04-22.** BLOCKS ANNOUNCE #1 closure: server-side Ed25519 verification added to `verifyAppAuth`, `handleRegisterProof`, `handleApiAttest`, `handleVerify`, `handleUnsealProof`. Binding check (SHA-256(public_key) === credential_id) enforced on every endpoint that accepts both fields. Dual-canonical accept for `/register-proof` and `/api/attest` to preserve parity with both live client surfaces. `/api/verify` now returns `signature_verified: true | false | "skipped_no_public_key"` honestly. Deployed as a single atomic worker.js push.
