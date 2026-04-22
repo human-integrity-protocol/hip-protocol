@@ -3745,6 +3745,24 @@ async function handleRegisterCollectionProof(request, env) {
     } catch (_) { /* stale parent cache is acceptable per §3.9.6 */ }
   }
 
+  // ── 6i. S112CW — writeAffiliation for each collection member ──
+  // Mirror of handleRegisterSeriesMember's post-write affiliation stamp
+  // (worker.js ~L4277). Non-fatal per writeAffiliation contract; dedup on
+  // {type, id} tuple means idempotent replays and chain re-executions are
+  // safe. Forward-only posture: pre-S112 collections are NOT backfilled
+  // per kickoff §3 Q3 (a) new-only decision; a one-shot reconciliation
+  // script can fill historicals if demand surfaces (CLAUDE.md carryover
+  // #36). Parallel because each target key (affiliations:{member_hash})
+  // is distinct — no same-key races. Runs AFTER the active-record flip
+  // so a failed mid-sequence POST does not stamp affiliations on a
+  // collection that never reached status:"active".
+  await Promise.all(members.map(m => writeAffiliation(env, m.member_hash, {
+    type: "collection",
+    id: collectionId,
+    credential_id: credentialId,
+    added_at: nowIso,
+  })));
+
   // Best-effort backfill of trust_record.public_key (legacy credentials).
   // Failure here is silent — the collection record is already active.
   if (backfillPubKey) {
@@ -4738,12 +4756,14 @@ async function handleGetCreatorSeries(credentialId, request, env) {
 // Stored newest-last per §1.5; reversed here for newest-first rendering
 // (§7.8 final paragraph).
 //
-// S111 known gap: handleRegisterCollectionProof does NOT yet call
-// writeAffiliation, so this endpoint surfaces series affiliations only.
-// Collection affiliations for post-S111 collections require a one-line
-// retrofit (writeAffiliation loop over manifest.members at registration
-// time); deferred per kickoff §3 Q3 recommendation "(a) new-only" — see
-// Phase C wrap-up note for the decision point.
+// S112CW: handleRegisterCollectionProof now calls writeAffiliation for
+// each member at the end of the active-record write sequence (§6i,
+// worker.js ~L3747), so forward-going collection affiliations surface
+// here alongside series affiliations. Pre-S112 collections are NOT
+// backfilled per the §3 Q3 (a) "new-only" decision (CLAUDE.md carryover
+// #36); a one-shot script can reconcile historicals if demand surfaces.
+// A missing affiliations:{hash} key still returns an empty array, not
+// 404 — this endpoint is "list affiliations," not "verify attestation."
 //
 // Validation order (§7.8):
 //   1. Shape-check content_hash               → 400 invalid_content_hash
