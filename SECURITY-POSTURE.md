@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S115CW — 2026-04-22
-**Worker.js HEAD at update:** post-S115CW BLOCKS ANNOUNCE #2 closure deploy (`worker.js` ~7645 lines)
+**Last updated:** S116CW — 2026-04-22
+**Worker.js HEAD at update:** post-S116CW BLOCKS SCALE #1 worker-side deploy (`worker.js` ~7955 lines)
 
 ---
 
@@ -35,7 +35,7 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 ### 1. `verifyAppAuth` helper — worker.js:129
 
-- **Used by**: `/retire-credential`, `/api/collections/by-credential`, `/api/portfolio`, `/api/credential/{id}/attestations`, `/api/credits/balance`, `/api/credits/usage`, `/api/credits/consume`, `/api/stripe/checkout`, `/api/stripe/portal`.
+- **Used by**: `/retire-credential`, `/api/collections/by-credential`, `/api/portfolio`, `/api/credential/{id}/attestations`, `/api/credits/balance`, `/api/credits/usage`, `/api/credits/consume`, `/api/stripe/checkout`, `/api/stripe/portal`, `/api/keys/create`, `/api/keys/list`, `/api/keys/deactivate` (S116CW).
 - **Canonical**: `"HIPKIT|" + endpoint + "|" + credential_id + "|" + timestamp`
 - **(a) field-presence checks**: credential_id, public_key, timestamp, signature. Hex-shape validation on credential_id + public_key. Timestamp ±5 min.
 - **(b) crypto verification** (S114CW): ✅ Ed25519 signature verified over canonical. ✅ Binding check SHA-256(public_key) === credential_id. ✅ Trust record existence. ✅ Superseded-by guard.
@@ -182,9 +182,40 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **(c) claim**: "Credential X formally disputes attestation of content Y on the grounds of reason Z at time T."
 - **Gap?**: **NONE.** Closed S115CW. No legacy-unsigned fallback — `proof.html`'s `submitDispute` ships atomically with the worker as the only client surface.
 
+### 23. `handleUserCreateApiKey` — worker.js ~5916 (`POST /api/keys/create`)
+
+- **Auth**: `verifyAppAuth` with `"HIPKIT|/api/keys/create|{credId}|{ts}"`.
+- **Body fields** (beyond AppAuth): `label?` (string, ≤60 chars, sanitized to trimmed slice).
+- **Effect**: generates a 32-byte random `rawKey` (64 hex), stores `api_key:{hmac(DEDUP_SECRET, rawKey)}` with `{credential_id, tier, label, created_at, active:true, last_used:null}`, appends the keyHash to `cred_api_keys:{credential_id}`, increments `kcrate:{hmac(cred_id)}` (10/24h rate limit).
+- **Hard cap**: 100 keys per credential (index length check). 409 `key_limit_reached` when exceeded — user must deactivate before creating.
+- **Rate limit**: 10 creates / 24h per credential. 429 `rate_limited` when exceeded.
+- **Returns**: `api_key` (rawKey, ONCE ONLY) + `key_id` (first 8 hex chars of keyHash, the display handle).
+- **(c) claim**: "Credential holder creates a new API key for programmatic use, bound to their credential."
+- **Gap?**: **NONE.** AppAuth inheritance — full Ed25519 + binding + superseded-by + trust existence. Rate limit sized for real workflow (rotations, labeling), low enough to contain spam. Raw key never persists.
+
+### 24. `handleListApiKeys` — worker.js ~6002 (`POST /api/keys/list`)
+
+- **Auth**: `verifyAppAuth` with `"HIPKIT|/api/keys/list|{credId}|{ts}"`.
+- **Effect**: reads `cred_api_keys:{credential_id}`, fetches every `api_key:{keyHash}` record in parallel, returns `{key_id, label, created_at, last_used, active}` tuples newest-first.
+- **Defense-in-depth**: any key record whose stored `credential_id` doesn't match the authenticated caller is filtered out (null) even if its hash appears in the index.
+- **Never returns** the raw key (unrecoverable from hmac anyway). `key_id` leak is acceptable — 8 hex of HMAC output is useless without the full key.
+- **(c) claim**: "Enumerate the authenticated credential's API keys and their metadata."
+- **Gap?**: **NONE.** AppAuth inheritance.
+
+### 25. `handleDeactivateApiKey` — worker.js ~6057 (`POST /api/keys/deactivate`)
+
+- **Auth**: `verifyAppAuth` with `"HIPKIT|/api/keys/deactivate|{credId}|{ts}"`.
+- **Body fields** (beyond AppAuth): `key_id` (8-char lowercase hex prefix from `/api/keys/list`).
+- **Effect**: resolves `key_id` prefix → full `keyHash` by scanning ONLY the authenticated credential's `cred_api_keys` index (never a global scan). If the resolved `api_key:{keyHash}` record's `credential_id` doesn't match the authenticated caller, returns 403 `key_not_owned_by_credential`. On match, flips `active:false`, stamps `deactivated_at`, writes back.
+- **Idempotency**: already-deactivated returns 200 with `already_deactivated:true` (no-op).
+- **Ambiguity**: multiple keyHashes sharing the 8-char prefix → 409 `ambiguous_key_id` (practically impossible at realistic key counts; defended anyway).
+- **(c) claim**: "Credential holder deactivates one of their own API keys. Deactivation is permanent (no reactivate)."
+- **Gap?**: **NONE.** AppAuth inheritance + per-credential index scope + credential_id match check on the key record itself (defense-in-depth against any hypothetical cross-credential KV leak).
+
 ---
 
 ## Change log
 
+- **S116CW — 2026-04-22.** BLOCKS SCALE #1 worker-side: three AppAuth-gated endpoints for user-facing API key management — `POST /api/keys/create`, `POST /api/keys/list`, `POST /api/keys/deactivate`. New KV shapes `cred_api_keys:{credential_id}` (reverse index) and `kcrate:{hmac(cred_id)}` (24h TTL rate limit at 10 creates/day). `api_key:{keyHash}` record extended with optional `last_used` (stamped by `handleApiAttest` on each authenticated auth pass; non-fatal) and optional `deactivated_at` (stamped on deactivation). Admin endpoint `POST /api/admin/keys` retained as escape hatch. No existing endpoints modified in scope/behavior beyond the `last_used` stamp. No client surface touched this session — hipkit.net Keys panel UX deferred to S117CW.
 - **S115CW — 2026-04-22.** BLOCKS ANNOUNCE #2 closure: `handleDisputeProof` now requires server-side Ed25519 signature verification over `"DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"`. `public_key` is a required body field; binding check (SHA-256(public_key) === credential_id) enforced. Timestamp freshness ±5 min matches `verifyAppAuth` posture. Client-side: `proof.html` `submitDispute` rewritten to import PKCS8 private key, compute `reason_hash = SHA-256(reason.trim())` and ISO 8601 timestamp, sign canonical, and send signature + public_key + timestamp alongside the existing body. No dual-canonical fallback — `proof.html` is the only client that POSTs `/dispute-proof`; worker + client ship atomically.
 - **S114CW — 2026-04-22.** BLOCKS ANNOUNCE #1 closure: server-side Ed25519 verification added to `verifyAppAuth`, `handleRegisterProof`, `handleApiAttest`, `handleVerify`, `handleUnsealProof`. Binding check (SHA-256(public_key) === credential_id) enforced on every endpoint that accepts both fields. Dual-canonical accept for `/register-proof` and `/api/attest` to preserve parity with both live client surfaces. `/api/verify` now returns `signature_verified: true | false | "skipped_no_public_key"` honestly. Deployed as a single atomic worker.js push.

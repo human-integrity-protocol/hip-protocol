@@ -64,7 +64,9 @@
 //   prate:{cred_hash}    — Proof registration rate limit (24h TTL) (S37)
 //   drate:{cred_id}      — Dispute filing rate limit (24h TTL) (S38)
 //   short:{short_id}     — Short link reverse lookup → content_hash (permanent) (S40)
-//   api_key:{key_hash}   — API key → credential binding (permanent) (S82)
+//   api_key:{key_hash}   — API key → credential binding (permanent) (S82, last_used stamped S116CW)
+//   cred_api_keys:{cred_id} — Reverse index { key_hashes: [hex64], updated_at } (permanent) (S116CW)
+//   kcrate:{cred_hash}   — API key creation rate limit counter (24h TTL) (S116CW)
 //   credits:{cred_id}    — Credit balance record (permanent) (S83)
 //   stripe_cust:{cred_id} — Stripe customer ID mapping (permanent) (S83)
 //
@@ -2329,6 +2331,34 @@ async function addToCredProofsIndex(env, credential_id, content_hash) {
       return; // already indexed — idempotent no-op
     }
     record.hashes.push(content_hash);
+    record.updated_at = new Date().toISOString();
+    await env.DEDUP_KV.put(key, JSON.stringify(record));
+  } catch (_) {
+    // Non-fatal: index is an accelerator, not source of truth.
+  }
+}
+
+// S116CW: reverse index cred_api_keys:{credential_id} — enables /api/keys/list
+// to enumerate a credential's API keys without a KV scan. Same non-fatal
+// posture as addToCredProofsIndex. The primary record is api_key:{keyHash};
+// this index is an accelerator. Reads of api_key:{keyHash} remain the source
+// of truth for a key's existence, active state, and metadata.
+async function addToCredApiKeysIndex(env, credential_id, key_hash) {
+  if (!credential_id || !key_hash) return;
+  try {
+    const key = `cred_api_keys:${credential_id}`;
+    const raw = await env.DEDUP_KV.get(key);
+    let record;
+    if (raw) {
+      try { record = JSON.parse(raw); } catch (_) { record = null; }
+    }
+    if (!record || !Array.isArray(record.key_hashes)) {
+      record = { key_hashes: [], updated_at: null };
+    }
+    if (record.key_hashes.indexOf(key_hash) !== -1) {
+      return; // already indexed — idempotent no-op
+    }
+    record.key_hashes.push(key_hash);
     record.updated_at = new Date().toISOString();
     await env.DEDUP_KV.put(key, JSON.stringify(record));
   } catch (_) {
@@ -5851,6 +5881,263 @@ async function handleCreateApiKey(request, env) {
 }
 
 
+// ══════════════════════════════════════════════════════════════
+// S116CW BLOCKS SCALE #1 — User-facing API key management
+// ══════════════════════════════════════════════════════════════
+//
+// Three AppAuth-gated endpoints so credential holders can create, list,
+// and deactivate their own API keys without an admin round-trip. The admin
+// endpoint (POST /api/admin/keys) remains as the escape hatch for platform
+// operations (e.g. bootstrapping a key before the user has a client that
+// can sign AppAuth). User-facing endpoints route through verifyAppAuth and
+// inherit its full posture (Ed25519 sig verify + SHA-256(pk)===cred_id
+// binding + superseded-by guard + trust-record existence).
+//
+// key_id scheme: user-facing endpoints expose the FIRST 8 HEX CHARS of the
+// keyHash (HMAC-SHA-256 of rawKey under DEDUP_SECRET) as a display handle.
+// 32-bit space, collision-safe for realistic per-credential key counts
+// (hard cap 100 keys per credential per the cred_api_keys index). Leaking
+// 8 hex of the HMAC output does not compromise the raw key. The raw key is
+// only returned ONCE, from /api/keys/create, and is never persisted.
+//
+// Rate limit: 10 creates / 24h per credential (kcrate:{hmac(cred_id)}). Low
+// enough to contain accidental/malicious spam, high enough for legitimate
+// use (rotating keys, labeling per-integration, recovering from
+// accidental deactivation).
+//
+// Retirement cascade: intentionally NOT implemented in S116CW. When a
+// credential is retired (superseded_by set), verifyAppAuth rejects
+// /api/keys/create|list|deactivate, AND the proof pipeline rejects any
+// /api/attest call resolving to a retired credential. Existing api_key
+// records are thus inert without being explicitly flipped to active:false.
+// Flagged as an S117+ hygiene carryover.
+
+// POST /api/keys/create — Credential-holder-authenticated key creation.
+async function handleUserCreateApiKey(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  const auth = await verifyAppAuth(request, "/api/keys/create", env);
+  if (!auth.ok) {
+    return jsonResponse({ error: auth.error }, auth.status, origin);
+  }
+  const { credential_id, trust_record, body } = auth;
+
+  // Optional label for the Keys panel; sanitize to 60 chars, ASCII-ish only.
+  let label = null;
+  if (body.label !== undefined && body.label !== null) {
+    if (typeof body.label !== "string") {
+      return jsonResponse({ error: "label must be a string" }, 400, origin);
+    }
+    label = body.label.trim().slice(0, 60);
+    if (label.length === 0) label = null;
+  }
+
+  // Rate limit: 10 key creations per 24h per credential.
+  const kcrateHash = await hmacSHA256(env.DEDUP_SECRET, "kcrate:" + credential_id);
+  const kcrateKey = `kcrate:${kcrateHash}`;
+  const kcrateRaw = await env.DEDUP_KV.get(kcrateKey);
+  const kcrateCount = kcrateRaw ? (JSON.parse(kcrateRaw).count || 0) : 0;
+  const kcrateLimit = 10;
+  if (kcrateCount >= kcrateLimit) {
+    return jsonResponse({
+      error: "rate_limited",
+      message: `Maximum ${kcrateLimit} API key creations per 24 hours per credential.`,
+      limit: kcrateLimit,
+      current: kcrateCount,
+    }, 429, origin);
+  }
+
+  // Hard cap: 100 active or inactive keys per credential (enforced against
+  // the cred_api_keys index, which counts every key ever created — matches
+  // the admin endpoint's implicit unbounded behavior with a ceiling).
+  const indexRaw = await env.DEDUP_KV.get(`cred_api_keys:${credential_id}`);
+  const indexRecord = indexRaw ? JSON.parse(indexRaw) : null;
+  const currentKeyCount = indexRecord && Array.isArray(indexRecord.key_hashes)
+    ? indexRecord.key_hashes.length : 0;
+  if (currentKeyCount >= 100) {
+    return jsonResponse({
+      error: "key_limit_reached",
+      message: "Maximum 100 API keys per credential. Deactivate unused keys before creating a new one.",
+      current: currentKeyCount,
+      limit: 100,
+    }, 409, origin);
+  }
+
+  // Generate rawKey — 32 random bytes, 64 hex chars. Same shape as admin endpoint.
+  const rawBytes = crypto.getRandomValues(new Uint8Array(32));
+  const rawKey = Array.from(rawBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  const keyHash = await hmacSHA256(env.DEDUP_SECRET, rawKey);
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  const keyRecord = {
+    credential_id,
+    tier: trust_record.tier,
+    label,
+    created_at: now,
+    active: true,
+    last_used: null,
+  };
+  await env.DEDUP_KV.put(`api_key:${keyHash}`, JSON.stringify(keyRecord));
+  await addToCredApiKeysIndex(env, credential_id, keyHash);
+
+  // Increment rate-limit counter (24h TTL).
+  await env.DEDUP_KV.put(kcrateKey, JSON.stringify({
+    count: kcrateCount + 1,
+    last_create: now,
+  }), { expirationTtl: 86400 });
+
+  return jsonResponse({
+    success: true,
+    api_key: rawKey,
+    key_id: keyHash.slice(0, 8),
+    credential_id,
+    tier: trust_record.tier,
+    label,
+    created_at: now,
+    message: "Store this API key securely. It will not be shown again.",
+  }, 200, origin);
+}
+
+// POST /api/keys/list — Enumerate keys for the authenticated credential.
+async function handleListApiKeys(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  const auth = await verifyAppAuth(request, "/api/keys/list", env);
+  if (!auth.ok) {
+    return jsonResponse({ error: auth.error }, auth.status, origin);
+  }
+  const { credential_id } = auth;
+
+  const indexRaw = await env.DEDUP_KV.get(`cred_api_keys:${credential_id}`);
+  if (!indexRaw) {
+    return jsonResponse({ success: true, keys: [] }, 200, origin);
+  }
+  let indexRecord;
+  try { indexRecord = JSON.parse(indexRaw); } catch (_) { indexRecord = null; }
+  if (!indexRecord || !Array.isArray(indexRecord.key_hashes) || indexRecord.key_hashes.length === 0) {
+    return jsonResponse({ success: true, keys: [] }, 200, origin);
+  }
+
+  // Fetch all key records in parallel. Skip any record whose credential_id
+  // doesn't match (defense-in-depth — should never happen via this code path
+  // but guards against any future admin/manual KV manipulation).
+  const keyRecords = await Promise.all(
+    indexRecord.key_hashes.map(async kh => {
+      const raw = await env.DEDUP_KV.get(`api_key:${kh}`);
+      if (!raw) return null;
+      try {
+        const r = JSON.parse(raw);
+        if (r.credential_id !== credential_id) return null;
+        return {
+          key_id: kh.slice(0, 8),
+          label: r.label || null,
+          created_at: r.created_at || null,
+          last_used: r.last_used || null,
+          active: r.active === true,
+        };
+      } catch (_) { return null; }
+    })
+  );
+
+  // Newest-first by created_at descending. Nulls sink to the bottom.
+  const keys = keyRecords
+    .filter(k => k !== null)
+    .sort((a, b) => {
+      if (!a.created_at && !b.created_at) return 0;
+      if (!a.created_at) return 1;
+      if (!b.created_at) return -1;
+      return b.created_at.localeCompare(a.created_at);
+    });
+
+  return jsonResponse({ success: true, keys }, 200, origin);
+}
+
+// POST /api/keys/deactivate — Flip active:false on a specific key.
+// Body adds { key_id: <8-hex-char prefix> }.
+async function handleDeactivateApiKey(request, env) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+
+  const auth = await verifyAppAuth(request, "/api/keys/deactivate", env);
+  if (!auth.ok) {
+    return jsonResponse({ error: auth.error }, auth.status, origin);
+  }
+  const { credential_id, body } = auth;
+
+  const keyIdPrefix = body.key_id;
+  if (!keyIdPrefix || typeof keyIdPrefix !== "string") {
+    return jsonResponse({
+      error: "Missing required field: key_id (8-char hex prefix from /api/keys/list)",
+    }, 400, origin);
+  }
+  if (!/^[0-9a-f]{8}$/.test(keyIdPrefix)) {
+    return jsonResponse({
+      error: "key_id must be an 8-character lowercase hex prefix",
+    }, 400, origin);
+  }
+
+  // Resolve prefix → full keyHash by scanning this credential's key index only.
+  const indexRaw = await env.DEDUP_KV.get(`cred_api_keys:${credential_id}`);
+  if (!indexRaw) {
+    return jsonResponse({ error: "key_not_found" }, 404, origin);
+  }
+  let indexRecord;
+  try { indexRecord = JSON.parse(indexRaw); } catch (_) { indexRecord = null; }
+  if (!indexRecord || !Array.isArray(indexRecord.key_hashes)) {
+    return jsonResponse({ error: "key_not_found" }, 404, origin);
+  }
+
+  const matches = indexRecord.key_hashes.filter(kh => kh.startsWith(keyIdPrefix));
+  if (matches.length === 0) {
+    return jsonResponse({ error: "key_not_found" }, 404, origin);
+  }
+  if (matches.length > 1) {
+    return jsonResponse({
+      error: "ambiguous_key_id",
+      message: "Multiple keys share this 8-char prefix. Provide more characters to disambiguate.",
+      match_count: matches.length,
+    }, 409, origin);
+  }
+
+  const fullKeyHash = matches[0];
+  const keyRaw = await env.DEDUP_KV.get(`api_key:${fullKeyHash}`);
+  if (!keyRaw) {
+    return jsonResponse({ error: "key_not_found" }, 404, origin);
+  }
+  let keyRecord;
+  try { keyRecord = JSON.parse(keyRaw); } catch (_) { keyRecord = null; }
+  if (!keyRecord) {
+    return jsonResponse({ error: "key_record_malformed" }, 500, origin);
+  }
+
+  // Defense-in-depth: reject any mismatch between the key's stored credential_id
+  // and the authenticated caller. The cred_api_keys index SHOULD keep these
+  // aligned, but a direct-API-key record must not be deactivatable across
+  // credential boundaries.
+  if (keyRecord.credential_id !== credential_id) {
+    return jsonResponse({ error: "key_not_owned_by_credential" }, 403, origin);
+  }
+
+  if (keyRecord.active === false) {
+    return jsonResponse({
+      success: true,
+      key_id: keyIdPrefix,
+      already_deactivated: true,
+    }, 200, origin);
+  }
+
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  keyRecord.active = false;
+  keyRecord.deactivated_at = now;
+  await env.DEDUP_KV.put(`api_key:${fullKeyHash}`, JSON.stringify(keyRecord));
+
+  return jsonResponse({
+    success: true,
+    key_id: keyIdPrefix,
+    deactivated_at: now,
+  }, 200, origin);
+}
+
+
 // POST /api/attest — Submit an attestation via API key.
 // Authenticated via X-API-Key header. Reuses the proof registration pipeline
 // with the same gates: credential check, rate limits, first-write-wins,
@@ -5882,6 +6169,18 @@ async function handleApiAttest(request, env) {
   }
 
   const credential_id = keyRecord.credential_id;
+
+  // S116CW: stamp last_used on the key record (non-fatal). The user-facing
+  // Keys panel on hipkit.net reads this via /api/keys/list to show when each
+  // key was last active. One extra KV write per successful auth; acceptable
+  // at current attestation volume. If write cost becomes meaningful, debounce
+  // with a TTL-guarded stamp (e.g. skip write when last_used < 1h old).
+  try {
+    keyRecord.last_used = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    await env.DEDUP_KV.put(`api_key:${keyHash}`, JSON.stringify(keyRecord));
+  } catch (_) {
+    // Non-fatal: last_used is a convenience field, not source of truth.
+  }
 
   // ── Parse request body ──
   let body;
@@ -7428,6 +7727,17 @@ export default {
     // S82: Admin — generate API key for a credential
     if (method === "POST" && path === "/api/admin/keys") {
       return handleCreateApiKey(request, env);
+    }
+
+    // S116CW BLOCKS SCALE #1 — User-facing API key management (AppAuth-gated)
+    if (method === "POST" && path === "/api/keys/create") {
+      return handleUserCreateApiKey(request, env);
+    }
+    if (method === "POST" && path === "/api/keys/list") {
+      return handleListApiKeys(request, env);
+    }
+    if (method === "POST" && path === "/api/keys/deactivate") {
+      return handleDeactivateApiKey(request, env);
     }
 
     // S106.8CW Phase 3b — Admin dry-run for the pending-GC sweep.
