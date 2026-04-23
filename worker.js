@@ -4093,9 +4093,17 @@ async function handleRegisterSeries(request, env) {
     return jsonResponse({ error: "malformed_body" }, 400, origin);
   }
 
-  const { series_id, manifest, signature } = body;
+  const { series_id, manifest, signature, hipkit_originated } = body;
   if (typeof signature !== "string" || signature.length === 0) {
     return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+  // S122CW: optional HIPKit-routing metadata flag. Stamped on the persisted
+  // record when strictly true; otherwise absent. NOT inside the signed
+  // manifest — same posture as original_hash (S102), attested_copy_hash (S103),
+  // file_name (S88). HIPKit-side surfaces filter on this; protocol-side
+  // verifiers ignore it. See WEBSITE-TOOLS-HK/SESSION 122CW/HIPKIT-SERIES-DESIGN.md §3.
+  if (hipkit_originated !== undefined && typeof hipkit_originated !== "boolean") {
+    return jsonResponse({ error: "invalid_field", field: "hipkit_originated" }, 400, origin);
   }
 
   // ── 2. Shape-check series_id ──
@@ -4225,6 +4233,9 @@ async function handleRegisterSeries(request, env) {
     closed_at: null,
     member_count: 0,
     last_event_at: createdAt,
+    // S122CW: conditional spread keeps protocol-default record shape pristine
+    // (field ABSENT, not false, when not HIPKit-originated).
+    ...(hipkit_originated === true && { hipkit_originated: true }),
   };
   await env.DEDUP_KV.put(seriesKey, JSON.stringify(seriesRecord));
 
@@ -4303,12 +4314,19 @@ async function handleRegisterSeriesMember(request, env) {
     return jsonResponse({ error: "malformed_body" }, 400, origin);
   }
 
-  const { event, signature } = body;
+  const { event, signature, hipkit_originated } = body;
   if (typeof event !== "object" || event === null || Array.isArray(event)) {
     return jsonResponse({ error: "missing_field", field: "event" }, 400, origin);
   }
   if (typeof signature !== "string" || signature.length === 0) {
     return jsonResponse({ error: "missing_field", field: "signature" }, 400, origin);
+  }
+  // S122CW: optional HIPKit-routing metadata flag on the EVENT record (not
+  // inside event — event is the signed payload). Independent of the parent
+  // series flag — a hipkit-net add to a hipprotocol-originated series flags
+  // the event but not the series, and vice versa. See HIPKIT-SERIES-DESIGN.md §4.2.
+  if (hipkit_originated !== undefined && typeof hipkit_originated !== "boolean") {
+    return jsonResponse({ error: "invalid_field", field: "hipkit_originated" }, 400, origin);
   }
 
   // ── 2. event.event_type === "series_add" ──
@@ -4429,7 +4447,13 @@ async function handleRegisterSeriesMember(request, env) {
   const eventHashHex = await sha256Hex(jcsCanonicalize(event));
   const appliedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   // Stored form = event + signature field (per §7.6 response shape).
-  const storedEvent = { ...event, signature };
+  // S122CW: conditional spread of hipkit_originated — same posture as
+  // handleRegisterSeries (field ABSENT, not false, when not HIPKit-originated).
+  const storedEvent = {
+    ...event,
+    signature,
+    ...(hipkit_originated === true && { hipkit_originated: true }),
+  };
   await env.DEDUP_KV.put(`series_event:${eventHashHex}`, JSON.stringify(storedEvent));
 
   // ── 14. Append series_events:{series_id} ──

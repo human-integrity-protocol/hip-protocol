@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S118CW — 2026-04-23
-**Worker.js HEAD at update:** post-S118CW API key retirement cascade (`worker.js` ~8027 lines)
+**Last updated:** S122CW — 2026-04-23
+**Worker.js HEAD at update:** post-S122CW `hipkit_originated` flag on series endpoints (`worker.js` ~8051 lines)
 
 ---
 
@@ -96,13 +96,15 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 - **Canonical**: `JCS(manifest)` → SHA-256 → Ed25519 verify against `manifest.creator.public_key`.
 - **Crypto verification**: ✅ Already correct (shipped S111CW). TI≥60 floor. Superseded-by guard. First-writer-wins on series_id.
-- **Gap?**: **NONE.** Unchanged.
+- **S122CW addendum**: optional `hipkit_originated` boolean body field accepted (rejected with `invalid_field` if non-boolean). NOT inside the signed manifest — metadata-only routing flag, same posture as `original_hash` (S102), `attested_copy_hash` (S103), `file_name` (S88). Stamped on the persisted `series:{id}` record only when strictly `true` (conditional spread; absent otherwise to keep protocol-default record shape pristine). Verifier-side semantic correctness unchanged.
+- **Gap?**: **NONE.** Field-presence-only addition; no verification gate added, weakened, or removed.
 
 ### 9. `/register-series-member` — same helper as #8
 
 - **Canonical**: `JCS(event_minus_signature)` → SHA-256 → Ed25519 verify.
 - **Crypto verification**: ✅ Already correct. Creator-match enforcement. `member_proof_not_found` gate. Superseded-by guard.
-- **Gap?**: **NONE.** Unchanged.
+- **S122CW addendum**: optional `hipkit_originated` boolean body field accepted (rejected with `invalid_field` if non-boolean). NOT inside the signed event — metadata only. Stamped on the persisted `series_event:{event_hash}` record only when strictly `true`. Independent of the parent series' flag (a HIPKit-side add to a hipprotocol-originated series flags the event, not the series; vice versa).
+- **Gap?**: **NONE.** Field-presence-only addition.
 
 ### 10. `/close-series` — same helper as #8
 
@@ -217,6 +219,7 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 ## Change log
 
+- **S122CW — 2026-04-23.** Optional `hipkit_originated` boolean body field added to `/register-series` and `/register-series-member` (Carryover #40 design pass; HIPKIT-SERIES-DESIGN.md §4). Field is metadata-only: stamped on the persisted record when strictly `true`, absent otherwise (conditional spread keeps protocol-default record shape unchanged for hipprotocol.org-originated writes). NOT inside the signed manifest/event — same posture as `original_hash`, `attested_copy_hash`, `file_name`. Validation: `undefined | true | false` accepted; non-boolean rejected with `invalid_field`. Verifier-side semantic correctness identical (both `series.html` read path and `/api/series/{id}` ignore the flag entirely; HIPKit-side surfaces filter on it for the portfolio Series tab and downstream cert/3D integrations). No verification gate added, weakened, or removed on any endpoint. worker.js +24 lines (8027 → 8051). Single atomic Cloudflare Dashboard deploy. No client migration required (legacy clients omit the field; record shape unchanged).
 - **S118CW — 2026-04-23.** API key retirement cascade (Carryover #48). `handleRetireCredential` now reads `cred_api_keys:{credential_id}` after the trust-record write and parallel-deactivates every still-active `api_key:{keyHash}` belonging to the credential, stamping `deactivated_reason:"credential_retired"` and `deactivated_at` (= retirement timestamp). Already-deactivated keys are preserved untouched (their existing `deactivated_reason` — typically `"user_revoked"` — is not clobbered). Per-key failures non-fatal; retirement succeeds even if every cascade write fails. Response augmented with `cascaded_keys: {total, deactivated}`. `handleListApiKeys` response shape extended with additive `deactivated_at` + `deactivated_reason` fields (null on still-active keys). `handleDeactivateApiKey` now stamps `deactivated_reason:"user_revoked"` for symmetry. No verification weakened on any endpoint; cascade is data hygiene that closes the audit-shape inconsistency surfaced in S116CW Carryover #48. No client migration required for the worker change (additive fields, idempotent cascade). hipkit.net Keys panel updated in same session to render "Revoked · credential retired" vs plain "Revoked" based on `deactivated_reason`.
 - **S116CW — 2026-04-22.** BLOCKS SCALE #1 worker-side: three AppAuth-gated endpoints for user-facing API key management — `POST /api/keys/create`, `POST /api/keys/list`, `POST /api/keys/deactivate`. New KV shapes `cred_api_keys:{credential_id}` (reverse index) and `kcrate:{hmac(cred_id)}` (24h TTL rate limit at 10 creates/day). `api_key:{keyHash}` record extended with optional `last_used` (stamped by `handleApiAttest` on each authenticated auth pass; non-fatal) and optional `deactivated_at` (stamped on deactivation). Admin endpoint `POST /api/admin/keys` retained as escape hatch. No existing endpoints modified in scope/behavior beyond the `last_used` stamp. No client surface touched this session — hipkit.net Keys panel UX deferred to S117CW.
 - **S115CW — 2026-04-22.** BLOCKS ANNOUNCE #2 closure: `handleDisputeProof` now requires server-side Ed25519 signature verification over `"DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"`. `public_key` is a required body field; binding check (SHA-256(public_key) === credential_id) enforced. Timestamp freshness ±5 min matches `verifyAppAuth` posture. Client-side: `proof.html` `submitDispute` rewritten to import PKCS8 private key, compute `reason_hash = SHA-256(reason.trim())` and ISO 8601 timestamp, sign canonical, and send signature + public_key + timestamp alongside the existing body. No dual-canonical fallback — `proof.html` is the only client that POSTs `/dispute-proof`; worker + client ship atomically.
