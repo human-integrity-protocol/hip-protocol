@@ -1,1 +1,10 @@
 .DS_Store
+
+# S106-era exploratory test scaffolding (kept locally for reference, not blessed for repo tracking)
+# Closed S121CW per Carryover #33 — see CLAUDE.md and SESSION 121CW deliverables.
+phase106_*/
+tools/phase1-test.mjs
+tools/phase2-sign-smoke.js
+tools/phase106_*.js
+tools/phase106_*.sh
+tools/test-vectors/
