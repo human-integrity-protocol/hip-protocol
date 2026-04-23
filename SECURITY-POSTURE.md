@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S116CW — 2026-04-22
-**Worker.js HEAD at update:** post-S116CW BLOCKS SCALE #1 worker-side deploy (`worker.js` ~7955 lines)
+**Last updated:** S118CW — 2026-04-23
+**Worker.js HEAD at update:** post-S118CW API key retirement cascade (`worker.js` ~8027 lines)
 
 ---
 
@@ -110,11 +110,12 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **Crypto verification**: ✅ Already correct. Creator-match. Terminal-transition gate.
 - **Gap?**: **NONE.** Unchanged.
 
-### 11. `handleRetireCredential` — worker.js ~2475 (`POST /retire-credential`)
+### 11. `handleRetireCredential` — worker.js ~2540 (`POST /retire-credential`)
 
 - **Auth**: routes through `verifyAppAuth` with canonical `"HIPKIT|/retire-credential|{credId}|{ts}"`.
 - **Effect**: writes `superseded_by: "self-retired"` on trust record. Any subsequent AppAuth call with this credential will fail.
-- **Gap?**: **NONE** (post-S114CW — inherits from `verifyAppAuth` fix).
+- **S118CW cascade**: after the trust write succeeds, reads `cred_api_keys:{credential_id}` and flips `active:false` + stamps `deactivated_at` + `deactivated_reason:"credential_retired"` on every still-active `api_key:{keyHash}` record owned by this credential. Already-deactivated keys are skipped (existing `deactivated_reason` preserved). Per-key failures are non-fatal (logged via `cascaded_keys: {total, deactivated}` counters in the response). Defense-in-depth: cascade skips any record whose stored `credential_id` does not match. Cost: 1 + N reads + M writes (M ≤ N ≤ 100 per the S116 hard cap). Pre-S118CW retired credentials are NOT backfilled (forward-only, by design).
+- **Gap?**: **NONE** (cascade is data hygiene, not a new auth gate; no verification weakened on any endpoint).
 
 ### 12. `handleCollectionByCredential` — worker.js ~5365 (`POST /api/collections/by-credential`)
 
@@ -216,6 +217,7 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 ## Change log
 
+- **S118CW — 2026-04-23.** API key retirement cascade (Carryover #48). `handleRetireCredential` now reads `cred_api_keys:{credential_id}` after the trust-record write and parallel-deactivates every still-active `api_key:{keyHash}` belonging to the credential, stamping `deactivated_reason:"credential_retired"` and `deactivated_at` (= retirement timestamp). Already-deactivated keys are preserved untouched (their existing `deactivated_reason` — typically `"user_revoked"` — is not clobbered). Per-key failures non-fatal; retirement succeeds even if every cascade write fails. Response augmented with `cascaded_keys: {total, deactivated}`. `handleListApiKeys` response shape extended with additive `deactivated_at` + `deactivated_reason` fields (null on still-active keys). `handleDeactivateApiKey` now stamps `deactivated_reason:"user_revoked"` for symmetry. No verification weakened on any endpoint; cascade is data hygiene that closes the audit-shape inconsistency surfaced in S116CW Carryover #48. No client migration required for the worker change (additive fields, idempotent cascade). hipkit.net Keys panel updated in same session to render "Revoked · credential retired" vs plain "Revoked" based on `deactivated_reason`.
 - **S116CW — 2026-04-22.** BLOCKS SCALE #1 worker-side: three AppAuth-gated endpoints for user-facing API key management — `POST /api/keys/create`, `POST /api/keys/list`, `POST /api/keys/deactivate`. New KV shapes `cred_api_keys:{credential_id}` (reverse index) and `kcrate:{hmac(cred_id)}` (24h TTL rate limit at 10 creates/day). `api_key:{keyHash}` record extended with optional `last_used` (stamped by `handleApiAttest` on each authenticated auth pass; non-fatal) and optional `deactivated_at` (stamped on deactivation). Admin endpoint `POST /api/admin/keys` retained as escape hatch. No existing endpoints modified in scope/behavior beyond the `last_used` stamp. No client surface touched this session — hipkit.net Keys panel UX deferred to S117CW.
 - **S115CW — 2026-04-22.** BLOCKS ANNOUNCE #2 closure: `handleDisputeProof` now requires server-side Ed25519 signature verification over `"DISPUTE|{content_hash}|{credential_id}|{reason_hash}|{timestamp}"`. `public_key` is a required body field; binding check (SHA-256(public_key) === credential_id) enforced. Timestamp freshness ±5 min matches `verifyAppAuth` posture. Client-side: `proof.html` `submitDispute` rewritten to import PKCS8 private key, compute `reason_hash = SHA-256(reason.trim())` and ISO 8601 timestamp, sign canonical, and send signature + public_key + timestamp alongside the existing body. No dual-canonical fallback — `proof.html` is the only client that POSTs `/dispute-proof`; worker + client ship atomically.
 - **S114CW — 2026-04-22.** BLOCKS ANNOUNCE #1 closure: server-side Ed25519 verification added to `verifyAppAuth`, `handleRegisterProof`, `handleApiAttest`, `handleVerify`, `handleUnsealProof`. Binding check (SHA-256(public_key) === credential_id) enforced on every endpoint that accepts both fields. Dual-canonical accept for `/register-proof` and `/api/attest` to preserve parity with both live client surfaces. `/api/verify` now returns `signature_verified: true | false | "skipped_no_public_key"` honestly. Deployed as a single atomic worker.js push.

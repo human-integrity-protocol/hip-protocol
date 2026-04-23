@@ -2555,10 +2555,70 @@ async function handleRetireCredential(request, env) {
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trust_record));
 
+  // ── S118CW: API key retirement cascade ──
+  // Once the trust record is marked superseded, all this credential's API keys
+  // are functionally inert: verifyAppAuth rejects /api/keys/* with `superseded`,
+  // and handleApiAttest rejects /api/attest at the trust-record check (~6314).
+  // But api_key:{keyHash} records still show active:true — misleading for audit
+  // and inconsistent with user-initiated revocation. This block flips active:false
+  // on every still-active key owned by this credential, stamping
+  // deactivated_reason:"credential_retired" so the cascade is distinguishable
+  // from a user-initiated revoke.
+  //
+  // Posture (matches addToCredApiKeysIndex):
+  //   - Per-key failures are non-fatal — log via cascade counters, never throw.
+  //   - The retirement itself succeeds even if every cascade write fails.
+  //   - Already-deactivated keys are skipped; existing deactivated_reason
+  //     (typically "user_revoked") is preserved untouched.
+  //   - Defense-in-depth: skip any record whose credential_id does not match
+  //     (should never happen via the index-write path, but admin/manual KV
+  //     manipulation is possible).
+  //
+  // Cost: 1 extra KV read (the index) + N parallel reads + M parallel writes
+  // (M = active key count, M ≤ N ≤ 100 per the S116 hard cap). Acceptable
+  // for a one-shot terminal operation.
+  let cascadeTotal = 0;
+  let cascadeDeactivated = 0;
+  try {
+    const idxRaw = await env.DEDUP_KV.get(`cred_api_keys:${credential_id}`);
+    if (idxRaw) {
+      let idxRec = null;
+      try { idxRec = JSON.parse(idxRaw); } catch (_) { idxRec = null; }
+      if (idxRec && Array.isArray(idxRec.key_hashes) && idxRec.key_hashes.length > 0) {
+        cascadeTotal = idxRec.key_hashes.length;
+        const cascadeNow = trust_record.superseded_at;
+        const results = await Promise.all(
+          idxRec.key_hashes.map(async kh => {
+            try {
+              const raw = await env.DEDUP_KV.get(`api_key:${kh}`);
+              if (!raw) return false;
+              let rec;
+              try { rec = JSON.parse(raw); } catch (_) { return false; }
+              if (!rec) return false;
+              if (rec.credential_id !== credential_id) return false; // defense-in-depth
+              if (rec.active === false) return false; // preserve existing deactivated_reason
+              rec.active = false;
+              rec.deactivated_at = cascadeNow;
+              rec.deactivated_reason = "credential_retired";
+              await env.DEDUP_KV.put(`api_key:${kh}`, JSON.stringify(rec));
+              return true;
+            } catch (_) {
+              return false;
+            }
+          })
+        );
+        cascadeDeactivated = results.filter(Boolean).length;
+      }
+    }
+  } catch (_) {
+    // Non-fatal: cascade is hygiene, retirement itself has already landed.
+  }
+
   return jsonResponse({
     ok: true,
     credential_id,
     retired_at: trust_record.superseded_at,
+    cascaded_keys: { total: cascadeTotal, deactivated: cascadeDeactivated },
     message: "Credential retired. It can no longer be used for attestations on any device."
   }, 200, origin);
 }
@@ -5905,12 +5965,14 @@ async function handleCreateApiKey(request, env) {
 // use (rotating keys, labeling per-integration, recovering from
 // accidental deactivation).
 //
-// Retirement cascade: intentionally NOT implemented in S116CW. When a
-// credential is retired (superseded_by set), verifyAppAuth rejects
-// /api/keys/create|list|deactivate, AND the proof pipeline rejects any
-// /api/attest call resolving to a retired credential. Existing api_key
-// records are thus inert without being explicitly flipped to active:false.
-// Flagged as an S117+ hygiene carryover.
+// Retirement cascade: implemented S118CW in handleRetireCredential (~2540).
+// When a credential is retired (superseded_by set), the cascade reads
+// cred_api_keys:{credential_id}, fetches each api_key:{keyHash}, and flips
+// active:false + stamps deactivated_at + deactivated_reason:"credential_retired"
+// on every still-active key. Already-deactivated keys are preserved (their
+// existing deactivated_reason — typically "user_revoked" — is not clobbered).
+// Per-key failures are non-fatal; the cascade is data hygiene, not an auth
+// gate. Pre-S118CW retired credentials are NOT backfilled (forward-only).
 
 // POST /api/keys/create — Credential-holder-authenticated key creation.
 async function handleUserCreateApiKey(request, env) {
@@ -6034,6 +6096,11 @@ async function handleListApiKeys(request, env) {
           created_at: r.created_at || null,
           last_used: r.last_used || null,
           active: r.active === true,
+          // S118CW: surface deactivation provenance so the client can render
+          // "Revoked · credential retired" distinctly from a user-revoke.
+          // Both fields are null on still-active keys.
+          deactivated_at: r.deactivated_at || null,
+          deactivated_reason: r.deactivated_reason || null,
         };
       } catch (_) { return null; }
     })
@@ -6128,12 +6195,17 @@ async function handleDeactivateApiKey(request, env) {
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   keyRecord.active = false;
   keyRecord.deactivated_at = now;
+  // S118CW: stamp deactivation provenance for symmetry with the cascade path
+  // in handleRetireCredential. The /api/keys/list response surfaces this so
+  // the client can render "Revoked" vs "Revoked · credential retired".
+  keyRecord.deactivated_reason = "user_revoked";
   await env.DEDUP_KV.put(`api_key:${fullKeyHash}`, JSON.stringify(keyRecord));
 
   return jsonResponse({
     success: true,
     key_id: keyIdPrefix,
     deactivated_at: now,
+    deactivated_reason: "user_revoked",
   }, 200, origin);
 }
 
