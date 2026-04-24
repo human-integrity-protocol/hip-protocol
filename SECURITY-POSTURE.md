@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S122CW — 2026-04-23
-**Worker.js HEAD at update:** post-S122CW `hipkit_originated` flag on series endpoints (`worker.js` ~8051 lines)
+**Last updated:** S131CW — 2026-04-24
+**Worker.js HEAD at update:** post-S131CW optional `thumbnail` field on `/register-proof` + `/api/attest` (`worker.js` ~8097 lines)
 
 ---
 
@@ -44,22 +44,24 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 ### 2. `handleRegisterProof` — worker.js ~2624
 
-- **Body fields**: content_hash, perceptual_hash?, credential_id, public_key (NOW REQUIRED), attested_at, classification, signature, sealed?, protocol_version?, file_name?, original_hash?, attested_copy_hash?.
+- **Body fields**: content_hash, perceptual_hash?, credential_id, public_key (NOW REQUIRED), attested_at, classification, signature, sealed?, protocol_version?, file_name?, original_hash?, attested_copy_hash?, thumbnail?.
 - **Canonical**: dual — HIPKit format OR legacy format.
 - **(a) field-presence checks**: all required. Hex-shape on content_hash, public_key, original_hash, attested_copy_hash. Classification enum. ISO 8601 on attested_at.
 - **(b) crypto verification** (S114CW): ✅ Binding check SHA-256(public_key) === credential_id. ✅ Ed25519 dual-canonical verify. Trust record existence + superseded guard + TI≥60 + T3 cap + rate limit. First-writer-wins.
 - **(c) claim**: "Register a signed, tier-bound attestation over `content_hash`."
-- **Gap?**: **NONE.** Closed S114CW.
+- **S131CW addendum** (Carryover #69 closure): optional `thumbnail` body field accepted — a data URL image string for Portfolio rendering. Validation: non-string → 400; >68000 chars → 400; not starting with `data:image/` → 400 (defensive, catches buggy/adversarial clients since the value ends up rendered as `<img src>` in Portfolio). NOT inside the signature payload — metadata only, same field-presence-only posture as `file_name` (S88), `original_hash` (S102), `attested_copy_hash` (S103). Persisted on `proof:{hash}` records as `thumbnail: thumbnail || null`. Pre-S131CW records stay `thumbnail: null` (forward-only migration; hipkit-net's S130 client-side `hip_thumb_cache_v1` localStorage cache continues to hydrate pre-S131 records on the same device via the non-destructive `if (!r.thumbnail …)` merge gate at hip-ui.js `loadPortfolio`).
+- **Gap?**: **NONE.** Closed S114CW. S131CW addition is field-presence-only — no verification gate added, weakened, or removed.
 
 ### 3. `handleApiAttest` — worker.js ~5699
 
 - **Auth**: `X-API-Key` header → resolves to credential_id via `api_key:{hmac(apiKey)}` KV.
-- **Body fields**: content_hash, classification, signature, public_key (NOW REQUIRED), attested_at?, sealed?, protocol_version?, perceptual_hash?, file_name?, original_hash?, attested_copy_hash?.
+- **Body fields**: content_hash, classification, signature, public_key (NOW REQUIRED), attested_at?, sealed?, protocol_version?, perceptual_hash?, file_name?, original_hash?, attested_copy_hash?, thumbnail?.
 - **Canonical**: dual — HIPKit format OR legacy format.
 - **(a) field-presence checks**: identical to `handleRegisterProof` plus API key lookup.
 - **(b) crypto verification** (S114CW): ✅ Binding check. ✅ Ed25519 dual-canonical verify. Trust + TI≥60 + T3 cap + rate limit. First-writer-wins.
 - **(c) claim**: "Programmatic attestation from a HIPKit API customer, signed by their bound credential."
-- **Gap?**: **NONE.** Closed S114CW.
+- **S131CW addendum** (Carryover #69 closure): symmetric `thumbnail` acceptance with `handleRegisterProof` — same three-stage validation (non-string / >68000 chars / missing `data:image/` prefix → 400), same field-presence-only posture, same persistence (`thumbnail: thumbnail || null` on `proof:{hash}` records). Keeps API-keyed and web-signed attestation records shape-compatible for Portfolio cross-device rendering.
+- **Gap?**: **NONE.** Closed S114CW. S131CW addition is field-presence-only — no verification gate added, weakened, or removed.
 
 ### 4. `handleVerify` — worker.js ~6105 (`GET /api/verify/{hash}`)
 
@@ -219,6 +221,7 @@ Historical reality: two client surfaces produce **different signed messages** fo
 
 ## Change log
 
+- **S131CW — 2026-04-24.** Optional `thumbnail` body field added to `/register-proof` and `/api/attest` (Carryover #69 closure; supersedes long-standing Carryover #5). Field is a data URL image string for Portfolio cross-device rendering. Validation: non-string → 400 `thumbnail must be a string (data URL) or null`; length >68000 chars → 400 (mirror of client guard at hipkit-net/hip-ui.js L815); missing `data:image/` prefix → 400 (defensive — the value ends up rendered as `<img src>` in Portfolio views, so MIME shape matters at the display layer even though the worker doesn't consume the value). NOT inside the signature payload — metadata only, identical posture to `file_name` (S88), `original_hash` (S102), `attested_copy_hash` (S103). Persisted on `proof:{hash}` records as `thumbnail: thumbnail || null`; pre-S131CW records stay `null` (forward-only migration). S130CW's client-side `hip_thumb_cache_v1` localStorage cache on hipkit.net continues to hydrate pre-S131CW records on the same device via the non-destructive `if (!r.thumbnail …)` merge gate at hip-ui.js `loadPortfolio` — as E1 propagates, worker-returned truth wins automatically and the cache degrades to same-device only. No verification gate added, weakened, or removed. No client migration required (hipkit-net/hip-attest.js L41 was already sending `thumbnail: fileEntry.thumbnail || null` since S63; the field was silently dropped by the worker until S131CW). worker.js +46 lines (8051 → 8097). Single atomic Cloudflare Dashboard deploy.
 - **S122CW — 2026-04-23.** Optional `hipkit_originated` boolean body field added to `/register-series` and `/register-series-member` (Carryover #40 design pass; HIPKIT-SERIES-DESIGN.md §4). Field is metadata-only: stamped on the persisted record when strictly `true`, absent otherwise (conditional spread keeps protocol-default record shape unchanged for hipprotocol.org-originated writes). NOT inside the signed manifest/event — same posture as `original_hash`, `attested_copy_hash`, `file_name`. Validation: `undefined | true | false` accepted; non-boolean rejected with `invalid_field`. Verifier-side semantic correctness identical (both `series.html` read path and `/api/series/{id}` ignore the flag entirely; HIPKit-side surfaces filter on it for the portfolio Series tab and downstream cert/3D integrations). No verification gate added, weakened, or removed on any endpoint. worker.js +24 lines (8027 → 8051). Single atomic Cloudflare Dashboard deploy. No client migration required (legacy clients omit the field; record shape unchanged).
 - **S118CW — 2026-04-23.** API key retirement cascade (Carryover #48). `handleRetireCredential` now reads `cred_api_keys:{credential_id}` after the trust-record write and parallel-deactivates every still-active `api_key:{keyHash}` belonging to the credential, stamping `deactivated_reason:"credential_retired"` and `deactivated_at` (= retirement timestamp). Already-deactivated keys are preserved untouched (their existing `deactivated_reason` — typically `"user_revoked"` — is not clobbered). Per-key failures non-fatal; retirement succeeds even if every cascade write fails. Response augmented with `cascaded_keys: {total, deactivated}`. `handleListApiKeys` response shape extended with additive `deactivated_at` + `deactivated_reason` fields (null on still-active keys). `handleDeactivateApiKey` now stamps `deactivated_reason:"user_revoked"` for symmetry. No verification weakened on any endpoint; cascade is data hygiene that closes the audit-shape inconsistency surfaced in S116CW Carryover #48. No client migration required for the worker change (additive fields, idempotent cascade). hipkit.net Keys panel updated in same session to render "Revoked · credential retired" vs plain "Revoked" based on `deactivated_reason`.
 - **S116CW — 2026-04-22.** BLOCKS SCALE #1 worker-side: three AppAuth-gated endpoints for user-facing API key management — `POST /api/keys/create`, `POST /api/keys/list`, `POST /api/keys/deactivate`. New KV shapes `cred_api_keys:{credential_id}` (reverse index) and `kcrate:{hmac(cred_id)}` (24h TTL rate limit at 10 creates/day). `api_key:{keyHash}` record extended with optional `last_used` (stamped by `handleApiAttest` on each authenticated auth pass; non-fatal) and optional `deactivated_at` (stamped on deactivation). Admin endpoint `POST /api/admin/keys` retained as escape hatch. No existing endpoints modified in scope/behavior beyond the `last_used` stamp. No client surface touched this session — hipkit.net Keys panel UX deferred to S117CW.

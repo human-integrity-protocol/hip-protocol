@@ -2738,6 +2738,7 @@ async function handleRegisterProof(request, env) {
     file_name,
     original_hash,
     attested_copy_hash,
+    thumbnail,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -2774,6 +2775,26 @@ async function handleRegisterProof(request, env) {
   // payload (same posture as file_name and original_hash).
   if (attested_copy_hash !== undefined && attested_copy_hash !== null && !/^[0-9a-f]{64}$/.test(attested_copy_hash)) {
     return jsonResponse({ error: "attested_copy_hash must be a 64-character lowercase hex string (SHA-256)" }, 400, origin);
+  }
+
+  // S131CW Carryover #69: optional cosmetic thumbnail (data URL). Not part
+  // of the signature payload — metadata only, same field-presence-only posture
+  // as file_name (S88), original_hash (S102), attested_copy_hash (S103).
+  // Rendered in Portfolio views. Max 68000 chars mirrors the client guard at
+  // hipkit-net/hip-ui.js L815 (200px JPEG @ Q=0.6 typically ≤ 30KB, 68KB ceiling).
+  // Defensive data:image/ prefix check catches buggy/adversarial clients —
+  // the worker doesn't consume the value but it ends up rendered as <img src>
+  // in Portfolio, so MIME shape matters at the display layer.
+  if (thumbnail !== undefined && thumbnail !== null) {
+    if (typeof thumbnail !== "string") {
+      return jsonResponse({ error: "thumbnail must be a string (data URL) or null" }, 400, origin);
+    }
+    if (thumbnail.length > 68000) {
+      return jsonResponse({ error: "thumbnail must be ≤ 68000 characters" }, 400, origin);
+    }
+    if (!thumbnail.startsWith("data:image/")) {
+      return jsonResponse({ error: "thumbnail must start with 'data:image/' (data URL)" }, 400, origin);
+    }
   }
 
   // public_key must be a 64-char hex string (Ed25519 = 32 bytes = 64 hex chars)
@@ -2954,6 +2975,7 @@ async function handleRegisterProof(request, env) {
     file_name: sanitizedFileName,
     original_hash: original_hash || null,
     attested_copy_hash: attested_copy_hash || null,
+    thumbnail: thumbnail || null, // S131CW Carryover #69: cosmetic, unsigned
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
@@ -6298,6 +6320,7 @@ async function handleApiAttest(request, env) {
     file_name,
     original_hash,
     attested_copy_hash,
+    thumbnail,
   } = body;
 
   // S88: Optional cosmetic display name. Not part of signature payload.
@@ -6332,6 +6355,28 @@ async function handleApiAttest(request, env) {
     return jsonResponse({
       error: "attested_copy_hash must be a 64-character lowercase hex string (SHA-256)"
     }, 400, origin);
+  }
+
+  // S131CW Carryover #69: symmetric thumbnail accept (see handleRegisterProof).
+  // Field-presence-only posture; not signed, not consumed by worker — rendered
+  // in Portfolio views as <img src>. 68000 char ceiling mirrors the client
+  // guard at hipkit-net/hip-ui.js L815.
+  if (thumbnail !== undefined && thumbnail !== null) {
+    if (typeof thumbnail !== "string") {
+      return jsonResponse({
+        error: "thumbnail must be a string (data URL) or null"
+      }, 400, origin);
+    }
+    if (thumbnail.length > 68000) {
+      return jsonResponse({
+        error: "thumbnail must be ≤ 68000 characters"
+      }, 400, origin);
+    }
+    if (!thumbnail.startsWith("data:image/")) {
+      return jsonResponse({
+        error: "thumbnail must start with 'data:image/' (data URL)"
+      }, 400, origin);
+    }
   }
 
   // classification must be a known HIP value
@@ -6506,6 +6551,7 @@ async function handleApiAttest(request, env) {
     file_name: sanitizedFileName,
     original_hash: original_hash || null,
     attested_copy_hash: attested_copy_hash || null,
+    thumbnail: thumbnail || null, // S131CW Carryover #69: cosmetic, unsigned
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
