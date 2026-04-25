@@ -121,6 +121,10 @@ HIP is a protocol, not a product. Deployment Principle 5: *Permissionless Prolif
 
 Possible implementations include: platform integrations, browser extensions, creator tools, institutional workflows, verification scripts, and Steward Nodes. See the [landing page](site/) or the specifications for full details.
 
+### Example implementation: HIPKit
+
+[HIPKit](https://hipkit.net) is a commercial product built on top of the protocol. Its integrator documentation — covering authentication, endpoints, error codes, rate limits, and credits — is published independently at [github.com/tadortot/hipkit-docs](https://github.com/tadortot/hipkit-docs). HIP imposes no requirement that products document themselves this way; the docs repo simply demonstrates the DP-5 pattern in practice.
+
 ---
 
 ## Cryptographic Standards
