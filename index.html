@@ -2631,7 +2631,8 @@ try{
     sealed:sealedAttest,
     protocol_version:"1.2",
     original_hash:origHashForBody,
-    attested_copy_hash:attestedCopyHashForBody
+    attested_copy_hash:attestedCopyHashForBody,
+    file_name:fname||null
   };
   var resp=await fetch(HIP_WORKER_URL+"/register-proof",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   var text=await resp.text();
