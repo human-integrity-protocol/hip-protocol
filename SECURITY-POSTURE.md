@@ -8,8 +8,8 @@
 > what an endpoint's name/response-shape *claims* and what it actually verifies
 > is a **BLOCKS ANNOUNCE** condition.
 
-**Last updated:** S143CW — 2026-04-25
-**Worker.js HEAD at update:** UNCHANGED at S131CW commit `bbfbdfd` (`worker.js` 8097 lines). S143CW Phase 2 sub-task C added a parallel source-of-truth file `shared/auth-helpers.js` for the privacy-flip launch plan; worker.js bytes are byte-identical to S131CW (sync verified 19/19 PASS via `tools/verify-helpers-sync.mjs`). See change log below.
+**Last updated:** S144CW — 2026-04-26
+**Worker.js HEAD at update:** UNCHANGED at S131CW commit `bbfbdfd` (`worker.js` 8097 lines). S144CW Phase 2 sub-task D migrated 14 HIPKit handlers OUT of the public worker into a new private worker at `hipkit-net/worker.js` (1969 lines). Public worker.js handlers stay DORMANT in `worker.js` as rollback fallback (route-override at Cloudflare layer directs HIPKit traffic to the private worker; deletion deferred to a follow-up session). `shared/auth-helpers.js` extended to 21 items (added `generateShortId` + `sanitizeFileName`, both dual-side helpers). Sync verifier extended to cover both consumers (42/42 PASS). See change log below.
 
 ---
 
@@ -61,7 +61,8 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **(b) crypto verification** (S114CW): ✅ Binding check. ✅ Ed25519 dual-canonical verify. Trust + TI≥60 + T3 cap + rate limit. First-writer-wins.
 - **(c) claim**: "Programmatic attestation from a HIPKit API customer, signed by their bound credential."
 - **S131CW addendum** (Carryover #69 closure): symmetric `thumbnail` acceptance with `handleRegisterProof` — same three-stage validation (non-string / >68000 chars / missing `data:image/` prefix → 400), same field-presence-only posture, same persistence (`thumbnail: thumbnail || null` on `proof:{hash}` records). Keeps API-keyed and web-signed attestation records shape-compatible for Portfolio cross-device rendering.
-- **Gap?**: **NONE.** Closed S114CW. S131CW addition is field-presence-only — no verification gate added, weakened, or removed.
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` (private worker, NEW) via Cloudflare Routes override on `hipprotocol.org` zone (D1 strategy). X-API-Key resolution + dual-canonical Ed25519 verify + KV writes (incl. `proof:{hash}`, `cred_proofs:{cred_id}`, `prate`/`wrate`) byte-identical (inline copy of `verifyAppAuth` + `addToCredProofsIndex` from `shared/auth-helpers.js`). Same DEDUP_KV namespace as public worker — data continuity preserved. Public-worker handler stays DORMANT as rollback fallback.
+- **Gap?**: **NONE.** Closed S114CW. S131CW addition is field-presence-only — no verification gate added, weakened, or removed. S144CW relocation does not change verification logic.
 
 ### 4. `handleVerify` — worker.js ~6105 (`GET /api/verify/{hash}`)
 
@@ -124,43 +125,51 @@ Historical reality: two client surfaces produce **different signed messages** fo
 ### 12. `handleCollectionByCredential` — worker.js ~5365 (`POST /api/collections/by-credential`)
 
 - **Auth**: `verifyAppAuth` with `"HIPKIT|/api/collections/by-credential|{credId}|{ts}"`. Additionally enforces URL `{id}` === body `credential_id`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` (private worker) via Cloudflare Routes override on `hipprotocol.org`. AppAuth byte-identical (inline copy of `verifyAppAuth` from `shared/auth-helpers.js`). URL-{id}-vs-body match check preserved. Same DEDUP_KV — reads `collection_by_credential:{credential_id}` index unchanged. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 13. `handlePortfolio` — worker.js ~6499 (`POST /api/portfolio`)
 
 - **Auth**: `verifyAppAuth` with `"HIPKIT|/api/portfolio|{credId}|{ts}"`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override on `hipprotocol.org`. AppAuth byte-identical. Reads `cred_proofs:{cred_id}` + `proof:{hash}` from same DEDUP_KV namespace — Portfolio Files sub-tab on hipkit.net renders identical results. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 14. `handleCredentialAttestations` — worker.js ~6618 (`POST /api/credential/{id}/attestations`)
 
 - **Auth**: `verifyAppAuth` with the **static** canonical `"HIPKIT|/api/credential/attestations|{credId}|{ts}"` (URL-embedded {id} NOT in canonical — by S102 design). URL `{id}` must match body `credential_id`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override on `hipprotocol.org`. AppAuth byte-identical (static canonical preserved). URL-{id}-vs-body match check preserved. Reads `cred_proofs:{cred_id}` + `proof:{hash}` from same DEDUP_KV. Cover picker on Series Add members + cross-device Verify fallback (S102 Path 2) continue to work transparently. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 15. `handleCreditBalance` — worker.js ~6170 (`POST /api/credits/balance`)
 
 - **Auth**: `verifyAppAuth` with `"HIPKIT|/api/credits/balance|{credId}|{ts}"`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth byte-identical. Reads `credits:{cred_id}` from same DEDUP_KV. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 16. `handleUsage` — worker.js ~6110 (`POST /api/credits/usage`)
 
 - **Auth**: `verifyAppAuth` with `"HIPKIT|/api/credits/usage|{credId}|{ts}"`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth byte-identical. Reads `prate:`/`wrate:` from same DEDUP_KV. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 17. `handleCreditConsume` — worker.js ~6180 (`POST /api/credits/consume`)
 
 - **Auth**: `verifyAppAuth` with `"HIPKIT|/api/credits/consume|{credId}|{ts}"`.
 - **Exposure pre-S114CW**: credit-drain attack — anyone who had observed a victim's (credential_id, public_key) pair (both public in any proof record) could spend that credential's credits. **Closed S114CW.**
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth byte-identical. Writes `credits:{cred_id}` to same DEDUP_KV. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 18. `handleStripeCheckout` — worker.js ~6224 (`POST /api/stripe/checkout`)
 
 - **Auth**: `verifyAppAuth`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth byte-identical. Stripe Checkout creation logic + `stripe_cust:{cred_id}` KV operations byte-identical. STRIPE_SECRET_KEY env var bound to private worker (same value). Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 19. `handleStripePortal` — worker.js ~6306 (`POST /api/stripe/portal`)
 
 - **Auth**: `verifyAppAuth`.
-- **Gap?**: **NONE** (post-S114CW).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth byte-identical. Reads `stripe_cust:{cred_id}` from same DEDUP_KV. STRIPE_SECRET_KEY env var bound to private worker. Public handler stays DORMANT.
+- **Gap?**: **NONE** (post-S114CW). S144CW relocation does not change verification logic.
 
 ### 20. `handleTrustInitialize` — worker.js (`POST /trust/initialize`)
 
@@ -196,7 +205,8 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **Rate limit**: 10 creates / 24h per credential. 429 `rate_limited` when exceeded.
 - **Returns**: `api_key` (rawKey, ONCE ONLY) + `key_id` (first 8 hex chars of keyHash, the display handle).
 - **(c) claim**: "Credential holder creates a new API key for programmatic use, bound to their credential."
-- **Gap?**: **NONE.** AppAuth inheritance — full Ed25519 + binding + superseded-by + trust existence. Rate limit sized for real workflow (rotations, labeling), low enough to contain spam. Raw key never persists.
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth + rate-limit (`kcrate:`) + hard-cap (100 keys) + index write (`cred_api_keys:`) all byte-identical. DEDUP_SECRET env var bound to private worker (HMAC of raw key bytes). Public handler stays DORMANT.
+- **Gap?**: **NONE.** AppAuth inheritance — full Ed25519 + binding + superseded-by + trust existence. Rate limit sized for real workflow (rotations, labeling), low enough to contain spam. Raw key never persists. S144CW relocation does not change verification logic.
 
 ### 24. `handleListApiKeys` — worker.js ~6002 (`POST /api/keys/list`)
 
@@ -205,7 +215,8 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **Defense-in-depth**: any key record whose stored `credential_id` doesn't match the authenticated caller is filtered out (null) even if its hash appears in the index.
 - **Never returns** the raw key (unrecoverable from hmac anyway). `key_id` leak is acceptable — 8 hex of HMAC output is useless without the full key.
 - **(c) claim**: "Enumerate the authenticated credential's API keys and their metadata."
-- **Gap?**: **NONE.** AppAuth inheritance.
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth + index reads + per-record `credential_id` filter all byte-identical. Public handler stays DORMANT.
+- **Gap?**: **NONE.** AppAuth inheritance. S144CW relocation does not change verification logic.
 
 ### 25. `handleDeactivateApiKey` — worker.js ~6057 (`POST /api/keys/deactivate`)
 
@@ -215,12 +226,14 @@ Historical reality: two client surfaces produce **different signed messages** fo
 - **Idempotency**: already-deactivated returns 200 with `already_deactivated:true` (no-op).
 - **Ambiguity**: multiple keyHashes sharing the 8-char prefix → 409 `ambiguous_key_id` (practically impossible at realistic key counts; defended anyway).
 - **(c) claim**: "Credential holder deactivates one of their own API keys. Deactivation is permanent (no reactivate)."
-- **Gap?**: **NONE.** AppAuth inheritance + per-credential index scope + credential_id match check on the key record itself (defense-in-depth against any hypothetical cross-credential KV leak).
+- **S144CW relocation**: Handler relocated to `hipkit-net/worker.js` via Cloudflare Routes override. AppAuth + per-credential prefix-resolution + ambiguity-409 + idempotency + S118CW `deactivated_reason:"user_revoked"` stamp all byte-identical. Public handler stays DORMANT.
+- **Gap?**: **NONE.** AppAuth inheritance + per-credential index scope + credential_id match check on the key record itself (defense-in-depth against any hypothetical cross-credential KV leak). S144CW relocation does not change verification logic.
 
 ---
 
 ## Change log
 
+- **S144CW — 2026-04-26.** Phase 2 sub-task D of S141CW privacy-flip launch plan: 14 HIPKit handlers migrated from public `hip-protocol/worker.js` to a new private `hipkit-net/worker.js` (1969 lines, NEW). Migrated endpoints: `/api/attest`, `/api/admin/keys`, `/api/keys/create`, `/api/keys/list`, `/api/keys/deactivate`, `/api/credits/balance`, `/api/usage`, `/api/credits/consume`, `/api/stripe/checkout`, `/api/stripe/portal`, `/api/stripe/webhook`, `/api/portfolio`, `/api/credential/{id}/attestations`, `/api/collection-by-credential/{id}`. **`handleGetAffiliations` (`GET /api/affiliations/{hash}`) intentionally STAYS PUBLIC** — read-only protocol primitive per Public/Private Code Principle. **DNS/zone strategy: Option D1 (LOCKED S144CW)** — Cloudflare Routes added on `hipprotocol.org` zone for the 14 HIPKit paths, directing traffic to the new private Worker. **Public worker.js handlers stay DORMANT** as rollback fallback (delete Routes → traffic returns to old Worker). Removal from worker.js deferred to a follow-up session once D1 is proven stable. **No verification logic changed** — the migrated handlers carry inline byte-identical copies of `verifyAppAuth` from `shared/auth-helpers.js`; X-API-Key auth on `/api/attest` and Stripe HMAC on `/api/stripe/webhook` are also byte-identical copies of the public worker's logic. Both DEDUP_KV bindings point at the SAME Cloudflare KV namespace (data continuity preserved across the split — trust records, proofs, credits, API keys, indices all live in one namespace, both workers read/write to it). New private Worker requires the same env bindings as the public worker (DEDUP_SECRET, ADMIN_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET) plus the shared DEDUP_KV namespace binding. **Source-of-truth helpers extension: `shared/auth-helpers.js` extended from 19 to 21 items** (added `generateShortId` + `sanitizeFileName` — both dual-side helpers called by `handleRegisterProof` (protocol) AND `handleApiAttest` (HIPKit)). `tools/verify-helpers-sync.mjs` extended with `WORKERS` array; verifier now covers both `hip-protocol/worker.js` AND `hipkit-net/worker.js` byte-by-byte against `shared/auth-helpers.js`. **42/42 PASS** verified at session close. **No verification logic changed; only relocated.** **Gap NONE preserved on every endpoint block above.** Worker.js bytes UNCHANGED (still at S131CW deploy `bbfbdfd`). Per-endpoint relocation notes added to the affected blocks above. Mitigation rationale: Cloudflare Routes-based override is reversible in seconds (delete Route → traffic returns to dormant public-worker handlers, no data migration needed because DEDUP_KV is shared). End-to-end smoke matrix (Attest, Series, Portfolio Files+Series+Collections, Account credit consume, Stripe checkout/portal, Keys panel) executed on hipkit.net at deploy time confirmed zero observable behavior change for every relocated endpoint.
 - **S143CW — 2026-04-25.** Phase 2 sub-task C of S141CW privacy-flip launch plan: created `hip-protocol/shared/auth-helpers.js` as the parallel source of truth for 18 helpers + 1 constant (`CORS_ORIGIN`) shared between the public protocol worker and the future private HIPKit worker (S144 sub-task D). Helpers extracted (named exports): `corsHeaders`, `jsonResponse`, `hmacSHA256`, `verifyAppAuth`, `base64ToBytes`, `isHex64Lower`, `isCollectionId`, `isSeriesId`, `jcsSerializeString`, `jcsSerializeNumber`, `jcsSerialize`, `jcsCanonicalize`, `sha256Hex`, `sha256Bytes`, `verifyEd25519`, `verifyEd25519FromBytes`, `addToCredProofsIndex`, `addToCredApiKeysIndex`. Per Option C-refined module strategy decision (recorded in `WEBSITE-TOOLS-HK/SESSION 143CW/S143CW-DELIVERIES.md`): **worker.js bytes UNCHANGED this session** — helpers continue to live inline in worker.js *and* the parallel source-of-truth lives in `shared/auth-helpers.js`. Drift detection automated via `tools/verify-helpers-sync.mjs` (run pre-commit when either file is touched). 19/19 byte-identical PASS verified at session close. **No verification logic changed; only mirrored to a parallel source-of-truth file.** No endpoint added, weakened, or removed. **Gap NONE preserved on every endpoint block above.** No Cloudflare Dashboard deploy required (worker.js byte-identical to live deploy `bbfbdfd`). S144 (HIPKit private worker creation) will seed `hipkit-net/worker.js` by copying these helpers verbatim from `shared/auth-helpers.js`; the verifier extends to cover both workers thereafter. Three rejected alternatives, in order of consideration: Option A (multi-file ES modules with literal `import`) — feasible since worker.js already deploys in Modules format, but introduces deploy-time uncertainty in Peter's Cloudflare Dashboard Quick Editor flow on the first worker.js touch in 16 sessions; deferred. Option B (build-time concat) — adds new tooling and a deploy-bundle artifact distinct from source-controlled `worker.js`; deferred. Option C as originally framed (inline copy + sync test, highest drift risk) — refined to "Option C-refined" above by treating `shared/auth-helpers.js` as a true source-of-truth file rather than an undocumented duplicate, with automated drift detection via `verify-helpers-sync.mjs`. The "extract" goal is met architecturally (single source-of-truth + reusable across both workers) without code movement, which provably eliminates behavior-change risk on the highest-stakes worker.js touch since S131.
 - **S131CW — 2026-04-24.** Optional `thumbnail` body field added to `/register-proof` and `/api/attest` (Carryover #69 closure; supersedes long-standing Carryover #5). Field is a data URL image string for Portfolio cross-device rendering. Validation: non-string → 400 `thumbnail must be a string (data URL) or null`; length >68000 chars → 400 (mirror of client guard at hipkit-net/hip-ui.js L815); missing `data:image/` prefix → 400 (defensive — the value ends up rendered as `<img src>` in Portfolio views, so MIME shape matters at the display layer even though the worker doesn't consume the value). NOT inside the signature payload — metadata only, identical posture to `file_name` (S88), `original_hash` (S102), `attested_copy_hash` (S103). Persisted on `proof:{hash}` records as `thumbnail: thumbnail || null`; pre-S131CW records stay `null` (forward-only migration). S130CW's client-side `hip_thumb_cache_v1` localStorage cache on hipkit.net continues to hydrate pre-S131CW records on the same device via the non-destructive `if (!r.thumbnail …)` merge gate at hip-ui.js `loadPortfolio` — as E1 propagates, worker-returned truth wins automatically and the cache degrades to same-device only. No verification gate added, weakened, or removed. No client migration required (hipkit-net/hip-attest.js L41 was already sending `thumbnail: fileEntry.thumbnail || null` since S63; the field was silently dropped by the worker until S131CW). worker.js +46 lines (8051 → 8097). Single atomic Cloudflare Dashboard deploy.
 - **S122CW — 2026-04-23.** Optional `hipkit_originated` boolean body field added to `/register-series` and `/register-series-member` (Carryover #40 design pass; HIPKIT-SERIES-DESIGN.md §4). Field is metadata-only: stamped on the persisted record when strictly `true`, absent otherwise (conditional spread keeps protocol-default record shape unchanged for hipprotocol.org-originated writes). NOT inside the signed manifest/event — same posture as `original_hash`, `attested_copy_hash`, `file_name`. Validation: `undefined | true | false` accepted; non-boolean rejected with `invalid_field`. Verifier-side semantic correctness identical (both `series.html` read path and `/api/series/{id}` ignore the flag entirely; HIPKit-side surfaces filter on it for the portfolio Series tab and downstream cert/3D integrations). No verification gate added, weakened, or removed on any endpoint. worker.js +24 lines (8027 → 8051). Single atomic Cloudflare Dashboard deploy. No client migration required (legacy clients omit the field; record shape unchanged).

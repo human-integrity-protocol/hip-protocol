@@ -1,40 +1,65 @@
 #!/usr/bin/env node
 /**
  * tools/verify-helpers-sync.mjs — drift detection between shared/auth-helpers.js
- * and worker.js inline duplicates.
+ * and inline duplicates in one or more consumer worker files.
  *
  * Per S143CW Phase 2 sub-task C (S141CW privacy-flip plan): shared/auth-helpers.js
- * is the source of truth for helpers used by both hip-protocol/worker.js (current)
- * and hipkit-net/worker.js (S144 sub-task D). For S143 the helpers stay INLINE in
- * worker.js (zero deploy risk on first worker.js touch in 16 sessions); this tool
- * verifies byte-identity between the two locations so drift is immediately visible.
+ * is the source of truth for helpers used by worker scripts that handle Auth/JCS/
+ * Ed25519/etc. The helpers stay INLINE in each consumer worker (zero deploy risk
+ * on Cloudflare Dashboard Quick Editor flows); this tool verifies byte-identity
+ * between the source-of-truth file and every consumer's inline copy so drift is
+ * immediately visible.
+ *
+ * S144CW extension:
+ *   - Added two more dual-side helpers (generateShortId, sanitizeFileName).
+ *     HELPER_NAMES list grows from 18 to 20.
+ *   - Added second consumer: hipkit-net/worker.js (sibling repo, private, S144).
+ *   - WORKERS array drives the per-consumer loop. Single tool, single command,
+ *     reports per-consumer + aggregated PASS/FAIL.
  *
  * Usage:
  *   node tools/verify-helpers-sync.mjs
  *
- * Exits 0 on PASS (all 18 helpers byte-identical between worker.js and
- * shared/auth-helpers.js after stripping `export ` prefix from the shared side).
- * Exits 1 on FAIL (drift detected) and prints the offending helper(s).
+ * Exits 0 on PASS (every consumer's inline copies are byte-identical to
+ * shared/auth-helpers.js after stripping `export ` prefix).
+ * Exits 1 on FAIL — prints the offending consumer + helper(s) and a diff hint.
  *
- * Created S143CW. Run pre-commit when either file is touched.
+ * Created S143CW. Extended S144CW to cover hipkit-net/worker.js.
+ * Run pre-commit when shared/auth-helpers.js OR any consumer worker is touched.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
-const WORKER_PATH = resolve(REPO_ROOT, "worker.js");
 const SHARED_PATH = resolve(REPO_ROOT, "shared/auth-helpers.js");
 
-// Helpers expected to be byte-identical between the two files.
-// Order doesn't matter for verification; preserved for readability.
+// Consumer workers — each must contain inline byte-identical copies of every
+// helper in HELPER_NAMES (with `export ` prefix stripped). Add new consumers
+// here as they ship.
+const WORKERS = [
+  {
+    name: "hip-protocol/worker.js",
+    path: resolve(REPO_ROOT, "worker.js"),
+  },
+  {
+    name: "hipkit-net/worker.js",
+    path: resolve(REPO_ROOT, "../hipkit-net/worker.js"),
+  },
+];
+
+// Helpers expected to be byte-identical between shared/auth-helpers.js and every
+// consumer worker. Order matches shared/auth-helpers.js source order. Updates to
+// this list must propagate to (a) shared/auth-helpers.js, (b) every consumer
+// worker's inline copy, AND (c) the header comment block in shared/auth-helpers.js.
 const HELPER_NAMES = [
   "corsHeaders",
   "jsonResponse",
   "hmacSHA256",
   "verifyAppAuth",
+  "generateShortId",         // added S144CW (dual-side: handleRegisterProof + handleApiAttest)
   "base64ToBytes",
   "isHex64Lower",
   "isCollectionId",
@@ -49,9 +74,10 @@ const HELPER_NAMES = [
   "verifyEd25519FromBytes",
   "addToCredProofsIndex",
   "addToCredApiKeysIndex",
+  "sanitizeFileName",        // added S144CW (dual-side: handleRegisterProof + handleApiAttest)
 ];
 
-// Constant expected to be present (with same value) in both files.
+// Constant expected to be present (with same value) in shared and every consumer.
 const CONST_NAME = "CORS_ORIGIN";
 const CONST_EXPECTED_VALUE = '"https://hipprotocol.org"';
 
@@ -62,12 +88,10 @@ const CONST_EXPECTED_VALUE = '"https://hipprotocol.org"';
  * inclusive. Returns null if not found.
  *
  * Naive brace matching: assumes function bodies don't contain `{` or `}` inside
- * strings/comments/regex literals. Verified true for all 18 helpers in this
- * codebase. If a future helper violates this, swap for a proper JS parser.
+ * strings/comments/regex literals. Verified true for all extracted helpers in
+ * this codebase. If a future helper violates this, swap for a proper JS parser.
  */
 function extractFunctionBody(source, name) {
-  // Match `(export )?(async )?function NAME(` — capture from `function` onward.
-  // Use a regex that finds the function declaration; we'll trim `export ` after.
   const declRegex = new RegExp(
     "(^|\\n)(export\\s+)?(async\\s+)?function\\s+" + name + "\\s*\\(",
     "g"
@@ -75,10 +99,6 @@ function extractFunctionBody(source, name) {
   const m = declRegex.exec(source);
   if (!m) return null;
 
-  // Start of `function NAME(` (skip optional `export ` and any leading newline).
-  // m.index points at the start of the match (which may be a leading newline).
-  // The actual function declaration start is at m.index + match-of-leading-newline-and-keywords.
-  // Simpler: locate the literal "function " or "async function " within the matched span.
   const matchedSpan = m[0];
   const offsetInSpan =
     matchedSpan.indexOf("async function ") !== -1
@@ -86,13 +106,11 @@ function extractFunctionBody(source, name) {
       : matchedSpan.indexOf("function ");
   const startIdx = m.index + offsetInSpan;
 
-  // Find the function's opening brace.
   let i = startIdx;
   while (i < source.length && source[i] !== "{") i++;
   if (i >= source.length) return null;
   const openBraceIdx = i;
 
-  // Walk balanced braces.
   let depth = 0;
   for (let j = openBraceIdx; j < source.length; j++) {
     const ch = source[j];
@@ -104,7 +122,7 @@ function extractFunctionBody(source, name) {
       }
     }
   }
-  return null; // unbalanced braces — should not happen
+  return null;
 }
 
 /**
@@ -119,97 +137,138 @@ function extractConstValue(source, name) {
   );
   const m = declRegex.exec(source);
   if (!m) return null;
-  // Find the start of the value (after the `= ` part).
   const matchedSpan = m[0];
   const startIdx = m.index + matchedSpan.length;
-  // Find the terminating semicolon (assumes value doesn't span multiple statements).
   const semiIdx = source.indexOf(";", startIdx);
   if (semiIdx === -1) return null;
   return source.substring(startIdx, semiIdx).trim();
 }
 
-function main() {
-  const workerSrc = readFileSync(WORKER_PATH, "utf8");
-  const sharedSrc = readFileSync(SHARED_PATH, "utf8");
+/**
+ * Verify one consumer worker against shared/auth-helpers.js.
+ * Returns { name, passed: [], failed: [], missingFile: bool }.
+ */
+function verifyConsumer(consumer, sharedSrc, sharedConst) {
+  const result = {
+    name: consumer.name,
+    passed: [],
+    failed: [],
+    missingFile: false,
+  };
 
-  let failures = 0;
-  const passed = [];
-
-  // Verify the CORS_ORIGIN constant first.
-  const workerConst = extractConstValue(workerSrc, CONST_NAME);
-  const sharedConst = extractConstValue(sharedSrc, CONST_NAME);
-  if (workerConst === null) {
-    console.error(`FAIL: const ${CONST_NAME} not found in worker.js`);
-    failures++;
-  } else if (sharedConst === null) {
-    console.error(`FAIL: const ${CONST_NAME} not found in shared/auth-helpers.js`);
-    failures++;
-  } else if (workerConst !== sharedConst) {
-    console.error(
-      `FAIL: const ${CONST_NAME} value mismatch:\n  worker.js: ${workerConst}\n  shared:    ${sharedConst}`
-    );
-    failures++;
-  } else if (workerConst !== CONST_EXPECTED_VALUE) {
-    console.error(
-      `FAIL: const ${CONST_NAME} value drift from spec (${CONST_EXPECTED_VALUE}):\n  found: ${workerConst}`
-    );
-    failures++;
-  } else {
-    passed.push(`${CONST_NAME} (constant)`);
+  if (!existsSync(consumer.path)) {
+    result.missingFile = true;
+    result.failed.push(`${consumer.name}: file does not exist at ${consumer.path}`);
+    return result;
   }
 
-  // Verify each function helper.
+  const consumerSrc = readFileSync(consumer.path, "utf8");
+
+  // Constant.
+  const consumerConst = extractConstValue(consumerSrc, CONST_NAME);
+  if (consumerConst === null) {
+    result.failed.push(`${CONST_NAME} (constant): not found in ${consumer.name}`);
+  } else if (consumerConst !== sharedConst) {
+    result.failed.push(
+      `${CONST_NAME} (constant): value mismatch — ${consumer.name}: ${consumerConst} | shared: ${sharedConst}`
+    );
+  } else if (consumerConst !== CONST_EXPECTED_VALUE) {
+    result.failed.push(
+      `${CONST_NAME} (constant): drift from spec ${CONST_EXPECTED_VALUE} — found ${consumerConst}`
+    );
+  } else {
+    result.passed.push(`${CONST_NAME} (constant)`);
+  }
+
+  // Functions.
   for (const name of HELPER_NAMES) {
-    const workerBody = extractFunctionBody(workerSrc, name);
+    const consumerBody = extractFunctionBody(consumerSrc, name);
     const sharedBody = extractFunctionBody(sharedSrc, name);
 
-    if (workerBody === null) {
-      console.error(`FAIL: function ${name} not found in worker.js`);
-      failures++;
-      continue;
-    }
     if (sharedBody === null) {
-      console.error(`FAIL: function ${name} not found in shared/auth-helpers.js`);
-      failures++;
+      result.failed.push(`${name}: not found in shared/auth-helpers.js`);
       continue;
     }
-    if (workerBody !== sharedBody) {
-      console.error(`FAIL: function ${name} bytes differ between worker.js and shared/auth-helpers.js`);
-      // Print a minimal diff hint: first differing line index.
-      const wLines = workerBody.split("\n");
+    if (consumerBody === null) {
+      result.failed.push(`${name}: not found in ${consumer.name}`);
+      continue;
+    }
+    if (consumerBody !== sharedBody) {
+      const cLines = consumerBody.split("\n");
       const sLines = sharedBody.split("\n");
-      const maxLen = Math.max(wLines.length, sLines.length);
+      const maxLen = Math.max(cLines.length, sLines.length);
+      let firstDivergent = -1;
       for (let i = 0; i < maxLen; i++) {
-        if (wLines[i] !== sLines[i]) {
-          console.error(`  first divergent line (relative to function start): ${i + 1}`);
-          console.error(`    worker.js: ${JSON.stringify(wLines[i])}`);
-          console.error(`    shared:    ${JSON.stringify(sLines[i])}`);
-          break;
-        }
+        if (cLines[i] !== sLines[i]) { firstDivergent = i + 1; break; }
       }
-      failures++;
+      result.failed.push(
+        `${name}: bytes differ — first divergent line ${firstDivergent} | ${consumer.name}: ${JSON.stringify(cLines[firstDivergent - 1])} | shared: ${JSON.stringify(sLines[firstDivergent - 1])}`
+      );
       continue;
     }
-    passed.push(`${name} (${workerBody.length} bytes)`);
+    result.passed.push(`${name} (${consumerBody.length} bytes)`);
   }
 
-  // Summary.
-  console.log("");
-  console.log(
-    `Helpers checked: ${HELPER_NAMES.length} functions + 1 constant = ${HELPER_NAMES.length + 1} items`
-  );
-  console.log(`PASS: ${passed.length}`);
-  console.log(`FAIL: ${failures}`);
-  if (failures > 0) {
-    console.log("");
-    console.log("DRIFT DETECTED. Reconcile worker.js and shared/auth-helpers.js before commit.");
+  return result;
+}
+
+function main() {
+  if (!existsSync(SHARED_PATH)) {
+    console.error(`FATAL: shared/auth-helpers.js not found at ${SHARED_PATH}`);
     process.exit(1);
   }
+  const sharedSrc = readFileSync(SHARED_PATH, "utf8");
+  const sharedConst = extractConstValue(sharedSrc, CONST_NAME);
+
+  const totalItems = HELPER_NAMES.length + 1;
+  const results = WORKERS.map((c) => verifyConsumer(c, sharedSrc, sharedConst));
+
+  let totalFail = 0;
+  let totalPass = 0;
+
   console.log("");
-  console.log("ALL HELPERS BYTE-IDENTICAL — sync verified.");
+  for (const r of results) {
+    console.log(`Consumer: ${r.name}`);
+    if (r.missingFile) {
+      console.log(`  SKIPPED — file not found (treated as FAIL).`);
+      totalFail += totalItems;
+      continue;
+    }
+    console.log(`  Items checked: ${totalItems}`);
+    console.log(`  PASS: ${r.passed.length}`);
+    console.log(`  FAIL: ${r.failed.length}`);
+    if (r.failed.length > 0) {
+      console.log("");
+      for (const f of r.failed) console.log(`    FAIL  ${f}`);
+    }
+    console.log("");
+    totalPass += r.passed.length;
+    totalFail += r.failed.length;
+  }
+
+  console.log("=".repeat(60));
+  console.log(`Aggregate across ${WORKERS.length} consumers`);
+  console.log(`Items per consumer: ${totalItems}  (${HELPER_NAMES.length} functions + 1 constant)`);
+  console.log(`Total PASS: ${totalPass}`);
+  console.log(`Total FAIL: ${totalFail}`);
+
+  if (totalFail > 0) {
+    console.log("");
+    console.log("DRIFT DETECTED. Reconcile shared/auth-helpers.js with consumer(s) above before commit.");
+    process.exit(1);
+  }
+
   console.log("");
-  console.log("Detail:");
-  for (const p of passed) console.log("  PASS  " + p);
+  console.log("ALL HELPERS BYTE-IDENTICAL ACROSS ALL CONSUMERS — sync verified.");
+  console.log("");
+
+  // Per-consumer detail (lighter than S143's verbose detail; per-consumer summary above).
+  for (const r of results) {
+    console.log(`Detail (${r.name}):`);
+    for (const p of r.passed) console.log("  PASS  " + p);
+    console.log("");
+  }
+
   process.exit(0);
 }
 

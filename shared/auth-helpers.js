@@ -24,26 +24,35 @@
  * - If a future session decides to use literal ES module imports (Option A) or
  *   build-time concat (Option B), this file becomes the literal import target
  *
- * Helpers exported (18 total, in worker.js source order):
+ * Helpers exported (20 functions + 1 constant = 21 items, in worker.js source order):
  *   1.  CORS_ORIGIN             constant   — worker.js line 79
  *   2.  corsHeaders             function   — worker.js line 83-107
  *   3.  jsonResponse            function   — worker.js line 108-118
  *   4.  hmacSHA256              async fn   — worker.js line 119-136
  *   5.  verifyAppAuth           async fn   — worker.js line 137-204
- *   6.  base64ToBytes           function   — worker.js line 330-338
- *   7.  isHex64Lower            function   — worker.js line 339-347
- *   8.  isCollectionId          function   — worker.js line 348-363
- *   9.  isSeriesId              function   — worker.js line 364-369
- *   10. jcsSerializeString      function   — worker.js line 370-397
- *   11. jcsSerializeNumber      function   — worker.js line 398-408
- *   12. jcsSerialize            function   — worker.js line 409-433
- *   13. jcsCanonicalize         function   — worker.js line 434-438
- *   14. sha256Hex               async fn   — worker.js line 439-445
- *   15. sha256Bytes             async fn   — worker.js line 446-454
- *   16. verifyEd25519           async fn   — worker.js line 455-465
- *   17. verifyEd25519FromBytes  async fn   — worker.js line 466-493
- *   18. addToCredProofsIndex    async fn   — worker.js line 2318-2345
- *   19. addToCredApiKeysIndex   async fn   — worker.js line 2346-2367
+ *   6.  generateShortId         function   — worker.js line 205-211   (added S144CW)
+ *   7.  base64ToBytes           function   — worker.js line 330-338
+ *   8.  isHex64Lower            function   — worker.js line 339-347
+ *   9.  isCollectionId          function   — worker.js line 348-363
+ *   10. isSeriesId              function   — worker.js line 364-369
+ *   11. jcsSerializeString      function   — worker.js line 370-397
+ *   12. jcsSerializeNumber      function   — worker.js line 398-408
+ *   13. jcsSerialize            function   — worker.js line 409-433
+ *   14. jcsCanonicalize         function   — worker.js line 434-438
+ *   15. sha256Hex               async fn   — worker.js line 439-445
+ *   16. sha256Bytes             async fn   — worker.js line 446-454
+ *   17. verifyEd25519           async fn   — worker.js line 455-465
+ *   18. verifyEd25519FromBytes  async fn   — worker.js line 466-493
+ *   19. addToCredProofsIndex    async fn   — worker.js line 2318-2345
+ *   20. addToCredApiKeysIndex   async fn   — worker.js line 2346-2367
+ *   21. sanitizeFileName        function   — worker.js line 2710-2716  (added S144CW)
+ *
+ * S144CW additions (generateShortId + sanitizeFileName):
+ *   These are dual-side helpers — called by both `handleRegisterProof` (protocol)
+ *   and `handleApiAttest` (HIPKit, migrating to private worker S144). Establishing
+ *   them as source-of-truth here ensures the public worker.js inline copies and
+ *   the private hipkit-net/worker.js inline copies stay byte-identical (verifier
+ *   covers both consumers).
  *
  * Helpers explicitly NOT included (protocol-only or HIPVerify-only, stay in worker.js):
  *   - writeAffiliation, writeCreatorSeriesIndex, addToSeriesMembersIndex, isSeriesMember
@@ -54,12 +63,13 @@
  *   - verifyWebhookSignatureV2, verifyWebhookSignatureSimple, computeDedupHash,
  *     shortenFloats, sortKeysDeep (HIPVerify Didit webhook — Carryover #78
  *     deferred to post-launch)
- *   - generateShortId, buildProofOGPage, hexToBytes, bytesToHexLower, bytesEqual,
+ *   - buildProofOGPage, hexToBytes, bytesToHexLower, bytesEqual,
  *     base32LowercaseNoPad, deriveCollectionId, readHash, normalizePubkeyFromB64,
- *     normalizePubkeyFromHex, mapValidationError, sanitizeFileName, pHashHammingDistance
+ *     normalizePubkeyFromHex, mapValidationError, pHashHammingDistance
  *     (handler-specific or protocol-only utilities)
  *
  * Created S143CW per S141CW-LOCKED-DECISIONS.md Phase 2 sub-task C.
+ * Extended S144CW (generateShortId + sanitizeFileName) per Phase 2 sub-task D.
  */
 
 export const CORS_ORIGIN = "https://hipprotocol.org";
@@ -186,6 +196,20 @@ export async function verifyAppAuth(request, endpoint, env) {
   }
 
   return { ok: true, credential_id, public_key, trust_record, body };
+}
+
+// === generateShortId === (worker.js line 205-211, added S144CW)
+// S40: Generate 8-char base62 short ID for proof links
+// ~218 trillion combinations — collision-safe for proof-scale usage
+// S144CW: dual-side helper — called by handleRegisterProof (protocol) AND
+// handleApiAttest (HIPKit). Source-of-truth here per shared/auth-helpers
+// pattern; both worker.js inline copies stay byte-identical via verifier.
+export function generateShortId() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  let id = "";
+  for (let i = 0; i < 8; i++) id += chars[bytes[i] % 62];
+  return id;
 }
 
 // === base64ToBytes === (worker.js line 330-338)
@@ -398,4 +422,19 @@ export async function addToCredApiKeysIndex(env, credential_id, key_hash) {
   } catch (_) {
     // Non-fatal: index is an accelerator, not source of truth.
   }
+}
+
+// === sanitizeFileName === (worker.js line 2710-2716, added S144CW)
+// S88: Sanitize an optional display file name before storage.
+// Rules: string only; strip ASCII control chars and path separators (\\ /);
+// trim whitespace; cap at 255 chars; empty becomes null. Purely cosmetic —
+// not part of the signature payload, not trusted as authoritative.
+// S144CW: dual-side helper — called by handleRegisterProof (protocol) AND
+// handleApiAttest (HIPKit). Source-of-truth here; verifier covers both.
+export function sanitizeFileName(name) {
+  if (typeof name !== "string") return null;
+  let s = name.replace(/[\x00-\x1f\x7f\\\/]/g, "").trim();
+  if (!s) return null;
+  if (s.length > 255) s = s.substring(0, 255);
+  return s;
 }
