@@ -292,6 +292,19 @@ credential and the verified identity is held by the pathway provider, not
 recorded on the public ledger, unless the credential holder explicitly
 chooses to make that association public.
 
+**Data-flow precision:** The protocol itself does not see, store, or
+transmit identity data. Pathway providers handle identity verification
+under their own data policies and applicable regulation; the protocol
+receives only a one-way dedup hash (which prevents duplicate Tier 1
+issuance for the same identity without revealing it), the tier label
+of the pathway used, and the pathway identifier. No personally
+identifiable information ever reaches protocol-layer code or ledger
+entries. This separation is structural: an institutional pathway
+provider may, under its own policy, retain documents and biometric
+session records for compliance purposes, but those records are
+governed by that operator and the applicable regulatory regime, not
+by this specification.
+
 ---
 
 ### Tier 2 — Vouched Issuance

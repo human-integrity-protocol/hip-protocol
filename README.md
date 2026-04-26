@@ -24,7 +24,7 @@ Every subsequent HIP attestation traces its lineage to this root.
 
 ## What Is HIP?
 
-HIP lets human creators cryptographically attest to the origin of their work. It does not store your content — only a mathematical fingerprint. It does not expose your identity — only a pseudonymous credential. It does not require any platform's cooperation — any tool can produce and verify HIP attestations using open standards.
+HIP lets human creators cryptographically attest to the origin of their work. It does not store your content — only a mathematical fingerprint. The protocol itself does not see, store, or transmit identity data: pathway providers (such as HIPVerify) handle identity verification under their own data policies and applicable regulation, and the protocol receives only a one-way dedup hash, a tier label, and a pathway identifier. It does not require any platform's cooperation — any tool can produce and verify HIP attestations using open standards.
 
 Three attestation categories, each equally valid:
 
