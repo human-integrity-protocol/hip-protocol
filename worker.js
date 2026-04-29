@@ -2715,7 +2715,675 @@ function sanitizeFileName(name) {
   return s;
 }
 
-async function handleRegisterProof(request, env) {
+// ──────────────────────────────────────────────────────────────────────────
+// S152CW OpenTimestamps + Bitcoin durability anchor helpers — INLINE MIRROR
+// Source-of-truth: hip-protocol/shared/ots-anchor.js
+// Drift detection: node tools/verify-helpers-sync.mjs
+//
+// Per S151CW lock: OpenTimestamps + Bitcoin chosen via charter analysis vs:
+//   Chainpoint/Tierion 2/5, OriginStamp 2/5, build-our-own 2/5,
+//   Ethereum L2 3/5, Arweave (S150 retired) 3/5, OTS+Bitcoin 5/5.
+// Per S152CW lock: hand-rolled minimal protocol implementation chosen vs:
+//   library-bundled (~1500 lines, @noble/hashes runtime dep) — rejected for
+//   single-file Cloudflare Dashboard Quick Editor paste workflow preservation.
+//
+// 16 functions + 5 constants. See shared/ots-anchor.js for full algorithm
+// docs (varint, op walker, leaf parsing, fire-and-forget contract).
+// DO NOT EDIT THIS BLOCK DIRECTLY — edit shared/ots-anchor.js and re-run the
+// sync verifier before commit.
+// ──────────────────────────────────────────────────────────────────────────
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * Primary calendar for stamping. Single-calendar v1 (multi-calendar deferred).
+ * Alice is the OpenTimestamps reference calendar; runs as public-good service.
+ */
+const OTS_CALENDAR_URL = "https://alice.btc.calendar.opentimestamps.org";
+
+/**
+ * .ots file magic header (31 bytes). Required prefix for any valid .ots file.
+ *
+ * Decodes to: \x00 + "OpenTimestamps\x00\x00Proof\x00" + magic constant.
+ */
+const OTS_HEADER_MAGIC = new Uint8Array([
+  0x00, 0x4f, 0x70, 0x65, 0x6e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x73, 0x00,
+  0x00, 0x50, 0x72, 0x6f, 0x6f, 0x66, 0x00, 0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94,
+]);
+
+/**
+ * Pending attestation leaf header (8 bytes hex). Indicates the leaf is awaiting
+ * Bitcoin block confirmation; the leaf's body contains the calendar URL to
+ * query for upgrade.
+ */
+const OTS_LEAFHDR_PENDING_HEX = "83dfe30d2ef90c8e";
+
+/**
+ * Bitcoin attestation leaf header (8 bytes hex). Indicates the leaf is
+ * confirmed in a Bitcoin block; the leaf's body contains the block height
+ * (as varint).
+ */
+const OTS_LEAFHDR_BITCOIN_HEX = "0588960d73d71901";
+
+/**
+ * Calendar POST timeout. Calendars typically respond within 1-2s.
+ */
+const OTS_STAMP_TIMEOUT_MS = 8000;
+
+// ============================================================================
+// Encoding helpers
+// ============================================================================
+
+/**
+ * base64-url encode (no padding, URL-safe). Mirrors the S150 arweave-anchor (retired) base64 pattern.
+ */
+function otsB64UrlEncode(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * base64-url decode → Uint8Array. Tolerates standard base64 too.
+ */
+function otsB64UrlDecode(str) {
+  const std = str.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = std.length % 4 === 0 ? "" : "=".repeat(4 - (std.length % 4));
+  const bin = atob(std + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Uint8Array → lowercase hex string.
+ */
+function otsBytesToHex(bytes) {
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+/**
+ * Lowercase hex string → Uint8Array. Throws on odd length or non-hex chars.
+ */
+function otsHexToBytes(str) {
+  if (typeof str !== "string" || str.length % 2 !== 0) {
+    throw new Error("ots: hex must be even-length string");
+  }
+  const out = new Uint8Array(str.length / 2);
+  for (let i = 0; i < str.length; i += 2) {
+    const b = parseInt(str.slice(i, i + 2), 16);
+    if (Number.isNaN(b)) throw new Error("ots: invalid hex character");
+    out[i / 2] = b;
+  }
+  return out;
+}
+
+/**
+ * Concat any number of Uint8Arrays into a single Uint8Array.
+ */
+function otsConcatBytes(...arrs) {
+  let total = 0;
+  for (const a of arrs) total += a.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const a of arrs) {
+    out.set(a, off);
+    off += a.length;
+  }
+  return out;
+}
+
+/**
+ * SubtleCrypto SHA-256 wrapper. Returns Uint8Array.
+ */
+async function otsSha256(bytes) {
+  const buf = await crypto.subtle.digest("SHA-256", bytes);
+  return new Uint8Array(buf);
+}
+
+// ============================================================================
+// OTS binary protocol — minimal parser
+// ============================================================================
+
+/**
+ * Read an OTS varint (variable-length integer, little-endian, 7-bit groups
+ * with high bit = continuation flag). Returns {value, nextIdx}.
+ *
+ * Used for op operand lengths and Bitcoin block heights.
+ *
+ * Throws if more than 8 bytes consumed (safety bound; real OTS values are tiny).
+ */
+function otsReadVarint(data, idx) {
+  let value = 0;
+  let shift = 0;
+  let cur = idx;
+  let bytesRead = 0;
+  while (cur < data.length) {
+    const b = data[cur++];
+    bytesRead++;
+    value |= (b & 0x7f) << shift;
+    if ((b & 0x80) === 0) {
+      return { value, nextIdx: cur };
+    }
+    shift += 7;
+    if (bytesRead > 8) throw new Error("ots: varint too long");
+  }
+  throw new Error("ots: unexpected EOF reading varint");
+}
+
+/**
+ * Apply an OTS op to a message. Returns the new message Uint8Array.
+ *
+ * Tags handled:
+ *   0x08 SHA256       — msg = SHA256(msg)
+ *   0xf0 APPEND       — msg = msg || operand
+ *   0xf1 PREPEND      — msg = operand || msg
+ *
+ * Other tags (SHA1, RIPEMD160, KECCAK256, REVERSE, HEXLIFY) throw — out of
+ * scope for v1 (Bitcoin path uses SHA256 only).
+ */
+async function otsApplyOp(msg, opTag, operand) {
+  if (opTag === 0x08) {
+    return await otsSha256(msg);
+  }
+  if (opTag === 0xf0) {
+    if (!operand) throw new Error("ots: APPEND missing operand");
+    return otsConcatBytes(msg, operand);
+  }
+  if (opTag === 0xf1) {
+    if (!operand) throw new Error("ots: PREPEND missing operand");
+    return otsConcatBytes(operand, msg);
+  }
+  throw new Error("ots: unsupported op tag 0x" + opTag.toString(16));
+}
+
+/**
+ * Parse an OTS tree from `data` starting at `idx`, with starting message
+ * `msg`, and return all leaves found with their accumulated message values.
+ *
+ * Tree format (per OTS spec; mirrors python-opentimestamps + lacrypta):
+ *
+ *   Tree         := (NonFinal Edge)* FinalEdge
+ *   NonFinal     := 0xff
+ *   FinalEdge    := Edge
+ *   Edge         := Op Tree    |    Leaf
+ *   Op           := UnaryTag                       // 0x02 0x03 0x08 0x67 0xf2 0xf3
+ *                 | BinaryTag varint(opLen) bytes  // 0xf0 APPEND, 0xf1 PREPEND
+ *   Leaf         := 0x00 LeafHeader[8] varint(payloadLen) payload[payloadLen]
+ *
+ *   Pending leaf payload = varint(urlLen) urlBytes[urlLen]
+ *   Bitcoin leaf payload = varint(blockHeight)
+ *
+ * Returns {leaves: Array<{type, messageHex, ...data}>, nextIdx: number}.
+ */
+async function otsParsePathToLeaves(data, idx, msg) {
+  const leaves = [];
+  let cur = idx;
+
+  // Read [0xff Edge]* FinalEdge — all non-last edges are 0xff-prefixed.
+  while (data[cur] === 0xff) {
+    cur++;
+    const er = await otsParseEdge_(data, cur, msg);
+    for (const l of er.leaves) leaves.push(l);
+    cur = er.nextIdx;
+  }
+  // Read FinalEdge (no 0xff prefix).
+  const er = await otsParseEdge_(data, cur, msg);
+  for (const l of er.leaves) leaves.push(l);
+  cur = er.nextIdx;
+
+  return { leaves, nextIdx: cur };
+}
+
+/**
+ * Parse a single Edge (Op-then-Tree, or Leaf). Internal helper.
+ */
+async function otsParseEdge_(data, idx, msg) {
+  let cur = idx;
+  if (cur >= data.length) {
+    throw new Error("ots: unexpected EOF at edge start");
+  }
+  const tag = data[cur++];
+
+  if (tag === 0x00) {
+    // Leaf
+    if (cur + 8 > data.length) {
+      throw new Error("ots: unexpected EOF reading leaf header");
+    }
+    const headerHex = otsBytesToHex(data.slice(cur, cur + 8));
+    cur += 8;
+
+    // payload = varint(payloadLen) + payloadBytes
+    const payloadLen = otsReadVarint(data, cur);
+    cur = payloadLen.nextIdx;
+    const payload = data.slice(cur, cur + payloadLen.value);
+    cur += payloadLen.value;
+
+    if (headerHex === OTS_LEAFHDR_PENDING_HEX) {
+      // pending payload = varint(urlLen) + urlBytes
+      const urlLen = otsReadVarint(payload, 0);
+      const urlBytes = payload.slice(urlLen.nextIdx, urlLen.nextIdx + urlLen.value);
+      const url = new TextDecoder().decode(urlBytes);
+      return {
+        leaves: [{ type: "pending", url, messageHex: otsBytesToHex(msg) }],
+        nextIdx: cur,
+      };
+    }
+    if (headerHex === OTS_LEAFHDR_BITCOIN_HEX) {
+      // bitcoin payload = varint(blockHeight)
+      const heightRead = otsReadVarint(payload, 0);
+      return {
+        leaves: [{ type: "bitcoin", height: heightRead.value, messageHex: otsBytesToHex(msg) }],
+        nextIdx: cur,
+      };
+    }
+    // Unknown / litecoin / ethereum — treat as opaque
+    return {
+      leaves: [{ type: "unknown", headerHex, messageHex: otsBytesToHex(msg) }],
+      nextIdx: cur,
+    };
+  }
+
+  // Op — read operand if APPEND/PREPEND, then recurse into subtree
+  let operand = null;
+  if (tag === 0xf0 || tag === 0xf1) {
+    const opLen = otsReadVarint(data, cur);
+    operand = data.slice(opLen.nextIdx, opLen.nextIdx + opLen.value);
+    cur = opLen.nextIdx + opLen.value;
+  }
+  const newMsg = await otsApplyOp(msg, tag, operand);
+  const sub = await otsParsePathToLeaves(data, cur, newMsg);
+  return { leaves: sub.leaves, nextIdx: sub.nextIdx };
+}
+
+/**
+ * Assemble a full .ots file from a content_hash and a calendar response tree.
+ *
+ * Layout:
+ *   OTS_HEADER_MAGIC (31 bytes)
+ *   OTS_VERSION      (1 byte = 0x01)
+ *   file_hash_alg    (1 byte = 0x08 for SHA256)
+ *   file_hash_bytes  (32 bytes for SHA256)
+ *   tree_bytes       (calendar response, verbatim)
+ *
+ * Note: this assumes no fudge ops were applied client-side (we submit the
+ * content_hash directly to the calendar; the resulting tree starts from
+ * content_hash, no APPEND+SHA256 prefix needed).
+ */
+function otsBuildFileBytes(contentHashBytes, treeBytes) {
+  if (!(contentHashBytes instanceof Uint8Array) || contentHashBytes.length !== 32) {
+    throw new Error("ots: content_hash must be 32-byte Uint8Array");
+  }
+  return otsConcatBytes(
+    OTS_HEADER_MAGIC,
+    new Uint8Array([0x01]), // version
+    new Uint8Array([0x08]), // SHA-256 algorithm tag
+    contentHashBytes,
+    treeBytes
+  );
+}
+
+// ============================================================================
+// Calendar HTTP transport
+// ============================================================================
+
+/**
+ * Submit a 32-byte digest to a calendar's /digest endpoint. Returns the raw
+ * binary response (the OTS tree starting from the submitted digest).
+ *
+ * Throws on HTTP error or timeout.
+ */
+async function otsSubmitDigest(digestBytes, calendarUrl) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), OTS_STAMP_TIMEOUT_MS);
+  try {
+    const resp = await fetch(calendarUrl + "/digest", {
+      method: "POST",
+      body: digestBytes,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Accept": "application/octet-stream",
+        "User-Agent": "hip-ots-anchor/1.0",
+      },
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      throw new Error("ots: calendar /digest HTTP " + resp.status + ": " + txt.slice(0, 200));
+    }
+    const buf = await resp.arrayBuffer();
+    return new Uint8Array(buf);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Query a calendar's upgrade endpoint with a message hex. Returns the raw
+ * binary response (the OTS tree from that pending point onward, hopefully
+ * now including a Bitcoin attestation).
+ *
+ * If the Bitcoin block hasn't been mined yet, the calendar returns the same
+ * pending tree (or HTTP 404). Caller should check status of returned tree.
+ */
+async function otsRequestUpgrade(calendarUrl, msgHex) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), OTS_STAMP_TIMEOUT_MS);
+  try {
+    const resp = await fetch(calendarUrl + "/timestamp/" + msgHex, {
+      method: "GET",
+      headers: {
+        "Accept": "application/octet-stream",
+        "User-Agent": "hip-ots-anchor/1.0",
+      },
+      signal: ctrl.signal,
+    });
+    if (resp.status === 404) {
+      // Not yet mined. Caller treats as no-op.
+      return null;
+    }
+    if (!resp.ok) {
+      throw new Error("ots: calendar upgrade HTTP " + resp.status);
+    }
+    const buf = await resp.arrayBuffer();
+    return new Uint8Array(buf);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ============================================================================
+// Status detection + leaf extraction
+// ============================================================================
+
+/**
+ * Scan ots binary bytes for a Bitcoin attestation leaf. Returns "confirmed" if
+ * found (any Bitcoin leaf), "pending" otherwise.
+ *
+ * Uses the parser (otsParsePathToLeaves) for accuracy. Falls back to byte-scan
+ * if parsing fails (defensive against malformed inputs).
+ */
+async function otsExtractStatus(otsBytes) {
+  // Skip header + version + algorithm + 32-byte file_hash
+  // = 31 + 1 + 1 + 32 = 65 bytes
+  const treeStart = OTS_HEADER_MAGIC.length + 2 + 32;
+  if (otsBytes.length < treeStart) return "pending";
+  const fileHash = otsBytes.slice(OTS_HEADER_MAGIC.length + 2, treeStart);
+  try {
+    const result = await otsParsePathToLeaves(otsBytes, treeStart, fileHash);
+    for (const leaf of result.leaves) {
+      if (leaf.type === "bitcoin") return "confirmed";
+    }
+    return "pending";
+  } catch (_e) {
+    // Defensive byte-scan fallback
+    const bitcoinHeader = otsHexToBytes(OTS_LEAFHDR_BITCOIN_HEX);
+    for (let i = 0; i < otsBytes.length - 9; i++) {
+      if (otsBytes[i] !== 0x00) continue;
+      let match = true;
+      for (let j = 0; j < 8; j++) {
+        if (otsBytes[i + 1 + j] !== bitcoinHeader[j]) { match = false; break; }
+      }
+      if (match) return "confirmed";
+    }
+    return "pending";
+  }
+}
+
+/**
+ * Extract the first pending leaf from a calendar /digest response.
+ *
+ * `treeBytes` is the calendar response (NOT the full .ots file). `digestBytes`
+ * is the 32-byte hash that was submitted.
+ *
+ * Returns {url, msgHex} for the pending leaf, or null if no pending leaf found.
+ */
+async function otsExtractFirstPending(treeBytes, digestBytes) {
+  const result = await otsParsePathToLeaves(treeBytes, 0, digestBytes);
+  for (const leaf of result.leaves) {
+    if (leaf.type === "pending") {
+      return { url: leaf.url, msgHex: leaf.messageHex };
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// Phase 1: Stamp (fire-and-forget, called via ctx.waitUntil)
+// ============================================================================
+
+/**
+ * Stamp a record with an OpenTimestamps + Bitcoin durability anchor.
+ *
+ * This is a best-effort fire-and-forget operation — the caller wraps in
+ * ctx.waitUntil() so the anchor completes in the post-response window without
+ * blocking the user. Failures are logged but don't propagate to the user.
+ *
+ * Steps:
+ *   1. Read the just-written record from KV (race-clean re-read)
+ *   2. Submit content hash to calendar
+ *   3. Parse response; extract pending leaf URL + upgrade message hex
+ *   4. Build full .ots file (header + version + alg tag + content_hash + tree)
+ *   5. Merge ledger_proof into record
+ *   6. Re-write record (KV last-write-wins; race-clean against any concurrent updates)
+ */
+async function otsStamp(env, ctx, recordType, recordKey, recordValue) {
+  const logPrefix = "[ots-anchor " + recordType + " " + recordKey + "]";
+  try {
+    if (!env || !env.DEDUP_KV) {
+      console.warn(logPrefix + " no DEDUP_KV binding; skipping");
+      return;
+    }
+
+    // Determine what hash to submit (per record type).
+    let hashHex = null;
+    if (recordType === "proof") {
+      hashHex = recordValue && recordValue.content_hash;
+    } else if (recordType === "collection" || recordType === "series") {
+      // Use record's signed-manifest digest; fall back to KV key suffix.
+      hashHex = (recordValue && recordValue.manifest_digest) ||
+                (recordKey.includes(":") ? recordKey.split(":").slice(1).join(":") : recordKey);
+    } else if (recordType === "series_event") {
+      hashHex = (recordValue && recordValue.event_hash) ||
+                (recordKey.includes(":") ? recordKey.split(":").slice(1).join(":") : recordKey);
+    } else {
+      console.warn(logPrefix + " unknown record type; skipping");
+      return;
+    }
+
+    if (typeof hashHex !== "string" || !/^[0-9a-f]{64}$/i.test(hashHex)) {
+      console.warn(logPrefix + " hashHex not 64-char hex; skipping (got " + (typeof hashHex) + ")");
+      return;
+    }
+
+    const digestBytes = otsHexToBytes(hashHex.toLowerCase());
+
+    // Phase 1a: submit to calendar
+    let treeBytes;
+    try {
+      treeBytes = await otsSubmitDigest(digestBytes, OTS_CALENDAR_URL);
+    } catch (e) {
+      console.error(logPrefix + " calendar submit failed: " + e.message);
+      return;
+    }
+
+    // Phase 1b: extract pending leaf
+    let pending;
+    try {
+      pending = await otsExtractFirstPending(treeBytes, digestBytes);
+    } catch (e) {
+      console.error(logPrefix + " parse calendar response failed: " + e.message);
+      return;
+    }
+    if (!pending) {
+      console.warn(logPrefix + " no pending leaf in calendar response; skipping");
+      return;
+    }
+
+    // Phase 1c: build full .ots file
+    const otsBytes = otsBuildFileBytes(digestBytes, treeBytes);
+
+    // Phase 1d: re-read record (race-clean against concurrent updates)
+    const cur = await env.DEDUP_KV.get(recordKey, { type: "json" });
+    if (!cur) {
+      console.warn(logPrefix + " record vanished between write and stamp; skipping");
+      return;
+    }
+    if (cur.ledger_proof && cur.ledger_proof.status === "confirmed") {
+      console.warn(logPrefix + " record already confirmed; skipping");
+      return;
+    }
+
+    // Phase 1e: merge ledger_proof and re-write
+    cur.ledger_proof = {
+      status: "pending",
+      ots_b64: otsB64UrlEncode(otsBytes),
+      stamped_at: new Date().toISOString(),
+      calendar: OTS_CALENDAR_URL,
+      upgrade_msg_hex: pending.msgHex,
+      upgrade_url: pending.url,
+    };
+    await env.DEDUP_KV.put(recordKey, JSON.stringify(cur));
+    console.log(logPrefix + " stamped pending; ots " + otsBytes.length + " bytes");
+  } catch (e) {
+    console.error(logPrefix + " unhandled error: " + (e && e.message ? e.message : e));
+  }
+}
+
+// ============================================================================
+// Phase 2: On-demand upgrade at read-time
+// ============================================================================
+
+/**
+ * If the record's ledger_proof is pending, attempt to upgrade it via the
+ * calendar's /timestamp/{msg-hex} endpoint. On success, persist the upgraded
+ * record back to KV and return the upgraded record. On failure or no-op,
+ * return the original record unchanged.
+ *
+ * This is non-fatal: any failure leaves status: "pending" unchanged; next
+ * read attempt will retry.
+ *
+ * Caller is responsible for env binding + KV access. Pass record by value
+ * (not by reference); this function returns the (possibly upgraded) record.
+ */
+async function otsUpgradeIfPending(env, recordKey, record) {
+  const lp = record && record.ledger_proof;
+  if (!lp || lp.status !== "pending") return record;
+  if (!lp.upgrade_url || !lp.upgrade_msg_hex) return record;
+  if (!env || !env.DEDUP_KV) return record;
+
+  const logPrefix = "[ots-upgrade " + recordKey + "]";
+
+  try {
+    const upgradeBytes = await otsRequestUpgrade(lp.upgrade_url, lp.upgrade_msg_hex);
+    if (!upgradeBytes) {
+      // 404 — not yet mined. Leave pending.
+      return record;
+    }
+
+    // Parse upgrade response. If it contains a Bitcoin leaf, replace pending
+    // section in stored ots_b64 with the new tree.
+    // Strategy for v1: scan upgrade response for Bitcoin attestation; if found,
+    // replace the entire suffix of ots_b64 starting at the pending leaf with
+    // the new tree. (More precise tree-merging deferred to v2.)
+
+    // Quick check: does upgrade response contain a Bitcoin leaf?
+    const bitcoinHdr = otsHexToBytes(OTS_LEAFHDR_BITCOIN_HEX);
+    let hasBitcoin = false;
+    for (let i = 0; i < upgradeBytes.length - 9; i++) {
+      if (upgradeBytes[i] !== 0x00) continue;
+      let match = true;
+      for (let j = 0; j < 8; j++) {
+        if (upgradeBytes[i + 1 + j] !== bitcoinHdr[j]) { match = false; break; }
+      }
+      if (match) { hasBitcoin = true; break; }
+    }
+
+    if (!hasBitcoin) {
+      // Calendar responded but not yet Bitcoin-anchored. Leave pending.
+      return record;
+    }
+
+    // Rebuild .ots file: original prefix (header + version + alg + hash) + ops to
+    // pending point + upgrade response. For our simple (no-fudge, single-leaf)
+    // case, the pending tree from the calendar /digest response was the final
+    // suffix of the .ots file. The upgrade response is the replacement suffix
+    // starting from the same digest position.
+    //
+    // Concretely: in our stamp flow, we built ots_b64 = HEADER + VERSION + ALG
+    // + HASH + calendar_response_tree. The pending leaf is at the end of
+    // calendar_response_tree. The upgrade response IS the new calendar_response_tree
+    // (containing path from digest to Bitcoin attestation).
+    //
+    // So new ots_b64 = HEADER + VERSION + ALG + HASH + upgrade_bytes.
+    //
+    // Note: this only works because we submit content_hash directly (no fudge).
+    // If we later add fudge ops, the rebuild becomes more complex.
+
+    if (lp.ots_b64) {
+      const oldOts = otsB64UrlDecode(lp.ots_b64);
+      // Validate prefix matches (defense in depth)
+      const prefixLen = OTS_HEADER_MAGIC.length + 2 + 32;
+      if (oldOts.length < prefixLen) {
+        console.warn(logPrefix + " stored ots_b64 too short; skipping");
+        return record;
+      }
+      const prefix = oldOts.slice(0, prefixLen);
+      const newOts = otsConcatBytes(prefix, upgradeBytes);
+
+      // Extract block height from upgrade response.
+      let blockHeight = null;
+      try {
+        const fileHash = oldOts.slice(OTS_HEADER_MAGIC.length + 2, prefixLen);
+        const parsed = await otsParsePathToLeaves(upgradeBytes, 0, fileHash);
+        for (const leaf of parsed.leaves) {
+          if (leaf.type === "bitcoin") {
+            blockHeight = leaf.height;
+            break;
+          }
+        }
+      } catch (_e) {
+        // parsing failed but we know hasBitcoin = true. Leave height null.
+      }
+
+      // Re-read current record (race-clean) before overwriting.
+      const cur = await env.DEDUP_KV.get(recordKey, { type: "json" });
+      if (!cur) return record;
+      if (cur.ledger_proof && cur.ledger_proof.status === "confirmed") {
+        // Some other read-handler upgraded concurrently; defer to its result.
+        return cur;
+      }
+
+      cur.ledger_proof = {
+        status: "confirmed",
+        ots_b64: otsB64UrlEncode(newOts),
+        stamped_at: lp.stamped_at,
+        upgraded_at: new Date().toISOString(),
+        calendar: lp.calendar,
+        upgrade_msg_hex: lp.upgrade_msg_hex,
+        upgrade_url: lp.upgrade_url,
+        bitcoin_block_height: blockHeight,
+      };
+
+      await env.DEDUP_KV.put(recordKey, JSON.stringify(cur));
+      console.log(logPrefix + " upgraded to confirmed; block " + blockHeight);
+      return cur;
+    }
+
+    return record;
+  } catch (e) {
+    console.error(logPrefix + " unhandled error: " + (e && e.message ? e.message : e));
+    return record;
+  }
+}
+
+async function handleRegisterProof(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   let body;
@@ -2976,9 +3644,18 @@ async function handleRegisterProof(request, env) {
     original_hash: original_hash || null,
     attested_copy_hash: attested_copy_hash || null,
     thumbnail: thumbnail || null, // S131CW Carryover #69: cosmetic, unsigned
+    ledger_proof: null, // S152CW: server-stamped post-write by ctx.waitUntil(otsStamp(...))
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S152CW Carryover #84: fire-and-forget OpenTimestamps + Bitcoin anchor write.
+  // Returns immediately; KV record is updated with ledger_proof once the
+  // OpenTimestamps calendar accepts the digest (~1-2s). On failure, ledger_proof stays null
+  // and a future backfill run picks it up.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "proof", proofKey, proofRecord));
+  }
 
   // S103 Fix 3: write alias row so Verify can resolve sha256(downloaded file)
   // → canonical content_hash when the attested copy's bytes differ from the
@@ -3352,7 +4029,13 @@ async function handleGetProof(contentHash, request, env) {
     }, 404, origin);
   }
 
-  const record = JSON.parse(raw);
+  let record = JSON.parse(raw);
+
+  // S152CW: opportunistic on-demand OpenTimestamps upgrade. If ledger_proof
+  // is pending and Bitcoin has now mined the calendar's commitment, persist
+  // the upgraded proof back to KV. Non-fatal: any failure leaves status
+  // pending unchanged; next read attempt will retry.
+  record = await otsUpgradeIfPending(env, `proof:${canonicalHash}`, record);
 
   // Sealed records: return stub only — existence confirmed, contents withheld
   if (record.sealed) {
@@ -3448,7 +4131,7 @@ async function handleGetProof(contentHash, request, env) {
 // Spec-vs-impl divergence on §3.4.6 (collection-by-credential): handled by
 // the sibling handleCollectionByCredential() below — POST not GET, mirrors the
 // existing verifyAppAuth pattern from handlePortfolio / handleCredentialAttestations.
-async function handleRegisterCollectionProof(request, env) {
+async function handleRegisterCollectionProof(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   // ── 1. Parse body + enforce 1 MB manifest size cap ──
@@ -3822,11 +4505,20 @@ async function handleRegisterCollectionProof(request, env) {
   }
 
   // 6f. Flip collection:{id} to status:"active".
-  const activeRecord = { ...pendingRecord, status: "active" };
+  // S150CW: ledger_proof added inline; spread of pendingRecord doesn't carry the field.
+  const activeRecord = { ...pendingRecord, status: "active", ledger_proof: null };
   try {
     await env.DEDUP_KV.put(collectionKey, JSON.stringify(activeRecord));
   } catch (_) {
     return jsonResponse({ error: "kv_write_failure", retry: true }, 500, origin);
+  }
+
+  // S152CW Carryover #84: fire-and-forget OpenTimestamps + Bitcoin anchor write.
+  // Anchors the activeRecord (final state after pending→active flip). The
+  // pendingRecord write is intentionally NOT anchored — it's a transient
+  // status placeholder overwritten ~immediately by activeRecord.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "collection", collectionKey, activeRecord));
   }
 
   // ── 6g. chain_registry:{chain_id} write (S106.7CW Phase 2 — §3.5.5) ──
@@ -4098,7 +4790,7 @@ function validateSeriesManifest(manifest) {
 //      closed_at=null, last_event_at=created)
 //  10. Append creator_series:{cred_id} idx    (non-fatal)
 //  11. Increment rate counters
-async function handleRegisterSeries(request, env) {
+async function handleRegisterSeries(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   // ── 1. Parse body ──
@@ -4255,11 +4947,17 @@ async function handleRegisterSeries(request, env) {
     closed_at: null,
     member_count: 0,
     last_event_at: createdAt,
+    ledger_proof: null, // S152CW: server-stamped post-write by ctx.waitUntil(otsStamp(...))
     // S122CW: conditional spread keeps protocol-default record shape pristine
     // (field ABSENT, not false, when not HIPKit-originated).
     ...(hipkit_originated === true && { hipkit_originated: true }),
   };
   await env.DEDUP_KV.put(seriesKey, JSON.stringify(seriesRecord));
+
+  // S152CW Carryover #84: fire-and-forget OpenTimestamps + Bitcoin anchor write.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "series", seriesKey, seriesRecord));
+  }
 
   // ── 10. Append creator_series:{cred_id} (non-fatal) ──
   await writeCreatorSeriesIndex(env, credentialId, {
@@ -4319,7 +5017,7 @@ async function handleRegisterSeries(request, env) {
 //  16. Add to series_members:{series_id} idx
 //  17. Write affiliations:{member_hash}       (non-fatal, dedup)
 //  18. Increment rate counters
-async function handleRegisterSeriesMember(request, env) {
+async function handleRegisterSeriesMember(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   // ── 1. Parse body ──
@@ -4474,9 +5172,16 @@ async function handleRegisterSeriesMember(request, env) {
   const storedEvent = {
     ...event,
     signature,
+    ledger_proof: null, // S152CW: server-stamped post-write by ctx.waitUntil(otsStamp(...))
     ...(hipkit_originated === true && { hipkit_originated: true }),
   };
-  await env.DEDUP_KV.put(`series_event:${eventHashHex}`, JSON.stringify(storedEvent));
+  const storedEventKey = `series_event:${eventHashHex}`;
+  await env.DEDUP_KV.put(storedEventKey, JSON.stringify(storedEvent));
+
+  // S152CW Carryover #84: fire-and-forget OpenTimestamps + Bitcoin anchor write.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "series_event", storedEventKey, storedEvent));
+  }
 
   // ── 14. Append series_events:{series_id} ──
   const eventsListKey = `series_events:${event.series_id}`;
@@ -4554,7 +5259,7 @@ async function handleRegisterSeriesMember(request, env) {
 //  10. Append series_events:{series_id}
 //  11. Update series.status="closed",
 //      series.closed_at = event.closed_at
-async function handleCloseSeries(request, env) {
+async function handleCloseSeries(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   // ── 1. Parse body ──
@@ -4651,8 +5356,18 @@ async function handleCloseSeries(request, env) {
   // ── 9. Compute event_hash + write series_event:{event_hash} ──
   const eventHashHex = await sha256Hex(jcsCanonicalize(event));
   const appliedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const storedEvent = { ...event, signature };
-  await env.DEDUP_KV.put(`series_event:${eventHashHex}`, JSON.stringify(storedEvent));
+  // S150CW: ledger_proof added inline (close-event has no hipkit_originated spread).
+  const storedEvent = { ...event, signature, ledger_proof: null };
+  const storedEventKey = `series_event:${eventHashHex}`;
+  await env.DEDUP_KV.put(storedEventKey, JSON.stringify(storedEvent));
+
+  // S152CW Carryover #84: fire-and-forget OpenTimestamps + Bitcoin anchor write.
+  // Close events get the same anchor treatment as add events — completes the
+  // series-event coverage so any verifier walking from Bitcoin can reconstruct
+  // the full series lifecycle (creation + adds + close) independently.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "series_event", storedEventKey, storedEvent));
+  }
 
   // ── 10. Append series_events:{series_id} ──
   const eventsListKey = `series_events:${event.series_id}`;
@@ -4787,6 +5502,12 @@ async function handleGetSeries(seriesId, request, env) {
   if (!record || !record.series_id) {
     return jsonResponse({ error: "series_not_found" }, 404, origin);
   }
+
+  // S152CW: opportunistic on-demand OpenTimestamps upgrade. If ledger_proof
+  // is pending and Bitcoin has now mined the calendar's commitment, persist
+  // the upgraded proof back to KV. Non-fatal: any failure leaves status
+  // pending unchanged; next read attempt will retry.
+  record = await otsUpgradeIfPending(env, `series:${seriesId}`, record);
 
   // Stamp short_url at response time per §7.5. Not part of the stored
   // record — always derivable from series_id.
@@ -5203,6 +5924,12 @@ async function handleCollectionGet(id, request, env) {
     return jsonResponse({ error: "not_found" }, 404, origin);
   }
 
+  // S152CW: opportunistic on-demand OpenTimestamps upgrade. If ledger_proof
+  // is pending and Bitcoin has now mined the calendar's commitment, persist
+  // the upgraded proof back to KV. Non-fatal: any failure leaves status
+  // pending unchanged; next read attempt will retry.
+  record = await otsUpgradeIfPending(env, `collection:${id}`, record);
+
   return jsonResponse({
     collection_id: record.collection_id,
     manifest: record.manifest,
@@ -5213,6 +5940,7 @@ async function handleCollectionGet(id, request, env) {
     created_at: record.created_at,
     member_sidecar: record.member_sidecar || {},
     chain_sidecar: record.chain_sidecar || null, // S106.7CW — surface chain metadata if present
+    ledger_proof: record.ledger_proof || null,    // S152CW — durability anchor (OpenTimestamps + Bitcoin)
   }, 200, origin);
 }
 
@@ -6264,7 +6992,7 @@ async function handleDeactivateApiKey(request, env) {
 // Request body: { content_hash, classification, signature, attested_at?, sealed?, protocol_version?, perceptual_hash?, public_key? }
 // Rate limits: shared with app attestations (T1:50/day, T2:25/day, T3:10/day)
 
-async function handleApiAttest(request, env) {
+async function handleApiAttest(request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   // ── Auth: Resolve API key to credential ──
@@ -6552,9 +7280,19 @@ async function handleApiAttest(request, env) {
     original_hash: original_hash || null,
     attested_copy_hash: attested_copy_hash || null,
     thumbnail: thumbnail || null, // S131CW Carryover #69: cosmetic, unsigned
+    ledger_proof: null, // S152CW: server-stamped post-write by ctx.waitUntil(otsStamp(...))
   };
 
   await env.DEDUP_KV.put(proofKey, JSON.stringify(proofRecord));
+
+  // S152CW Carryover #84 (Path α): fire-and-forget OpenTimestamps + Bitcoin
+  // anchor write. handleApiAttest in hip-protocol/worker.js is the LIVE handler
+  // for /api/attest traffic — the S144 narrative said this would migrate to a
+  // separate hipkit-net-worker, but the Cloudflare Worker entity was never
+  // actually created. So this handler is the operational entry point.
+  if (typeof ctx !== "undefined" && ctx) {
+    ctx.waitUntil(otsStamp(env, ctx, "proof", proofKey, proofRecord));
+  }
 
   // S103 Fix 3: symmetric alias write (see handleRegisterProof).
   if (attested_copy_hash && attested_copy_hash !== content_hash) {
@@ -7633,7 +8371,7 @@ async function handleAdminGcPendingDryRun(request, env) {
 // ── Main Router ──
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -7720,12 +8458,12 @@ export default {
 
     // S37: Public proof registry
     if (method === "POST" && path === "/register-proof") {
-      return handleRegisterProof(request, env);
+      return handleRegisterProof(request, env, ctx);
     }
 
     // S106 §3.4.1: Collection Proof registration
     if (method === "POST" && path === "/register-collection-proof") {
-      return handleRegisterCollectionProof(request, env);
+      return handleRegisterCollectionProof(request, env, ctx);
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -7737,13 +8475,13 @@ export default {
     // ordered longest-path-first so /api/series/{id}/events matches
     // before /api/series/{id}.
     if (method === "POST" && path === "/register-series") {
-      return handleRegisterSeries(request, env);
+      return handleRegisterSeries(request, env, ctx);
     }
     if (method === "POST" && path === "/register-series-member") {
-      return handleRegisterSeriesMember(request, env);
+      return handleRegisterSeriesMember(request, env, ctx);
     }
     if (method === "POST" && path === "/close-series") {
-      return handleCloseSeries(request, env);
+      return handleCloseSeries(request, env, ctx);
     }
 
     // §7.6 — GET /api/series/{series_id}/events. MUST match before §7.5.
@@ -7863,7 +8601,7 @@ export default {
 
     // S82: Authenticated attestation submission via API key
     if (method === "POST" && path === "/api/attest") {
-      return handleApiAttest(request, env);
+      return handleApiAttest(request, env, ctx);
     }
 
     // S82: Admin — generate API key for a credential
