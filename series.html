@@ -79,6 +79,21 @@ a:hover{text-decoration:underline}
 .sig-ok{background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.15);color:#4ade80}
 .sig-fail{background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);color:#ef4444}
 .sig-pending{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);color:#666}
+/* S153CW: Bitcoin durability anchor (OpenTimestamps + Bitcoin) */
+.ledger-block{padding:14px 16px;border-radius:8px;margin-top:14px;margin-bottom:20px;font-size:13px;line-height:1.6;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)}
+.ledger-block-confirmed{border-color:rgba(45,212,191,0.30);background:rgba(45,212,191,0.04);color:#bfe}
+.ledger-block-pending{border-color:rgba(245,158,11,0.30);background:rgba(245,158,11,0.04);color:#f5deb3}
+.ledger-block-title{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#999;margin-bottom:8px}
+.ledger-block-status{margin-bottom:6px}
+.ledger-block-status strong{color:#E8E8E0;font-weight:500}
+.ledger-block-status a{color:#2DD4BF;text-decoration:none}
+.ledger-block-status a:hover{text-decoration:underline}
+.ledger-block-meta{font-size:11px;color:#888;font-family:'Azeret Mono',monospace}
+.ledger-block-meta-inline{color:#888}
+.ledger-block-actions{margin-top:10px}
+.ledger-btn{background:rgba(255,255,255,0.04);color:#E8E8E0;border:1px solid rgba(255,255,255,0.10);padding:6px 12px;border-radius:6px;font-family:'Azeret Mono',monospace;font-size:11px;cursor:pointer;letter-spacing:0.5px}
+.ledger-btn:hover{background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.18)}
+.ledger-block-fine{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#666;line-height:1.55;font-style:italic}
 .member-section{background:#0d0d0d;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:24px;margin-bottom:16px}
 .member-section-title{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:4px}
 .member-section-desc{font-size:13px;color:#555;line-height:1.6;margin-bottom:16px}
@@ -168,6 +183,70 @@ function fmtDate(iso){ if(!iso) return "—"; try{ return new Date(iso).toUTCStr
 function tierLabel(t){ return t===1?"Tier 1 — Government ID":t===2?"Tier 2 — Peer Vouched":t===3?"Tier 3 — Biometric Presence":"Unknown" }
 function tierClass(t){ return t===1?"tier-1":t===2?"tier-2":"tier-3" }
 function badgeImg(cls){ return '<img src="data:image/png;base64,'+BADGE_B64+'" class="badge-img '+cls+'" alt="HIP Badge" width="80" height="80">' }
+
+// ── S153CW: Bitcoin durability anchor (OpenTimestamps + Bitcoin) ──
+// Decodes the URL-safe base64 ots_b64 field (per shared/ots-anchor.js
+// otsB64UrlEncode) into raw .ots binary bytes for download.
+function lpDecodeOtsB64Url(b64url){
+  var s = String(b64url || "").replace(/-/g, "+").replace(/_/g, "/");
+  while(s.length % 4) s += "=";
+  var bin = atob(s);
+  var out = new Uint8Array(bin.length);
+  for(var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function lpDownloadOts(b64url, filename){
+  try{
+    var bytes = lpDecodeOtsB64Url(b64url);
+    var blob = new Blob([bytes], {type:"application/octet-stream"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename || "proof.ots";
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ try{ document.body.removeChild(a); URL.revokeObjectURL(url); }catch(e){} }, 200);
+  }catch(e){
+    alert("Could not prepare .ots proof for download: " + (e && e.message ? e.message : e));
+  }
+}
+// renderLedgerBlock(lp, suggestedName) — returns HTML string for the
+// Bitcoin durability anchor block; returns "" when ledger_proof is null
+// or has unknown status (graceful no-op for pre-S152 records).
+function renderLedgerBlock(lp, suggestedName){
+  if(!lp || typeof lp !== "object") return "";
+  var status = lp.status || "";
+  var html = "";
+  if(status === "confirmed" && Number.isInteger(lp.bitcoin_block_height)){
+    var bh = lp.bitcoin_block_height;
+    html += '<div class="ledger-block ledger-block-confirmed">'
+      + '<div class="ledger-block-title">Bitcoin Durability Anchor</div>'
+      + '<div class="ledger-block-status"><strong>✓ Confirmed in Bitcoin block #'+bh+'</strong>'
+      + ' &middot; <a href="https://blockstream.info/block-height/'+bh+'" target="_blank" rel="noopener">verify on blockstream.info ↗</a></div>';
+    if(lp.stamped_at){
+      html += '<div class="ledger-block-meta">Stamped '+escHtml(fmtDate(lp.stamped_at))
+        + (lp.upgraded_at ? ' &middot; Confirmed '+escHtml(fmtDate(lp.upgraded_at)) : '')
+        + '</div>';
+    }
+  } else if(status === "pending"){
+    html += '<div class="ledger-block ledger-block-pending">'
+      + '<div class="ledger-block-title">Bitcoin Durability Anchor</div>'
+      + '<div class="ledger-block-status"><strong>⏳ Pending Bitcoin confirmation</strong>'
+      + ' <span class="ledger-block-meta-inline">— typically confirms within 1–60 minutes</span></div>';
+    if(lp.stamped_at){
+      html += '<div class="ledger-block-meta">Stamped '+escHtml(fmtDate(lp.stamped_at))+'</div>';
+    }
+  } else {
+    return "";
+  }
+  if(typeof lp.ots_b64 === "string" && lp.ots_b64.length > 0){
+    var safe = (typeof suggestedName === "string" ? suggestedName : "proof").replace(/[^a-zA-Z0-9._-]/g, "_") || "proof";
+    html += '<div class="ledger-block-actions">'
+      + '<button type="button" class="ledger-btn" data-ots="'+lp.ots_b64+'" data-fname="'+safe+'.ots" onclick="lpDownloadOts(this.dataset.ots,this.dataset.fname)">Download .ots proof</button>'
+      + '</div>';
+  }
+  html += '<div class="ledger-block-fine">OpenTimestamps anchors a SHA-256 of this record into the Bitcoin blockchain via public calendar servers. The .ots proof file lets anyone verify when this attestation existed without trusting HIP’s servers — independently, with any OpenTimestamps client.</div>';
+  html += '</div>';
+  return html;
+}
 
 async function verifyEd25519Bytes(publicKeyHex, msgBytes, signatureB64){
   try{
@@ -338,6 +417,8 @@ async function renderSeries(series, eventsData){
 
   html += '<div class="divider"></div>';
   html += '<div class="sig-block sig-pending" id="sig-status">Verifying series manifest signature…</div>';
+  // S153CW: Bitcoin durability anchor block (OpenTimestamps + Bitcoin)
+  html += renderLedgerBlock(series.ledger_proof, "hip-series-"+(series.series_id || "unknown"));
   html += '</div>'; // end series-card
 
   // Member section — rendered immediately after the card, before the boundary disclaimer.
