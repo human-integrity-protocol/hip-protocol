@@ -8368,6 +8368,191 @@ async function handleAdminGcPendingDryRun(request, env) {
   return jsonResponse(result, 200, origin);
 }
 
+// S157CW — Admin endpoint to backfill `ledger_proof` on pre-S152CW production
+// records (~500 estimated). Walks DEDUP_KV under the supplied prefix in a
+// single page (size = `limit`), finds records where `ledger_proof` is null/
+// absent, and calls `otsStamp` sequentially to stamp each one. Same Bearer
+// ADMIN_KEY pattern as `handleAdminGcPendingDryRun`.
+//
+// Per-prefix invocation: admin specifies one of `proof:` / `series:` /
+// `series_event:` / `collection:` per call and orchestrates pagination
+// externally via the returned `cursor`. Sequential await (not ctx.waitUntil)
+// so the response carries accurate `stamped_count` / `errors_count` back.
+//
+// Idempotent. Failed records leave `ledger_proof` null and get retried on the
+// next invocation. `otsStamp`'s race-clean re-read at the merge step handles
+// concurrent writes (skip if already confirmed).
+//
+// Field-presence filter: skips records that already have a `ledger_proof`
+// (pending or confirmed). `otsUpgradeIfPending` handles pending→confirmed at
+// read time; this backfill only addresses null/absent.
+//
+// Body shape:
+//   { prefix:   "proof:" | "series:" | "series_event:" | "collection:",
+//     limit?:   1..100  (default 50)  — KV.list page size for this invocation,
+//     cursor?:  string  (opaque KV cursor; null/absent = start of prefix),
+//     dry_run?: boolean (default false) }
+//
+// Response:
+//   { summary: { kind, started_at, finished_at, elapsed_ms, dry_run, prefix,
+//                scanned_count, candidates_count, already_stamped_count,
+//                stamped_count, skipped_count, malformed_count, errors_count },
+//     stamped_keys:   [string]  (live runs only),
+//     candidate_keys: [string]  (dry runs only),
+//     malformed:      [{ key, reason }],
+//     cursor:         string|null  (null when list_complete),
+//     list_complete:  boolean }
+const BACKFILL_ALLOWED_PREFIXES = {
+  "proof:": "proof",
+  "series:": "series",
+  "series_event:": "series_event",
+  "collection:": "collection",
+};
+const BACKFILL_DEFAULT_LIMIT = 50;
+const BACKFILL_MAX_LIMIT = 100;
+
+async function handleAdminBackfillLedgerProofs(request, env, ctx) {
+  const origin = request.headers.get("Origin") || CORS_ORIGIN;
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ") || authHeader.slice(7) !== env.ADMIN_KEY) {
+    return jsonResponse({ error: "Unauthorized" }, 401, origin);
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch (_) { return jsonResponse({ error: "invalid_json_body" }, 400, origin); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "body_must_be_object" }, 400, origin);
+  }
+
+  const prefix = body.prefix;
+  if (typeof prefix !== "string"
+      || !Object.prototype.hasOwnProperty.call(BACKFILL_ALLOWED_PREFIXES, prefix)) {
+    return jsonResponse({
+      error: "invalid_prefix",
+      allowed: Object.keys(BACKFILL_ALLOWED_PREFIXES),
+    }, 400, origin);
+  }
+  const recordType = BACKFILL_ALLOWED_PREFIXES[prefix];
+
+  let limit = BACKFILL_DEFAULT_LIMIT;
+  if (body.limit !== undefined && body.limit !== null) {
+    if (typeof body.limit !== "number" || !Number.isFinite(body.limit) || body.limit < 1) {
+      return jsonResponse({ error: "invalid_limit" }, 400, origin);
+    }
+    limit = Math.min(BACKFILL_MAX_LIMIT, Math.floor(body.limit));
+  }
+
+  let cursor = undefined;
+  if (body.cursor !== undefined && body.cursor !== null) {
+    if (typeof body.cursor !== "string" || body.cursor.length === 0) {
+      return jsonResponse({ error: "invalid_cursor" }, 400, origin);
+    }
+    cursor = body.cursor;
+  }
+
+  const dryRun = body.dry_run === true;
+
+  const startedMs = Date.now();
+  const started_at = new Date(startedMs).toISOString();
+
+  let page;
+  try {
+    const listOpts = { prefix, limit };
+    if (cursor) listOpts.cursor = cursor;
+    page = await env.DEDUP_KV.list(listOpts);
+  } catch (e) {
+    return jsonResponse({
+      error: "kv_list_failed",
+      message: String(e && e.message ? e.message : e).slice(0, 500),
+    }, 500, origin);
+  }
+
+  let scanned_count = 0;
+  let candidates_count = 0;
+  let already_stamped_count = 0;
+  let stamped_count = 0;
+  let skipped_count = 0;
+  let malformed_count = 0;
+  let errors_count = 0;
+  const stamped_keys = [];
+  const candidate_keys = [];
+  const malformed = [];
+
+  for (const k of (page.keys || [])) {
+    const name = k.name;
+    scanned_count++;
+    let raw;
+    try { raw = await env.DEDUP_KV.get(name); }
+    catch (_) { errors_count++; continue; }
+    if (!raw) { skipped_count++; continue; }
+    let rec;
+    try { rec = JSON.parse(raw); }
+    catch (_) {
+      malformed_count++;
+      malformed.push({ key: name, reason: "parse_error" });
+      continue;
+    }
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) {
+      malformed_count++;
+      malformed.push({ key: name, reason: "not_object" });
+      continue;
+    }
+
+    if (rec.ledger_proof) {
+      already_stamped_count++;
+      continue;
+    }
+
+    candidates_count++;
+    candidate_keys.push(name);
+
+    if (dryRun) continue;
+
+    try {
+      await otsStamp(env, ctx, recordType, name, rec);
+      stamped_count++;
+      stamped_keys.push(name);
+    } catch (e) {
+      errors_count++;
+      console.log(JSON.stringify({
+        kind: "backfill_stamp_error",
+        key: name,
+        message: String(e && e.message ? e.message : e).slice(0, 500),
+      }));
+    }
+  }
+
+  const list_complete = !!page.list_complete;
+  const nextCursor = list_complete ? null : (page.cursor || null);
+
+  const summary = {
+    kind: "backfill_ledger_proofs_summary",
+    started_at,
+    finished_at: new Date().toISOString(),
+    elapsed_ms: Date.now() - startedMs,
+    dry_run: dryRun,
+    prefix,
+    scanned_count,
+    candidates_count,
+    already_stamped_count,
+    stamped_count,
+    skipped_count,
+    malformed_count,
+    errors_count,
+  };
+  console.log(JSON.stringify(summary));
+
+  return jsonResponse({
+    summary,
+    stamped_keys: dryRun ? [] : stamped_keys,
+    candidate_keys: dryRun ? candidate_keys : [],
+    malformed,
+    cursor: nextCursor,
+    list_complete,
+  }, 200, origin);
+}
+
 // ── Main Router ──
 
 export default {
@@ -8626,6 +8811,14 @@ export default {
     // real prod KV before/after cron schedule activates.
     if (method === "POST" && path === "/admin/gc-pending-dry-run") {
       return handleAdminGcPendingDryRun(request, env);
+    }
+
+    // S157CW — Admin endpoint to backfill ledger_proof on pre-S152CW records.
+    // Bearer ADMIN_KEY. Body: {prefix, limit?, cursor?, dry_run?}. Walks one
+    // KV.list page (default 50 keys), stamps each record where ledger_proof
+    // is null/absent, returns cursor for pagination. Idempotent.
+    if (method === "POST" && path === "/api/admin/backfill-ledger-proofs") {
+      return handleAdminBackfillLedgerProofs(request, env, ctx);
     }
 
     // S85CW Change 3: Portfolio — paginated proofs for authenticated credential
