@@ -49,7 +49,8 @@ hip-protocol/
 │   ├── HIP_WF-SPEC-v1.md     ← Proof Bundle Wire Format
 │   ├── HIP_HP-SPEC-v1.md     ← HUMAN-PROOF Credential Mechanics
 │   ├── HIP_CRYPTO-SPEC-v1.md ← Cryptographic Primitives
-│   └── HIP_GI-SPEC-v1.md     ← Genesis Inscription (Complete)
+│   ├── HIP_GI-SPEC-v1.md     ← Genesis Inscription (Complete)
+│   └── SN-SPEC-v0.md         ← Steward Nodes Roadmap (v0)
 ├── genesis/
 │   ├── genesis_inscription_payload.json  ← The canonical Genesis payload
 │   └── HIP_Genesis_Announcement.md       ← Formal announcement
@@ -112,6 +113,7 @@ All five pass = Genesis confirmed valid.
 | **PATHWAY-SPEC-v1** | Issuance Pathway Governance | Finalized (publication pending) |
 | **INT-SPEC-v1** | Integration & Verification Endpoints | Finalized (publication pending) |
 | **SLA-SPEC-v1** | Steward Ledger Activity | Finalized (publication pending) |
+| **SN-SPEC-v0** | Steward Nodes Roadmap — federation path from single-operator to multi-operator durability layer; establishes the path to true protocol fulfillment | Roadmap (v0 published) |
 
 ---
 

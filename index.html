@@ -3881,7 +3881,7 @@ function App() {
         e("div",{style:{fontFamily:mo,fontSize:16,fontWeight:600,letterSpacing:2}},"HIP",e("span",{style:{color:go}},"://")),
         e("div",{style:{fontFamily:mo,fontSize:10,letterSpacing:2,color:dimLabel}},"Human Integrity Protocol"),
         e("div",{style:{display:"flex",gap:2,flexWrap:"wrap",justifyContent:"center",alignItems:"center"}},
-          [["Verify on-chain",G.explorer],["GitHub",G.github],["IPFS","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["Arweave","https://arweave.net/"+G.arweavePayload],["Blockstream","https://blockstream.info/tx/"+G.txid]].map(function(row,i) {
+          [["Verify on-chain",G.explorer],["GitHub",G.github],["IPFS","https://gateway.pinata.cloud/ipfs/"+G.ipfsPayload],["Arweave","https://arweave.net/"+G.arweavePayload],["Blockstream","https://blockstream.info/tx/"+G.txid],["Steward Nodes",G.github+"/blob/main/specs/SN-SPEC-v0.md"]].map(function(row,i) {
             return e("span",{key:i},
               i>0 && e("span",{style:{color:dimLabel,margin:"0 6px"}},"\u00B7"),
               e("a",{href:row[1],target:"_blank",rel:"noopener",className:"hip-footer-link",style:{fontFamily:mo,fontSize:10,color:go}},row[0])
