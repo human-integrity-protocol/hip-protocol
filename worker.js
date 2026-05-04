@@ -5533,7 +5533,23 @@ async function handleGetSeries(seriesId, request, env) {
 //   1. Shape-check series_id                 → 400 invalid_series_id
 //   2. Read series:{series_id}               → 404 series_not_found
 //   3. Read series_events:{series_id} — OK if missing (returns [])
-async function handleGetSeriesEvents(seriesId, request, env) {
+//
+// S158CW Path D1 — read-time OTS upgrade hook (v2 supersedes v1 deferral).
+// Each returned event carries the full series_event record incl. ledger_proof.
+// For every event whose ledger_proof.status === "pending", we fire
+// `ctx.waitUntil(otsUpgradeIfPending(...))` AS BACKGROUND fire-and-forget
+// instead of inline-await — events list returns N records and inline-await
+// would multiply read latency by the slowest calendar fetch among N.
+// Pattern intentionally diverges from handleGetProof / handleGetSeries /
+// handleCollectionGet (which inline-await a single record) because:
+//   (a) the response shape carries the point-in-time-of-read status; the
+//       upgrade lands in KV after the response returns, visible on next read;
+//   (b) `otsUpgradeIfPending` re-reads the record race-clean before writing
+//       (worker.js otsUpgradeIfPending L3356) and is idempotent if called
+//       concurrently from another read path.
+// Defensive: skip the waitUntil call if `ctx` or `ctx.waitUntil` is unavailable
+// (preserves the v1 read-shape if the route ever forgets to thread ctx).
+async function handleGetSeriesEvents(seriesId, request, env, ctx) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
   if (!isSeriesId(seriesId)) {
@@ -5567,6 +5583,7 @@ async function handleGetSeriesEvents(seriesId, request, env) {
   );
 
   const events = [];
+  const canWaitUntil = !!(ctx && typeof ctx.waitUntil === "function");
   for (let i = 0; i < capped.length; i++) {
     const e = capped[i];
     const raw = eventRaws[i];
@@ -5574,6 +5591,18 @@ async function handleGetSeriesEvents(seriesId, request, env) {
     let eventRec;
     try { eventRec = JSON.parse(raw); } catch (_) { continue; }
     if (!eventRec) continue;
+
+    // S158CW Path D1: fire-and-forget background OTS upgrade for any pending
+    // ledger_proof. Pre-filter to lp.status === "pending" to skip the function
+    // call entirely for null + confirmed cases; otsUpgradeIfPending also
+    // self-gates on its first lines (defense in depth).
+    if (canWaitUntil && eventRec.ledger_proof &&
+        eventRec.ledger_proof.status === "pending") {
+      ctx.waitUntil(
+        otsUpgradeIfPending(env, `series_event:${e.event_hash}`, eventRec)
+      );
+    }
+
     events.push({
       event_hash: e.event_hash,
       event_type: e.event_type,
@@ -8673,7 +8702,7 @@ export default {
     if (method === "GET") {
       const seriesEventsMatch = path.match(/^\/api\/series\/([^\/]+)\/events$/);
       if (seriesEventsMatch) {
-        return handleGetSeriesEvents(seriesEventsMatch[1], request, env);
+        return handleGetSeriesEvents(seriesEventsMatch[1], request, env, ctx);
       }
     }
     // §7.5 — GET /api/series/{series_id}.
