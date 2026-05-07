@@ -1,0 +1,201 @@
+<!--
+  Copyright © 2026 Peter Rieveschl. All rights reserved.
+  HIP Protocol Site — Terms of Service
+  https://hipprotocol.org/terms.html
+  Shipped S165CC (2026-05-07). NEW file — protocol-layer terms of service.
+  Lighter scope than commercial-product ToS (no fees, no accounts, no
+  subscription) per Charter DP-7 (Zero Institutional Cost). Top-of-doc
+  framing callout ("for your own edification, not a legal verdict") per
+  S163 EOS strategic-status check + locked S164→S171 launch arc framing.
+  Effective + Last updated 2026-05-07. Chrome matches privacy.html / proof.html
+  / series.html / hip-protocol/index.html (Space Grotesk + Outfit + Azeret Mono
+  on dark #0A0A0A background, #E05A00 orange accent — the canonical
+  hipprotocol.org visual identity).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terms of Service — HIP Protocol</title>
+<meta name="description" content="Terms of Service for hipprotocol.org. Acceptable use of the protocol-layer verification surface and credential-signed write endpoints.">
+<meta property="og:title" content="HIP Protocol — Terms of Service">
+<meta property="og:description" content="Protocol-layer terms of service. The HIP protocol is a verification surface; these terms describe acceptable use of read and write endpoints.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hipprotocol.org/terms.html">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600&family=Azeret+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  background:#0A0A0A;
+  font-family:'Outfit','Helvetica Neue',sans-serif;
+  color:#E8E8E0;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  line-height:1.65;
+}
+a{color:#E05A00;text-decoration:none;transition:color 0.15s}
+a:hover{text-decoration:underline}
+::selection{background:rgba(224,90,0,0.3);color:#fff}
+code{font-family:'Azeret Mono','SF Mono',monospace;font-size:13px;background:rgba(255,255,255,0.04);padding:2px 6px;border-radius:4px;color:#E8E8E0}
+strong{color:#E8E8E0;font-weight:600}
+
+/* ── Nav ── */
+.hip-nav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 28px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  background:rgba(10,10,10,0.95);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  position:sticky;top:0;z-index:100;
+}
+.hip-nav-brand{
+  font-family:'Azeret Mono',monospace;font-size:14px;font-weight:600;
+  letter-spacing:2px;color:#E8E8E0;
+  display:flex;align-items:center;gap:2px;text-decoration:none;
+}
+.hip-nav-brand:hover{text-decoration:none;opacity:.85}
+.hip-nav-brand .hip-sep{color:#E05A00}
+.hip-nav-back{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1px;color:#888}
+.hip-nav-back:hover{color:#E8E8E0;text-decoration:none}
+
+/* ── Main ── */
+.hip-main{max-width:720px;margin:0 auto;padding:48px 28px 80px}
+.hip-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:2px;
+  text-transform:uppercase;color:#E05A00;
+  padding:5px 12px;border:1px solid rgba(224,90,0,0.35);border-radius:100px;
+  margin-bottom:20px;
+}
+h1{font-family:'Space Grotesk',Georgia,sans-serif;font-size:clamp(36px,5vw,52px);font-weight:400;letter-spacing:-.01em;line-height:1.1;color:#E8E8E0;margin-bottom:12px}
+.hip-legal-meta{font-family:'Azeret Mono',monospace;font-size:11px;color:#777;margin-bottom:32px}
+h2{font-family:'Outfit',sans-serif;font-size:20px;font-weight:600;color:#E8E8E0;margin-top:36px;margin-bottom:12px;letter-spacing:-.005em}
+h3{font-family:'Outfit',sans-serif;font-size:15px;font-weight:600;color:#E8E8E0;margin-top:20px;margin-bottom:8px}
+p{font-size:15px;color:#B8B8B0;line-height:1.75;margin-bottom:12px}
+ul{margin:8px 0 16px 22px}
+li{font-size:15px;color:#B8B8B0;line-height:1.7;margin-bottom:8px}
+.hip-callout{background:rgba(224,90,0,0.04);border-left:3px solid #E05A00;padding:14px 18px;border-radius:8px;margin:18px 0}
+.hip-callout p{margin-bottom:0;color:#D8D8D0}
+.hip-callout p + p{margin-top:8px}
+.hip-framing{background:rgba(224,90,0,0.06);border:1px solid rgba(224,90,0,0.25);border-left:3px solid #E05A00;padding:16px 20px;border-radius:8px;margin:8px 0 32px}
+.hip-framing p{font-size:14px;margin-bottom:0;color:#D8D8D0}
+.hip-framing p + p{margin-top:10px}
+.hip-framing strong{color:#E8E8E0}
+.hip-framing-label{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#E05A00;margin-bottom:10px;display:block}
+
+/* ── Footer ── */
+.hip-footer{
+  text-align:center;padding:40px 24px;font-size:12px;color:#777;
+  border-top:1px solid rgba(255,255,255,0.06);margin-top:60px;
+}
+.hip-footer a{color:#E05A00}
+.hip-footer .hip-mark{font-family:'Azeret Mono',monospace;font-weight:600;letter-spacing:2px;color:#E8E8E0}
+.hip-footer .hip-mark .sep{color:#E05A00}
+
+@media (max-width:640px){
+  .hip-main{padding:36px 20px 60px}
+  .hip-nav{padding:12px 18px}
+  h2{font-size:18px;margin-top:28px}
+  h3{font-size:14px}
+  p,li{font-size:14px}
+}
+</style>
+</head>
+<body>
+
+<nav class="hip-nav">
+  <a href="/" class="hip-nav-brand">
+    HIP<span class="hip-sep">://</span>
+  </a>
+  <a href="/" class="hip-nav-back">← hipprotocol.org</a>
+</nav>
+
+<main class="hip-main">
+  <span class="hip-badge">Legal</span>
+  <h1>Terms of Service</h1>
+  <div class="hip-legal-meta">Effective date: May 7, 2026 · Last updated: May 7, 2026</div>
+
+  <div class="hip-framing">
+    <span class="hip-framing-label">Framing</span>
+    <p><strong>For your own edification, not a legal verdict.</strong> These terms describe acceptable use of the hipprotocol.org verification surface and credential-signed write endpoints. They are not legal advice on the regulatory status of the underlying Human Integrity Protocol, and they are not a substitute for counsel specific to your jurisdiction or your use case. If your evaluation of the protocol depends on a legal opinion (institutional procurement, regulatory review, jurisdictional assessment, securities analysis, financial-services compatibility), please consult your own attorney. The protocol is a verification surface; it is not a financial service, identity provider, or certificate authority.</p>
+    <p>hipprotocol.org collects no fees and creates no account relationship. The terms below describe the protocol's commitments and the conduct expected of users — not a contractual obligation arising from payment or registration. Continued use of the Service after material changes constitutes acceptance of the updated terms.</p>
+  </div>
+
+  <h2>1. Service Description</h2>
+  <p>The Human Integrity Protocol ("HIP") is an open verification protocol. The hipprotocol.org website and the protocol-layer Worker (collectively, the "Service") provide:</p>
+  <ul>
+    <li><strong>Verification:</strong> Read endpoints (such as <code>/api/proof/{hash}</code>, <code>/api/series/{id}</code>, <code>/api/collection/{id}</code>) that allow any party to verify attestation records, series, and collections registered to the protocol.</li>
+    <li><strong>Credential issuance — Tier 2 (peer vouch) and Tier 3 (biometric presence):</strong> Self-service credentialing endpoints under Charter Deployment Principle 5 (Permissionless Proliferation) and Charter Deployment Principle 7 (Zero Institutional Cost). These tiers are free, browser-side, and do not require payment or account creation. Tier 1 credentialing is performed by independent pathway operators (such as <a href="https://hipverify.org" target="_blank" rel="noopener">hipverify.org</a>) and is not provided by hipprotocol.org directly.</li>
+    <li><strong>Credential-signed write endpoints:</strong> Endpoints (such as <code>/register-proof</code>, <code>/dispute-proof</code>, series and collection mutation endpoints) that accept attestation submissions signed by a HIP credential. The protocol verifies the signature against the credential's public key before accepting the write.</li>
+    <li><strong>Client-side tools:</strong> The hipprotocol.org website hosts in-browser tools for computing content hashes, signing attestations, and verifying signatures. These tools operate entirely in your browser; nothing about your local files leaves your device unless you explicitly publish an attestation.</li>
+  </ul>
+  <p>Per Charter <strong>Deployment Principle 7 (Zero Institutional Cost)</strong>, the protocol layer collects no fees. Per Charter <strong>Deployment Principle 8 (Protocol, Not Entity)</strong>, hipprotocol.org is an institutional implementation of the protocol; it is not the protocol itself. For the data-handling side of your relationship with hipprotocol.org (separate from these contractual terms), see the <a href="/privacy.html">HIP Protocol Privacy Policy</a>.</p>
+
+  <h2>2. Eligibility</h2>
+  <p>The verification (read) endpoints are open to any party with a browser or HTTP client. The credential issuance and credential-signed write endpoints are open to any human capable of holding a HIP credential. Tier 1 credentialing through pathway operators (such as hipverify.org) imposes its own eligibility (typically age 13+ and possession of a valid government-issued ID); Tier 2 and Tier 3 credentialing through hipprotocol.org has no formal age requirement.</p>
+
+  <h2>3. Verification of Attestations</h2>
+  <p>The protocol's verification guarantee is structural: attestation signatures are verifiable by any party against canonical JSON serialization (RFC 8785 / JCS) using the public key on the credential. The Service makes the verification process available through both server-side endpoints and in-browser tools, but the cryptographic verification itself does not depend on the Service. Once an attestation is published, anyone with the content hash and public key can verify it independently — including after a hipprotocol.org sunset (see Privacy Policy § 12).</p>
+  <p>The Service does not warrant that any particular attestation reflects accurate facts about the world. The protocol records that a credential signed a content hash at a point in time; it does not validate the content's truthfulness, completeness, or fitness for any specific use. Verification of an attestation is a verification of cryptographic provenance, not a verification of the underlying claim's accuracy.</p>
+
+  <h2>4. Submitting Attestations</h2>
+  <p>Submitting an attestation through a credential-signed write endpoint is your assertion that you are the holder of the credential signing the attestation, and that the content hash you are signing represents content you intend to attest to. You are responsible for the contents of any data you publish under your credential.</p>
+  <p>Once submitted, attestations are stored on hipprotocol.org infrastructure and are eligible for ledger anchoring (see Privacy Policy § 9). Public ledger systems (OpenTimestamps over Bitcoin, IPFS, Arweave) are typically immutable by design — once anchored, attestation hashes and signatures may persist independently of hipprotocol.org's operational status. <strong>Do not submit attestations against personal data, secrets, or other content you do not want to be subject to long-lived public verifiability.</strong></p>
+
+  <h2>5. Acceptable Use</h2>
+  <p>You agree not to:</p>
+  <ul>
+    <li>Submit attestations that contain unlawful content, content that infringes third-party intellectual property rights, or content that you do not have the right to publish.</li>
+    <li>Submit attestations designed to harass, threaten, or defame any person.</li>
+    <li>Use the credential-signed write endpoints to spam or flood the protocol with mass-generated attestations.</li>
+    <li>Attempt to circumvent the deduplication system or to create multiple credentials representing the same human.</li>
+    <li>Reverse-engineer, probe, or attack the verification or write infrastructure.</li>
+    <li>Use the Service in any manner that interferes with the operation of the Service or with other users' ability to use the Service.</li>
+    <li>Use the Service for any illegal purpose.</li>
+  </ul>
+
+  <h2>6. No Fees, No Accounts, No Warranty</h2>
+  <p>The Service is provided free of charge. Tier 2 and Tier 3 credential issuance, attestation registration, and verification through hipprotocol.org are free. There is no account, no subscription, and no payment relationship. Per Charter DP-7, the protocol does not collect money — that is a structural property of the protocol layer, not a business decision.</p>
+  <p>The Service is provided "as is" and "as available" without warranty of any kind, express or implied, including (without limitation) warranties of merchantability, fitness for a particular purpose, non-infringement, accuracy, or uninterrupted availability. The protocol's verification guarantee is cryptographic, not contractual: it depends on the integrity of the underlying signature scheme (Ed25519) and the canonical-JSON serialization (RFC 8785), not on a contractual promise from hipprotocol.org.</p>
+
+  <h2>7. Disclaimers</h2>
+  <p>hipprotocol.org is not a financial service, identity provider, certificate authority, or regulated trust service under any jurisdiction's financial-services or trust-services regulation. A HIP credential is a cryptographic attestation of human verification status within the HIP protocol — nothing more.</p>
+  <p>The Service does not give legal, financial, professional, or medical advice. Attestations registered to the protocol may be relied on by third parties only to the extent of their cryptographic provenance — hipprotocol.org does not vouch for the truthfulness or fitness of attested content for any particular use case.</p>
+
+  <h2>8. Limitation of Liability</h2>
+  <p>To the maximum extent permitted by law, hipprotocol.org's total liability for any claim arising from your use of the Service is zero, given that the Service is provided free of charge and creates no account relationship. hipprotocol.org is not liable for any indirect, incidental, consequential, or punitive damages, including loss of credentials, loss of data, loss of business, or harm arising from third-party reliance on attestations.</p>
+
+  <h2>9. Operator and Successor Entity</h2>
+  <p>hipprotocol.org is operated by <strong>Peter Rieveschl</strong> as an individual at the time of this update. The protocol-layer code at <a href="https://github.com/human-integrity-protocol/hip-protocol" target="_blank" rel="noopener">github.com/human-integrity-protocol/hip-protocol</a> is published openly under its repository licenses. The protocol-layer infrastructure operated at hipprotocol.org (Cloudflare Worker, KV namespaces, Cloudflare DNS) is held by the operator personally.</p>
+  <p>If hipprotocol.org's operations are assigned to a limited-liability company, a Steward Node operator, or other successor entity formed to hold them — for example, a U.S.-formed LLC at the time of public launch, or a steward-node-network handoff per <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">SN-SPEC-v0</a> — the successor will be bound by these terms with respect to use already made of the Service under them, and any change in the operator entity will be noted with an updated effective date at the top of this page. The successor entity name, when formed, will appear in this section. Superseding terms, if any, will be published here before any new commitments are made under them.</p>
+
+  <h2>10. Sunset and Continuity</h2>
+  <p>The HIP protocol's verification surface is intentionally designed to outlast any single operator. Charter <strong>Deployment Principle 8 (Protocol, Not Entity)</strong> reinforces this: hipprotocol.org is an institutional implementation, not the protocol itself.</p>
+  <p>If hipprotocol.org's operations are wound down, attestations previously registered through hipprotocol.org continue to be cryptographically verifiable against their public keys regardless of hipprotocol.org's operational status. Once the protocol's <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">Steward Node</a> tier is activated, the records necessary for ongoing protocol-layer verification can be migrated to Steward Nodes. Until that tier is activated, hipprotocol.org will publish a final read-only snapshot of the necessary protocol-facing fields to a public archive before any wind-down completes.</p>
+  <p>A wind-down or operator-transfer notice will appear at <code>hipprotocol.org</code> and on the HIP Protocol GitHub repository at least thirty (30) days before any non-reversible step is taken. Any updated terms that apply under a successor operator will be published here. A pathway operator (such as hipverify.org) sunset is governed by that operator's own terms and does not retract attestations previously made under credentials issued by that pathway.</p>
+
+  <h2>11. Changes to These Terms</h2>
+  <p>We may update these terms from time to time. Material changes will be noted with an updated effective date at the top of this page. Continued use of the Service after changes constitutes acceptance of the updated terms.</p>
+
+  <h2>12. Contact</h2>
+  <p>For questions about these terms, contact us through the <a href="https://github.com/human-integrity-protocol/hip-protocol/issues" target="_blank" rel="noopener">HIP Protocol GitHub repository</a>.</p>
+</main>
+
+<div class="hip-footer">
+  <span class="hip-mark">HIP<span class="sep">://</span></span> — Human Integrity Protocol<br>
+  <span style="margin-top:4px;display:inline-block;color:#888">
+    Open verification protocol. Not affiliated with any single operator under <strong style="color:#E8E8E0">Charter DP-8 (Protocol, Not Entity)</strong>.
+  </span><br>
+  <span style="margin-top:8px;display:inline-block">
+    <a href="/terms.html">Terms of Service</a> · <a href="/privacy.html">Privacy Policy</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">Steward Nodes</a>
+  </span><br>
+  <span style="margin-top:6px;display:inline-block;font-size:11px;color:#555">© 2026 Peter Rieveschl. Site implementation all rights reserved.</span>
+</div>
+
+</body>
+</html>

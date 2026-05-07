@@ -1,0 +1,230 @@
+<!--
+  Copyright © 2026 Peter Rieveschl. All rights reserved.
+  HIP Protocol Site — Privacy Policy
+  https://hipprotocol.org/privacy.html
+  Shipped S165CC (2026-05-07). NEW file — protocol-layer privacy policy.
+  Trimmed from hipkit.net/privacy.html (S160CW v0.2, 17 sections) and
+  hipverify-org/privacy.html (S164CC v0.1, 16 sections) to 14 sections
+  appropriate for hipprotocol.org's protocol-layer scope: drops Payment Data
+  + Protocol-vs-HIPVerify boundary section; combines Young Users + International
+  Users; adds Ledger Anchoring (hipprotocol.org IS the layer that writes
+  ledger_proof to attestation records). Effective + Last updated 2026-05-07.
+  Chrome matches proof.html / series.html / hip-protocol/index.html (Space
+  Grotesk + Outfit + Azeret Mono on dark #0A0A0A background, #E05A00 orange
+  accent — the canonical hipprotocol.org visual identity).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — HIP Protocol</title>
+<meta name="description" content="Privacy policy for hipprotocol.org. What data the protocol layer collects, how attestations and ledger anchoring are stored, and what we don't do.">
+<meta property="og:title" content="HIP Protocol — Privacy Policy">
+<meta property="og:description" content="Protocol-layer privacy policy. The HIP protocol receives only one-way deduplication hashes, public keys, and content hashes — no personal data.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hipprotocol.org/privacy.html">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600&family=Azeret+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  background:#0A0A0A;
+  font-family:'Outfit','Helvetica Neue',sans-serif;
+  color:#E8E8E0;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  line-height:1.65;
+}
+a{color:#E05A00;text-decoration:none;transition:color 0.15s}
+a:hover{text-decoration:underline}
+::selection{background:rgba(224,90,0,0.3);color:#fff}
+code{font-family:'Azeret Mono','SF Mono',monospace;font-size:13px;background:rgba(255,255,255,0.04);padding:2px 6px;border-radius:4px;color:#E8E8E0}
+strong{color:#E8E8E0;font-weight:600}
+
+/* ── Nav ── */
+.hip-nav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 28px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  background:rgba(10,10,10,0.95);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  position:sticky;top:0;z-index:100;
+}
+.hip-nav-brand{
+  font-family:'Azeret Mono',monospace;font-size:14px;font-weight:600;
+  letter-spacing:2px;color:#E8E8E0;
+  display:flex;align-items:center;gap:2px;text-decoration:none;
+}
+.hip-nav-brand:hover{text-decoration:none;opacity:.85}
+.hip-nav-brand .hip-sep{color:#E05A00}
+.hip-nav-back{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:1px;color:#888}
+.hip-nav-back:hover{color:#E8E8E0;text-decoration:none}
+
+/* ── Main ── */
+.hip-main{max-width:720px;margin:0 auto;padding:48px 28px 80px}
+.hip-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:2px;
+  text-transform:uppercase;color:#E05A00;
+  padding:5px 12px;border:1px solid rgba(224,90,0,0.35);border-radius:100px;
+  margin-bottom:20px;
+}
+h1{font-family:'Space Grotesk',Georgia,sans-serif;font-size:clamp(36px,5vw,52px);font-weight:400;letter-spacing:-.01em;line-height:1.1;color:#E8E8E0;margin-bottom:12px}
+.hip-legal-meta{font-family:'Azeret Mono',monospace;font-size:11px;color:#777;margin-bottom:32px}
+h2{font-family:'Outfit',sans-serif;font-size:20px;font-weight:600;color:#E8E8E0;margin-top:36px;margin-bottom:12px;letter-spacing:-.005em}
+h3{font-family:'Outfit',sans-serif;font-size:15px;font-weight:600;color:#E8E8E0;margin-top:20px;margin-bottom:8px}
+p{font-size:15px;color:#B8B8B0;line-height:1.75;margin-bottom:12px}
+ul{margin:8px 0 16px 22px}
+li{font-size:15px;color:#B8B8B0;line-height:1.7;margin-bottom:8px}
+.hip-callout{background:rgba(224,90,0,0.04);border-left:3px solid #E05A00;padding:14px 18px;border-radius:8px;margin:18px 0}
+.hip-callout p{margin-bottom:0;color:#D8D8D0}
+.hip-callout p + p{margin-top:8px}
+
+/* ── Footer ── */
+.hip-footer{
+  text-align:center;padding:40px 24px;font-size:12px;color:#777;
+  border-top:1px solid rgba(255,255,255,0.06);margin-top:60px;
+}
+.hip-footer a{color:#E05A00}
+.hip-footer .hip-mark{font-family:'Azeret Mono',monospace;font-weight:600;letter-spacing:2px;color:#E8E8E0}
+.hip-footer .hip-mark .sep{color:#E05A00}
+
+@media (max-width:640px){
+  .hip-main{padding:36px 20px 60px}
+  .hip-nav{padding:12px 18px}
+  h2{font-size:18px;margin-top:28px}
+  h3{font-size:14px}
+  p,li{font-size:14px}
+}
+</style>
+</head>
+<body>
+
+<nav class="hip-nav">
+  <a href="/" class="hip-nav-brand">
+    HIP<span class="hip-sep">://</span>
+  </a>
+  <a href="/" class="hip-nav-back">← hipprotocol.org</a>
+</nav>
+
+<main class="hip-main">
+  <span class="hip-badge">Legal</span>
+  <h1>Privacy Policy</h1>
+  <div class="hip-legal-meta">Effective date: May 7, 2026 · Last updated: May 7, 2026</div>
+
+  <h2>1. Overview</h2>
+  <p>The Human Integrity Protocol ("HIP") is an open verification protocol. This privacy policy describes what data <strong>hipprotocol.org</strong> — the protocol-layer surface — collects, processes, and retains. It is separate from the institutional pathway operators (such as <a href="https://hipverify.org" target="_blank" rel="noopener">hipverify.org</a>) and from commercial products built atop the protocol (such as <a href="https://hipkit.net" target="_blank" rel="noopener">hipkit.net</a>), which have their own privacy policies.</p>
+  <p>The protocol layer is designed to operate without personal data. It receives one-way deduplication hashes, public keys, content hashes, and pseudonymous credential identifiers from pathway operators and from credential holders. It does not see government-issued identity documents, biometric data, or payment information; those handoffs happen at the pathway-operator layer (for example, hipverify.org for Tier 1 issuance) and are governed by those operators' own privacy policies.</p>
+  <p>hipprotocol.org is operated by <strong>Peter Rieveschl</strong> as an individual at the time of this update. See § 11 (Operator and Successor Entity) for how this policy continues to apply if hipprotocol.org's operations are transferred to a successor entity. For the contractual side of your relationship with hipprotocol.org (separate from this privacy policy), see the <a href="/terms.html">HIP Protocol Terms of Service</a>.</p>
+
+  <h2>2. Data We Collect</h2>
+
+  <h3>Stored on hipprotocol.org infrastructure (Cloudflare KV)</h3>
+  <ul>
+    <li><strong>Attestation records:</strong> When an attestation is registered through the protocol, the record stored in Cloudflare KV contains a content hash, a credential ID (a pseudonymous identifier), an Ed25519 signature, a tier label, optional ledger anchoring fields (see § 9), and metadata that does not identify the credential holder.</li>
+    <li><strong>Public-key indexes:</strong> SHA-256 hashes of credential public keys are indexed under <code>public_key:hash:*</code> keys to support credential-signed write authentication. The full public keys are also stored on the attestation records they signed.</li>
+    <li><strong>Deduplication hashes:</strong> One-way HMAC-SHA-256 hashes representing identity-verified humans, written by Tier 1 pathway operators when they issue credentials. These hashes do not encode any personal information; they exist solely to enforce the one-credential-per-human guarantee across the protocol.</li>
+    <li><strong>Series and collection metadata:</strong> When a credential holder creates a series or collection of attestations, the series/collection record contains creator credential ID, series/collection identifier, member content hashes, and lifecycle state (open, closed). No personal information is stored.</li>
+    <li><strong>Operational metadata:</strong> Session data, rate-limiting counters, and ledger-anchoring retry queues. Operational metadata is short-lived and does not contain identity information.</li>
+  </ul>
+
+  <h3>Data stored only in YOUR browser (localStorage)</h3>
+  <ul>
+    <li><strong>Your credential:</strong> Your cryptographic key pair (Ed25519 private and public key), credential ID, tier, issuance metadata, and pathway provenance. The private key is generated and held entirely in your browser. hipprotocol.org never sees, receives, or stores your private key.</li>
+    <li><strong>Session state:</strong> UI preferences and ephemeral state for in-progress flows on the hipprotocol.org tools.</li>
+  </ul>
+  <div class="hip-callout"><p>Your private key never leaves your device. If you clear your browser storage or lose access to the device without an exported backup, your credential is lost. The protocol's verification surface continues to recognize the credential — but only the holder of the private key can sign new attestations under it.</p></div>
+
+  <h2>3. Analytics</h2>
+  <p>hipprotocol.org uses <strong>Cloudflare Web Analytics</strong>, a privacy-respecting analytics service. Cloudflare Web Analytics:</p>
+  <ul>
+    <li>Does not use cookies or local storage to identify visitors.</li>
+    <li>Does not perform browser fingerprinting.</li>
+    <li>Does not track users across websites or sessions.</li>
+    <li>Aggregates page views, referrers, anonymized device categories, and country-level geographic data.</li>
+    <li>Does not collect IP addresses for analytics purposes (Cloudflare derives country from the IP at the edge and discards the address).</li>
+  </ul>
+  <p>This analytics data is used solely to understand which pages get visited and where traffic comes from, in aggregate, to improve the Service. It is not joined with your credential, your attestation records, or any other identifier.</p>
+
+  <h2>4. Third-Party Data Processing</h2>
+  <p><strong>Cloudflare</strong> hosts the hipprotocol.org infrastructure: the static frontend (GitHub Pages with Cloudflare CDN), the protocol Worker that serves <code>/api/*</code> endpoints, KV storage (attestation records, deduplication hashes, public-key indexes, series/collection records, operational metadata), and Email Routing. Cloudflare's privacy policy applies to their infrastructure services. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener">cloudflare.com/privacypolicy</a>.</p>
+  <p><strong>GitHub Pages</strong> serves the static HTML, CSS, and client-side JavaScript for hipprotocol.org. GitHub's privacy policy applies to GitHub Pages. See <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub's privacy statement</a>.</p>
+  <p>The protocol layer does not handle identity verification, payment processing, or any other third-party-mediated personal-data flow. Pathway operators (such as hipverify.org for Tier 1) handle identity verification and payment under their own policies and pass to the protocol only one-way deduplication hashes and credential metadata.</p>
+
+  <h2>5. Data Retention</h2>
+  <ul>
+    <li><strong>Attestation records, series records, collection records:</strong> Stored permanently. The protocol's value depends on long-lived, independently verifiable attestations.</li>
+    <li><strong>Public-key indexes:</strong> Stored permanently alongside the attestation records that the keys signed.</li>
+    <li><strong>Deduplication hashes:</strong> Stored permanently to enforce one-credential-per-human across the protocol.</li>
+    <li><strong>Operational metadata (session data, rate-limit counters, retry queues):</strong> Short-lived; expired automatically.</li>
+    <li><strong>Cloudflare Web Analytics data:</strong> Retention is governed by Cloudflare's own retention policy.</li>
+    <li><strong>Email Routing logs:</strong> Cloudflare's Email Routing Activity Log shows forwarded messages; retention governed by Cloudflare.</li>
+  </ul>
+
+  <h2>6. What We Do NOT Do</h2>
+  <ul>
+    <li>We do not sell, share, or rent your data to any third party for marketing or advertising.</li>
+    <li>We do not use your data to train AI models or any other unrelated downstream system.</li>
+    <li>We do not track you across websites.</li>
+    <li>We do not use cookies for analytics or advertising. Tools on hipprotocol.org use localStorage only for the operational credential and UI-state purposes described in § 2.</li>
+    <li>We do not collect IP addresses for analytics purposes (beyond what Cloudflare's edge infrastructure observes for routing and abuse mitigation).</li>
+    <li>We do not store names, dates of birth, document numbers, or any personally identifiable information. The protocol does not handle this class of data.</li>
+  </ul>
+
+  <h2>7. Data Security</h2>
+  <p>All data in transit is encrypted via HTTPS/TLS. Deduplication hashes are computed using HMAC-SHA-256 with a server-side secret key at the issuing pathway operator and are not reversible at the protocol layer. Attestation signatures use Ed25519 over canonical JSON serialization (RFC 8785 / JCS) so any party with a browser can independently verify attestations against the public key on the credential. Your credential's private key is generated and stored entirely in your browser's localStorage and is never transmitted to any server.</p>
+
+  <h2>8. Your Rights</h2>
+  <p>Because hipprotocol.org stores only irreversible hashes, public keys, and pseudonymous identifiers rather than personal information, traditional data subject rights apply in a narrow but real way:</p>
+  <ul>
+    <li><strong>Access:</strong> Public attestation records, series records, and collection records are intentionally publicly verifiable — that is the protocol's design. You can fetch any record by content hash or by series/collection identifier through the public verification endpoints. The associated public key is also publicly available because protocol-layer signature verification requires it.</li>
+    <li><strong>Deletion:</strong> Attestations, once registered to the protocol, are not deletable from the protocol layer in the ordinary case — that is the point of an attestation. Disputes are handled through the credential-signed <code>/dispute-proof</code> endpoint, which marks an attestation disputed without removing it. Contact us through § 14 (Contact) for edge cases (e.g. accidental publication of personal data inside an attestation payload).</li>
+    <li><strong>Credential retirement:</strong> You can retire your credential, which marks it as superseded and prevents further use under that credential. Retirement is recorded; the deduplication hash and public-key index entries remain so a new credential can be issued through the same pathway when re-verification is attempted.</li>
+  </ul>
+
+  <h2>9. Ledger Anchoring</h2>
+  <p>The HIP protocol layer optionally anchors attestations to public ledger systems (such as OpenTimestamps over Bitcoin, IPFS content addressing, or the Arweave permaweb). Anchored attestations carry a <code>ledger_proof</code> field that allows independent third-party verification of the attestation's existence at a point in time without trusting hipprotocol.org's own infrastructure.</p>
+  <p>Ledger anchoring transmits the attestation's content hash, signature, and credential public key to the underlying ledger system. These fields are already public on the attestation record itself; ledger anchoring does not transmit additional personal information. Ledger systems are typically immutable by design — once anchored, the anchored content is part of a public, distributed record that cannot be retracted by hipprotocol.org. This is intentional and is a Charter-binding property of the protocol's verification guarantee.</p>
+  <p>If you do not want an attestation anchored to a public ledger, do not register it through the protocol's anchoring-enabled endpoints, or use a credential that has not opted into ledger anchoring at the credential level.</p>
+
+  <h2>10. Young Users and International Users</h2>
+  <p>The protocol layer does not directly verify ages. Tier 1 pathway operators (such as hipverify.org) enforce age requirements appropriate to the identity-verification step. Tier 2 (peer vouch) and Tier 3 (biometric presence) credential issuance through hipprotocol.org are open in principle to any human, including minors; the protocol does not collect names or birthdates and cannot enforce age restrictions independently.</p>
+  <p>The Service is operated from the United States. Data is processed through Cloudflare's global network. By using hipprotocol.org, you consent to the processing of your data in these systems. Where applicable law requires additional protections (GDPR, CCPA, etc.), hipprotocol.org operates in good-faith compliance with the data-handling principles described in this policy: minimal collection, narrow third-party processing, no sale of data, and transparency about retention.</p>
+
+  <h2>11. Operator and Successor Entity</h2>
+  <p>hipprotocol.org is operated by <strong>Peter Rieveschl</strong> as an individual at the time of this update. The protocol-layer code at <a href="https://github.com/human-integrity-protocol/hip-protocol" target="_blank" rel="noopener">github.com/human-integrity-protocol/hip-protocol</a> is published openly under its repository licenses. The protocol-layer infrastructure operated at hipprotocol.org (Cloudflare Worker, KV namespaces, Cloudflare DNS) is held by the operator personally.</p>
+  <p>If hipprotocol.org's operations are assigned to a limited-liability company, a Steward Node operator, or other successor entity formed to hold them — for example, a U.S.-formed LLC at the time of public launch, or a steward-node-network handoff per <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">SN-SPEC-v0</a> — the successor will be bound by this policy with respect to data already collected under it, and any change in the operator entity will be noted with an updated effective date at the top of this page. The successor entity name, when formed, will appear in this section. A superseding privacy policy, if any, will be published here before any new collection practices begin.</p>
+
+  <h2>12. Sunset and Continuity</h2>
+  <p>The HIP protocol's verification surface is intentionally designed to outlast any single operator. Charter <strong>Deployment Principle 8 (Protocol, Not Entity)</strong> reinforces this: hipprotocol.org is an institutional implementation, not the protocol itself. If hipprotocol.org's operations are wound down, the data described in § 5 (Data Retention) will be handled as follows:</p>
+  <ul>
+    <li><strong>Attestation, series, collection, public-key, and deduplication records.</strong> Once the protocol's <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">Steward Node</a> tier is activated, these records can be migrated to Steward Nodes for continued public verification. Until that tier is activated, hipprotocol.org will publish a final read-only snapshot of the necessary protocol-facing fields (content hashes, signatures, credential IDs, public keys, ledger-anchor proofs, deduplication hashes, tier labels, issuance timestamps) to a public archive (such as a GitHub release or an Internet Archive snapshot) before any wind-down completes.</li>
+    <li><strong>Operational metadata.</strong> Short-lived operational data (session counters, rate-limit counters, retry queues) is deleted on natural expiration during wind-down; no separate retention obligation applies.</li>
+    <li><strong>Notice.</strong> A wind-down or operator-transfer notice will appear at <code>hipprotocol.org</code> and on the HIP Protocol GitHub repository at least thirty (30) days before any non-reversible step is taken. Any updated privacy policy that applies under a successor operator will be published here.</li>
+  </ul>
+  <p>Note that ledger-anchored attestations are inherent to the protocol's verification guarantee and are not retracted by a hipprotocol.org sunset. Public ledger systems (OpenTimestamps, IPFS, Arweave) continue to retain anchored content independent of hipprotocol.org's operational status. Continuity of attestations across an operator transition or sunset event is therefore distinct from the right-to-deletion handling discussed in § 8 (Your Rights).</p>
+
+  <h2>13. Changes to This Policy</h2>
+  <p>We may update this policy from time to time. Material changes will be noted with an updated date at the top of this page.</p>
+
+  <h2>14. Contact</h2>
+  <p>For privacy-related questions or data deletion requests, contact us through the <a href="https://github.com/human-integrity-protocol/hip-protocol/issues" target="_blank" rel="noopener">HIP Protocol GitHub repository</a>.</p>
+</main>
+
+<div class="hip-footer">
+  <span class="hip-mark">HIP<span class="sep">://</span></span> — Human Integrity Protocol<br>
+  <span style="margin-top:4px;display:inline-block;color:#888">
+    Open verification protocol. Not affiliated with any single operator under <strong style="color:#E8E8E0">Charter DP-8 (Protocol, Not Entity)</strong>.
+  </span><br>
+  <span style="margin-top:8px;display:inline-block">
+    <a href="/terms.html">Terms of Service</a> · <a href="/privacy.html">Privacy Policy</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/human-integrity-protocol/hip-protocol/blob/main/specs/SN-SPEC-v0.md" target="_blank" rel="noopener">Steward Nodes</a>
+  </span><br>
+  <span style="margin-top:6px;display:inline-block;font-size:11px;color:#555">© 2026 Peter Rieveschl. Site implementation all rights reserved.</span>
+</div>
+
+</body>
+</html>
