@@ -35,6 +35,20 @@
  *     (no @noble/hashes runtime dep) to preserve single-file Cloudflare
  *     Dashboard Quick Editor paste workflow.
  *
+ * S167CC extension (Carryover post-S166 — Cloudflare Pages Functions byte-copy
+ * mode for cross-repo helper mirror):
+ *   - Each WORKERS entry now declares a `mode`: "inline-copy" (existing
+ *     per-helper extraction; S143CW shape) OR "byte-copy" (whole-file string
+ *     comparison against the source-of-truth module file).
+ *   - Added third consumer: hipkit-net/functions/_shared/auth-helpers.js
+ *     (Pages Functions ES module copy of shared/auth-helpers.js shipped in
+ *     S166CC Candidate M1). Mode "byte-copy" + modules whitelist
+ *     ["shared/auth-helpers.js"] — Pages Functions only mirrors auth-helpers,
+ *     not ots-anchor (Pages Function /api/credits/balance has no OTS deps).
+ *   - byte-copy adds 1 PASS per (consumer, listed-module) pair when files
+ *     are byte-identical. Aggregate becomes 87 = 86 (existing 2×2 inline) + 1
+ *     (Pages auth-helpers byte-copy).
+ *
  * Usage:
  *   node tools/verify-helpers-sync.mjs
  *
@@ -138,10 +152,21 @@ const WORKERS = [
   {
     name: "hip-protocol/worker.js",
     path: resolve(REPO_ROOT, "worker.js"),
+    mode: "inline-copy",
   },
   {
     name: "hipkit-net/worker.js",
     path: resolve(REPO_ROOT, "../hipkit-net/worker.js"),
+    mode: "inline-copy",
+  },
+  {
+    // S166CC Candidate M1: Pages Functions ES module copy of shared/auth-helpers.js.
+    // S167CC Candidate N2: byte-copy mode — whole-file string comparison against
+    // the source-of-truth, distinct from per-helper inline-copy extraction.
+    name: "hipkit-net/functions/_shared/auth-helpers.js",
+    path: resolve(REPO_ROOT, "../hipkit-net/functions/_shared/auth-helpers.js"),
+    mode: "byte-copy",
+    modules: ["shared/auth-helpers.js"],
   },
 ];
 
@@ -279,6 +304,37 @@ function verifyConsumerAgainstModule(module, consumer, sharedSrc, consumerSrc) {
   return result;
 }
 
+/**
+ * Verify one byte-copy consumer (e.g., Cloudflare Pages Functions ES module
+ * mirror) against one shared module via whole-file string comparison.
+ * S167CC Candidate N2: distinct from per-helper extraction because the consumer
+ * file IS the shared module, byte-for-byte; semantic check is whole-file
+ * identity, not per-helper identity.
+ */
+function verifyByteCopy(module, consumer, sharedSrc, consumerSrc) {
+  const result = {
+    moduleName: module.name,
+    consumerName: consumer.name,
+    passed: [],
+    failed: [],
+  };
+  if (sharedSrc === consumerSrc) {
+    result.passed.push(`whole-file byte-copy (${sharedSrc.length} bytes)`);
+    return result;
+  }
+  const sLines = sharedSrc.split("\n");
+  const cLines = consumerSrc.split("\n");
+  const maxLen = Math.max(sLines.length, cLines.length);
+  let firstDivergent = -1;
+  for (let i = 0; i < maxLen; i++) {
+    if (sLines[i] !== cLines[i]) { firstDivergent = i + 1; break; }
+  }
+  result.failed.push(
+    `whole-file byte-copy: bytes differ — first divergent line ${firstDivergent} | ${consumer.name}: ${JSON.stringify(cLines[firstDivergent - 1])} | ${module.name}: ${JSON.stringify(sLines[firstDivergent - 1])}`
+  );
+  return result;
+}
+
 function main() {
   // Load each shared module's source up front.
   const moduleSources = new Map();
@@ -301,7 +357,8 @@ function main() {
     consumerSources.set(c.name, readFileSync(c.path, "utf8"));
   }
 
-  // Run every (module, consumer) pair.
+  // Run every (module, consumer) pair. byte-copy consumers only check listed
+  // modules (per c.modules whitelist); inline-copy consumers check every module.
   const results = [];
   for (const c of WORKERS) {
     if (consumerMissing.has(c.name)) {
@@ -313,35 +370,48 @@ function main() {
       continue;
     }
     const consumerSrc = consumerSources.get(c.name);
+    const mode = c.mode || "inline-copy";
     const moduleResults = [];
     for (const mod of SHARED_MODULES) {
       const sharedSrc = moduleSources.get(mod.name);
-      moduleResults.push(verifyConsumerAgainstModule(mod, c, sharedSrc, consumerSrc));
+      if (mode === "byte-copy") {
+        if (!c.modules || !c.modules.includes(mod.name)) continue;
+        moduleResults.push(verifyByteCopy(mod, c, sharedSrc, consumerSrc));
+      } else {
+        moduleResults.push(verifyConsumerAgainstModule(mod, c, sharedSrc, consumerSrc));
+      }
     }
-    results.push({ consumerName: c.name, missing: false, moduleResults });
+    results.push({ consumerName: c.name, missing: false, mode, moduleResults });
   }
 
-  // Aggregate counts.
+  // Aggregate counts. Each consumer's expected item count depends on its mode:
+  // inline-copy = sum of helpers+constants across every module; byte-copy =
+  // 1 per listed module (whole-file check).
   let totalPass = 0;
   let totalFail = 0;
-  let perConsumerExpected = 0;
-  for (const mod of SHARED_MODULES) {
-    perConsumerExpected += mod.helpers.length + mod.constants.length;
+  const inlineExpected = SHARED_MODULES.reduce(
+    (sum, mod) => sum + mod.helpers.length + mod.constants.length, 0
+  );
+  function expectedForConsumer(c) {
+    const mode = c.mode || "inline-copy";
+    if (mode === "byte-copy") return (c.modules || []).length;
+    return inlineExpected;
   }
 
   console.log("");
   console.log("=".repeat(64));
   console.log(`Shared modules: ${SHARED_MODULES.length}  (${SHARED_MODULES.map((m) => m.name).join(", ")})`);
-  console.log(`Consumers: ${WORKERS.length}  (${WORKERS.map((w) => w.name).join(", ")})`);
-  console.log(`Items per consumer: ${perConsumerExpected}  (sum across all modules)`);
+  console.log(`Consumers: ${WORKERS.length}  (${WORKERS.map((w) => `${w.name}[${w.mode || "inline-copy"}]`).join(", ")})`);
+  console.log(`Items per inline-copy consumer: ${inlineExpected}  (sum across all modules)`);
   console.log("=".repeat(64));
   console.log("");
 
   for (const r of results) {
     console.log(`Consumer: ${r.consumerName}`);
     if (r.missing) {
+      const c = WORKERS.find((w) => w.name === r.consumerName);
       console.log(`  SKIPPED — file not found at ${consumerMissing.get(r.consumerName)} (treated as FAIL).`);
-      totalFail += perConsumerExpected;
+      totalFail += expectedForConsumer(c);
       continue;
     }
     let consumerPass = 0;
