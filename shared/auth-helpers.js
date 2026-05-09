@@ -1,9 +1,9 @@
 /**
  * shared/auth-helpers.js — source of truth for shared auth/crypto/index helpers
  *
- * This module is the single source of truth for helpers used by BOTH the public
- * `hip-protocol/worker.js` AND the future private `hipkit-net/worker.js` (S144
- * sub-task D, per S141CW privacy-flip Phase 2 plan).
+ * This module is the single source of truth for helpers used by `hip-protocol/worker.js`
+ * (the public protocol worker, inline-copy mode) AND `hipkit-net/functions/_shared/auth-helpers.js`
+ * (the byte-copy Pages Function shared module on hipkit-net per S166CC Candidate M1).
  *
  * Helpers currently DUPLICATED inline in `hip-protocol/worker.js`. The duplication
  * is verified byte-identical via `tools/verify-helpers-sync.mjs`. Run:
@@ -13,9 +13,12 @@
  * before any commit that touches either file. The verifier extracts each helper's
  * function body from both locations and reports drift.
  *
- * S144 (HIPKit private worker creation) will seed `hipkit-net/worker.js` by copying
- * these helpers verbatim from this module. After S144 the verifier covers both
- * workers.
+ * S144 (HIPKit private worker creation) seeded `hipkit-net/worker.js` by copying
+ * these helpers verbatim from this module; the verifier covered both workers
+ * S144CW → S172CC. S173CC removed `hipkit-net/worker.js` entirely (undeployed dead
+ * code per S162CC + S163CC + S171CC inspection); the verifier now covers
+ * `hip-protocol/worker.js` (inline-copy) plus `hipkit-net/functions/_shared/auth-helpers.js`
+ * (byte-copy, S166CC).
  *
  * S143 sub-task C decision (Option C-refined / "Option B-zero"):
  * - Worker.js bytes UNCHANGED this session (no Cloudflare Dashboard deploy needed)
@@ -48,11 +51,13 @@
  *   21. sanitizeFileName        function   — worker.js line 2710-2716  (added S144CW)
  *
  * S144CW additions (generateShortId + sanitizeFileName):
- *   These are dual-side helpers — called by both `handleRegisterProof` (protocol)
- *   and `handleApiAttest` (HIPKit, migrating to private worker S144). Establishing
- *   them as source-of-truth here ensures the public worker.js inline copies and
- *   the private hipkit-net/worker.js inline copies stay byte-identical (verifier
- *   covers both consumers).
+ *   These are dual-side helpers — called by `handleRegisterProof` (protocol) and
+ *   originally `handleApiAttest` (HIPKit; migrated to private worker S144 then
+ *   restored to hip-protocol/worker.js via S163CC narrative correction). Establishing
+ *   them as source-of-truth here ensures the public worker.js inline copies stay
+ *   byte-identical with the source-of-truth (verifier post-S173CC covers
+ *   `hip-protocol/worker.js` inline-copy plus `hipkit-net/functions/_shared/auth-helpers.js`
+ *   byte-copy).
  *
  * Helpers explicitly NOT included (protocol-only or HIPVerify-only, stay in worker.js):
  *   - writeAffiliation, writeCreatorSeriesIndex, addToSeriesMembersIndex, isSeriesMember

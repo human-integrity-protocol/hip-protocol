@@ -14,6 +14,9 @@
  *   - Added two more dual-side helpers (generateShortId, sanitizeFileName).
  *     HELPER_NAMES list grew from 18 to 20.
  *   - Added second consumer: hipkit-net/worker.js (sibling repo, private, S144).
+ *     [Consumer entry REMOVED S173CC Candidate G — the file shipped in the Pages
+ *     source tree but never executed on Cloudflare per S162CC + S163CC + S171CC
+ *     inspection; deleted entirely S173CC as undeployed dead code.]
  *   - WORKERS array drives the per-consumer loop. Single tool, single command,
  *     reports per-consumer + aggregated PASS/FAIL.
  *
@@ -46,8 +49,9 @@
  *     ["shared/auth-helpers.js"] — Pages Functions only mirrors auth-helpers,
  *     not ots-anchor (Pages Function /api/credits/balance has no OTS deps).
  *   - byte-copy adds 1 PASS per (consumer, listed-module) pair when files
- *     are byte-identical. Aggregate becomes 87 = 86 (existing 2×2 inline) + 1
- *     (Pages auth-helpers byte-copy).
+ *     are byte-identical. Aggregate at S167CC was 87 = 86 (2×2 inline) + 1
+ *     (Pages auth-helpers byte-copy); post-S173CC removal of hipkit-net/worker.js
+ *     consumer the aggregate becomes 44 = 43 (1 inline × 2 modules) + 1.
  *
  * Usage:
  *   node tools/verify-helpers-sync.mjs
@@ -60,6 +64,7 @@
  * Created S143CW. Extended S144CW to cover hipkit-net/worker.js. Extended
  * S150CW to cover shared/arweave-anchor.js (multi-module support).
  * Replaced arweave-anchor with ots-anchor S152CW per S151CW strategy lock.
+ * Removed hipkit-net/worker.js consumer S173CC (file deleted — undeployed dead code).
  * Run pre-commit when any shared/<module>.js OR any consumer worker is touched.
  */
 
@@ -154,11 +159,10 @@ const WORKERS = [
     path: resolve(REPO_ROOT, "worker.js"),
     mode: "inline-copy",
   },
-  {
-    name: "hipkit-net/worker.js",
-    path: resolve(REPO_ROOT, "../hipkit-net/worker.js"),
-    mode: "inline-copy",
-  },
+  // S173CC Candidate G: hipkit-net/worker.js consumer entry REMOVED — file deleted
+  // entirely as undeployed dead code (Cloudflare Pages does not execute non-/functions/
+  // JS as a Worker; no wrangler.toml binding; no Pages Function setup). See S162CC +
+  // S163CC + S171CC inspection trail.
   {
     // S166CC Candidate M1: Pages Functions ES module copy of shared/auth-helpers.js.
     // S167CC Candidate N2: byte-copy mode — whole-file string comparison against

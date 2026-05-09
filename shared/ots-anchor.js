@@ -43,10 +43,15 @@
  *     bitcoin_block_height: <number>
  *   }
  *
- * Pattern: this module is the single source of truth for helpers used by BOTH:
- *   - public  hip-protocol/worker.js (handles register-proof, register-series,
- *     register-series-member, register-collection-proof, close-series)
- *   - private hipkit-net/worker.js  (handles api-attest)
+ * Pattern: this module is the single source of truth for helpers used by:
+ *   - public hip-protocol/worker.js (handles register-proof, register-series,
+ *     register-series-member, register-collection-proof, close-series, api-attest)
+ *
+ * S150-S172CC also seeded an inline mirror in the private hipkit-net/worker.js
+ * (handles api-attest in the dormant repo file); S173CC removed hipkit-net/worker.js
+ * entirely as undeployed dead code (Cloudflare Pages does not execute non-/functions/
+ * JS as a Worker; per S162CC + S163CC + S171CC live verification the file never
+ * served traffic — the LIVE api-attest handler runs at hip-protocol/worker.js).
  *
  * Helpers stay INLINE in each consumer worker (zero deploy risk on Cloudflare
  * Dashboard Quick Editor flows); drift is detected via tools/verify-helpers-sync.mjs
