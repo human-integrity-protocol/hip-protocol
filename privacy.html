@@ -13,11 +13,11 @@
   Grotesk + Outfit + Azeret Mono on dark #0A0A0A background, #E05A00 orange
   accent — the canonical hipprotocol.org visual identity).
 
-  S197CC (2026-05-26): § 9 Ledger Anchoring tightened — drops "IPFS content
-  addressing, or the Arweave permaweb" overstatement from ¶1; clarifies that
-  only OTS+Bitcoin is implemented (Arweave path RETIRED S150CW; IPFS never
-  shipped). Aligns § 9 with S196CC ledger-anchoring audit. Last updated
-  2026-05-26.
+  S197CC (2026-05-26): § 9 + § 12 Ledger Anchoring text tightened — drops
+  "IPFS content addressing, or the Arweave permaweb" (§ 9 ¶1) and "(OpenTimestamps,
+  IPFS, Arweave)" (§ 12 ¶2 parenthetical) overstatements; clarifies that only
+  OTS+Bitcoin is implemented (Arweave path RETIRED S150CW; IPFS never shipped).
+  Aligns § 9 + § 12 with S196CC ledger-anchoring audit. Last updated 2026-05-26.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -212,7 +212,7 @@ li{font-size:15px;color:#B8B8B0;line-height:1.7;margin-bottom:8px}
     <li><strong>Operational metadata.</strong> Short-lived operational data (session counters, rate-limit counters, retry queues) is deleted on natural expiration during wind-down; no separate retention obligation applies.</li>
     <li><strong>Notice.</strong> A wind-down or operator-transfer notice will appear at <code>hipprotocol.org</code> and on the HIP Protocol GitHub repository at least thirty (30) days before any non-reversible step is taken. Any updated privacy policy that applies under a successor operator will be published here.</li>
   </ul>
-  <p>Note that ledger-anchored attestations are inherent to the protocol's verification guarantee and are not retracted by a hipprotocol.org sunset. Public ledger systems (OpenTimestamps, IPFS, Arweave) continue to retain anchored content independent of hipprotocol.org's operational status. Continuity of attestations across an operator transition or sunset event is therefore distinct from the right-to-deletion handling discussed in § 8 (Your Rights).</p>
+  <p>Note that ledger-anchored attestations are inherent to the protocol's verification guarantee and are not retracted by a hipprotocol.org sunset. The Bitcoin blockchain continues to retain the OpenTimestamps anchor commitments independent of hipprotocol.org's operational status. Continuity of attestations across an operator transition or sunset event is therefore distinct from the right-to-deletion handling discussed in § 8 (Your Rights).</p>
 
   <h2>13. Changes to This Policy</h2>
   <p>We may update this policy from time to time. Material changes will be noted with an updated date at the top of this page.</p>
