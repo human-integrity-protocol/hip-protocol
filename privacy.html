@@ -12,6 +12,12 @@
   Chrome matches proof.html / series.html / hip-protocol/index.html (Space
   Grotesk + Outfit + Azeret Mono on dark #0A0A0A background, #E05A00 orange
   accent — the canonical hipprotocol.org visual identity).
+
+  S197CC (2026-05-26): § 9 Ledger Anchoring tightened — drops "IPFS content
+  addressing, or the Arweave permaweb" overstatement from ¶1; clarifies that
+  only OTS+Bitcoin is implemented (Arweave path RETIRED S150CW; IPFS never
+  shipped). Aligns § 9 with S196CC ledger-anchoring audit. Last updated
+  2026-05-26.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -114,7 +120,7 @@ li{font-size:15px;color:#B8B8B0;line-height:1.7;margin-bottom:8px}
 <main class="hip-main">
   <span class="hip-badge">Legal</span>
   <h1>Privacy Policy</h1>
-  <div class="hip-legal-meta">Effective date: May 7, 2026 · Last updated: May 7, 2026</div>
+  <div class="hip-legal-meta">Effective date: May 7, 2026 · Last updated: May 26, 2026</div>
 
   <h2>1. Overview</h2>
   <p>The Human Integrity Protocol ("HIP") is an open verification protocol. This privacy policy describes what data <strong>hipprotocol.org</strong> — the protocol-layer surface — collects, processes, and retains. It is separate from the institutional pathway operators (such as <a href="https://hipverify.org" target="_blank" rel="noopener">hipverify.org</a>) and from commercial products built atop the protocol (such as <a href="https://hipkit.net" target="_blank" rel="noopener">hipkit.net</a>), which have their own privacy policies.</p>
@@ -187,7 +193,7 @@ li{font-size:15px;color:#B8B8B0;line-height:1.7;margin-bottom:8px}
   </ul>
 
   <h2>9. Ledger Anchoring</h2>
-  <p>The HIP protocol layer optionally anchors attestations to public ledger systems (such as OpenTimestamps over Bitcoin, IPFS content addressing, or the Arweave permaweb). Anchored attestations carry a <code>ledger_proof</code> field that allows independent third-party verification of the attestation's existence at a point in time without trusting hipprotocol.org's own infrastructure.</p>
+  <p>The HIP protocol layer optionally anchors attestations to the Bitcoin blockchain via the OpenTimestamps calendar service. Anchored attestations carry a <code>ledger_proof</code> field that allows independent third-party verification of the attestation's existence at a point in time without trusting hipprotocol.org's own infrastructure.</p>
   <p>Ledger anchoring transmits the attestation's content hash, signature, and credential public key to the underlying ledger system. These fields are already public on the attestation record itself; ledger anchoring does not transmit additional personal information. Ledger systems are typically immutable by design — once anchored, the anchored content is part of a public, distributed record that cannot be retracted by hipprotocol.org. This is intentional and is a Charter-binding property of the protocol's verification guarantee.</p>
   <p>If you do not want an attestation anchored to a public ledger, do not register it through the protocol's anchoring-enabled endpoints, or use a credential that has not opted into ledger anchoring at the credential level.</p>
 
