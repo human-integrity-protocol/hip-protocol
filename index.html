@@ -1403,7 +1403,7 @@ var HIP_PENDING_IMPORT = null; // S64: holds incoming credential during conflict
     localStorage.setItem(HIP_CRED_KEY, JSON.stringify(cred));
     HIP_IMPORT_RESULT = "imported";
     // S29: Initialize trust record for imported credential
-    try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,tier:cred.tier})})}catch(te){}
+    try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,tier:cred.tier,public_key:cred.publicKey,issuance_token:(cred.issuanceProof||{}).issuanceToken,t3_session_id:(cred.issuanceProof||{}).sessionId,issuance_timestamp:(cred.issuanceProof||{}).timestamp})})}catch(te){}
     window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
   } catch (ex) {
     HIP_IMPORT_RESULT = "error";
@@ -1703,7 +1703,7 @@ created:new Date().toISOString(),warning:"This file contains your private key. S
 _priv:kp.privateKey,_pub:kp.publicKey};
 
 // S29: Initialize trust record
-try{await fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cid,tier:3})})}catch(te){}
+try{await fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cid,tier:3,public_key:pub,issuance_token:regData.issuance_token,t3_session_id:challengeData.session_id,issuance_timestamp:regData.timestamp})})}catch(te){}
 
 wrapSetCred(newCred);
 // S21: Show biometric confirmation before advancing
@@ -1815,7 +1815,7 @@ e("p",{style:{fontSize:14,color:t2,lineHeight:1.6}},"Your credential proves you'
 err&&ToolAlert("danger",err),
 // S25: Persistent crypto-unavailable warning
 HIP_CRYPTO_OK===false&&!err&&ToolAlert("danger",e("span",null,e("strong",null,"Crypto not available: "),"Your browser doesn't support Ed25519 cryptography needed for HIP credentials. ",e("br"),e("br"),"If you're using DuckDuckGo browser, tap the ",e("strong",null,"shield icon")," in the address bar and disable protections for this site, then reload. Otherwise, try Chrome, Firefox, Safari 17+, or Edge.")),
-HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer was detected, but this browser ",e("strong",null,"already has a different credential")," saved.",e("br"),e("br"),e("strong",null,"Already on this device:")," the credential currently in this browser.",e("br"),e("strong",null,"Just received:")," the credential from the transfer link.",e("br"),e("br"),"Replacing will disconnect you from the current credential's portfolio, credits, and trust score on this site.",HIP_PENDING_IMPORT&&e("div",{style:{marginTop:10,display:"flex",gap:8}},e("button",{style:Object.assign({},btnSm,{flex:1}),onClick:function(){HIP_PENDING_IMPORT=null;HIP_IMPORT_RESULT=null;props.forceUpdate?props.forceUpdate():window.location.reload()}},"Keep This Device's"),e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"10px 16px",background:go,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){if(!HIP_PENDING_IMPORT)return;localStorage.setItem(HIP_CRED_KEY,JSON.stringify(HIP_PENDING_IMPORT));try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:HIP_PENDING_IMPORT.credentialId,tier:HIP_PENDING_IMPORT.tier})})}catch(te){}HIP_IMPORT_RESULT="imported";HIP_PENDING_IMPORT=null;window.location.reload()}},"Use Transferred")))),
+HIP_IMPORT_RESULT==="exists"&&ToolAlert("warn",e("span",null,"A credential transfer was detected, but this browser ",e("strong",null,"already has a different credential")," saved.",e("br"),e("br"),e("strong",null,"Already on this device:")," the credential currently in this browser.",e("br"),e("strong",null,"Just received:")," the credential from the transfer link.",e("br"),e("br"),"Replacing will disconnect you from the current credential's portfolio, credits, and trust score on this site.",HIP_PENDING_IMPORT&&e("div",{style:{marginTop:10,display:"flex",gap:8}},e("button",{style:Object.assign({},btnSm,{flex:1}),onClick:function(){HIP_PENDING_IMPORT=null;HIP_IMPORT_RESULT=null;props.forceUpdate?props.forceUpdate():window.location.reload()}},"Keep This Device's"),e("button",{style:{flex:1,fontFamily:mo,fontSize:12,padding:"10px 16px",background:go,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:600},onClick:function(){if(!HIP_PENDING_IMPORT)return;localStorage.setItem(HIP_CRED_KEY,JSON.stringify(HIP_PENDING_IMPORT));try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:HIP_PENDING_IMPORT.credentialId,tier:HIP_PENDING_IMPORT.tier,public_key:HIP_PENDING_IMPORT.publicKey,issuance_token:(HIP_PENDING_IMPORT.issuanceProof||{}).issuanceToken,t3_session_id:(HIP_PENDING_IMPORT.issuanceProof||{}).sessionId,issuance_timestamp:(HIP_PENDING_IMPORT.issuanceProof||{}).timestamp})})}catch(te){}HIP_IMPORT_RESULT="imported";HIP_PENDING_IMPORT=null;window.location.reload()}},"Use Transferred")))),
 HIP_IMPORT_RESULT==="invalid"&&ToolAlert("danger","A credential transfer link was detected but the data was invalid or corrupted."),
 HIP_IMPORT_RESULT==="error"&&ToolAlert("danger","Something went wrong processing the credential transfer link. Try downloading a backup from hipverify.org and importing it manually."),
 
@@ -2062,7 +2062,7 @@ created:new Date().toISOString(),warning:"Store securely.",_priv:rKeys._priv,_pu
 setDoneCred(newCred);props.onDone(newCred);
 // S29: Initialize trust record for new Tier 2 vouch credential
 // S33: Include voucher_credential_id for recovery support
-try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2,voucher_credential_id:t.voucherCredentialId})})}catch(te){}
+try{fetch(HIP_WORKER_URL+"/trust/initialize",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:rKeys.credentialId,tier:2,voucher_credential_id:t.voucherCredentialId,vouch_body:canonJSON(body),vouch_signature:sig})})}catch(te){}
 setStep(4);setBusy(false)}catch(ex){props.setErr("Something went wrong processing the vouch. Make sure you pasted the complete token and try again.");setBusy(false)}};
 
 return e("div",null,
@@ -2271,7 +2271,7 @@ if(Math.abs(Date.now()-new Date(t.timestamp).getTime())>86400000){props.setErr("
 // Call worker to perform tier upgrade
 try{var upResp=await fetch(HIP_WORKER_URL+"/upgrade-credential",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 upgrade_type:"tier2-vouch",credential_id:props.cred.credentialId,new_tier:2,
-voucher_credential_id:t.voucherCredentialId,voucher_public_key:t.voucherPublicKey,vouch_signature:t.signature,vouch_timestamp:t.timestamp})});
+voucher_credential_id:t.voucherCredentialId,voucher_public_key:t.voucherPublicKey,vouch_signature:t.signature,vouch_timestamp:t.timestamp,vouch_body:canon})});
 var upData=await upResp.json();
 if(!upResp.ok){props.setErr(upData.error||"Upgrade failed. The voucher may not be a valid Tier 1 credential holder.");setBusy(false);return}
 // Update credential object in memory and localStorage

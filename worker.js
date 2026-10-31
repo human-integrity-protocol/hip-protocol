@@ -736,6 +736,64 @@ async function validateManifest(manifest) {
 // Phase 1 so that Phase 1 can stand alone as pure (no KV) while Phase 2
 // introduces the first KV-touching collection helpers.
 
+// S211 BLOCKS ANNOUNCE #4: server-side verification of voucher-signed tokens
+// (hip-vouch-token-v1, hip-upgrade-vouch-v1, hip-recovery-vouch-v1). Before S211
+// these signatures were checked only in the recipient's browser; the worker took
+// voucher_credential_id on the caller's word.
+//
+// The signed message is the exact UTF-8 bytes of `vouchBody` (the string the
+// client verified and forwarded). Fields are read from JSON.parse of that same
+// string, so the server never re-canonicalizes and cannot drift from the client.
+// Checks: version, voucher id match, voucher key binding (SHA-256(voucherPublicKey)
+// === voucherCredentialId), 24h freshness (5 min future skew), Ed25519 signature.
+// Recipient binding is checked by each caller (shape differs per token type).
+// Returns { ok:true, token } or { ok:false, error, status }.
+async function verifyVouchToken(vouchBody, vouchSignature, expect) {
+  if (typeof vouchBody !== "string" || vouchBody.length === 0 || vouchBody.length > 4096 ||
+      typeof vouchSignature !== "string" || vouchSignature.length === 0) {
+    return { ok: false, error: "Missing or malformed vouch_body / vouch_signature", status: 400 };
+  }
+  let t;
+  try { t = JSON.parse(vouchBody); } catch (_) {
+    return { ok: false, error: "vouch_body is not valid JSON", status: 400 };
+  }
+  if (!t || typeof t !== "object" || Array.isArray(t) || Object.prototype.hasOwnProperty.call(t, "signature")) {
+    return { ok: false, error: "vouch_body must be the signed token without its signature field", status: 400 };
+  }
+  if (t.version !== expect.version) {
+    return { ok: false, error: "Vouch token version mismatch (expected " + expect.version + ")", status: 400 };
+  }
+  if (t.voucherCredentialId !== expect.voucherCredentialId) {
+    return { ok: false, error: "Vouch token was not issued by the named voucher", status: 403 };
+  }
+  if (!isHex64Lower(t.voucherPublicKey) || !isHex64Lower(t.voucherCredentialId)) {
+    return { ok: false, error: "Vouch token voucher key/id malformed", status: 400 };
+  }
+  const voucherPub = hexToBytes(t.voucherPublicKey);
+  if ((await sha256Hex(voucherPub)) !== t.voucherCredentialId) {
+    return { ok: false, error: "Voucher key binding failed: SHA-256(voucherPublicKey) !== voucherCredentialId", status: 403 };
+  }
+  const tsMs = new Date(t.timestamp).getTime();
+  if (!Number.isFinite(tsMs) || Date.now() - tsMs > 86400000 || tsMs - Date.now() > 300000) {
+    return { ok: false, error: "Vouch token expired (older than 24 hours) or timestamp invalid", status: 400 };
+  }
+  let valid = false;
+  try {
+    valid = await verifyEd25519FromBytes(voucherPub, vouchSignature, new TextEncoder().encode(vouchBody));
+  } catch (_) { valid = false; }
+  if (!valid) {
+    return { ok: false, error: "Vouch signature verification failed", status: 403 };
+  }
+  return { ok: true, token: t };
+}
+
+// S211: SHA-256(hex public key) === credential id, for bootstrap paths that
+// receive a recipient key inside a signed token or an issuance proof.
+async function keyBindsTo(publicKeyHex, credentialId) {
+  if (!isHex64Lower(publicKeyHex) || !isHex64Lower(credentialId)) return false;
+  return (await sha256Hex(hexToBytes(publicKeyHex))) === credentialId;
+}
+
 // Convert lowercase hex string to Uint8Array.
 function hexToBytes(hex) {
   if (typeof hex !== "string" || hex.length % 2 !== 0) {
@@ -1583,6 +1641,40 @@ async function handleTrustInitialize(request, env) {
     if (activeVouches.length >= 10) {
       return jsonResponse({ error: "Voucher has reached the limit of 10 active outstanding vouches" }, 429, origin);
     }
+
+    // S211 BLOCKS ANNOUNCE #4: verify the voucher's signature server-side and
+    // that the token was issued to THIS credential's key. Previously only the
+    // recipient's browser checked it.
+    const vt = await verifyVouchToken(body.vouch_body, body.vouch_signature, {
+      version: "hip-vouch-token-v1",
+      voucherCredentialId: voucher_credential_id,
+    });
+    if (!vt.ok) {
+      return jsonResponse({ error: vt.error }, vt.status, origin);
+    }
+    if (!(await keyBindsTo(vt.token.recipientPublicKey, credential_id))) {
+      return jsonResponse({ error: "Vouch token was issued to a different key" }, 403, origin);
+    }
+  }
+
+  // S211 BLOCKS ANNOUNCE #4: Tier 3 requires the issuance proof minted by
+  // /tier3/register (WebAuthn ceremony + 2/IP/24h cap). issuance_token =
+  // HMAC(DEDUP_SECRET, "{t3_session_id}:{public_key}:{issuance_timestamp}"), and
+  // public_key must hash to credential_id. Previously T3 records could be created
+  // for any id with no ceremony at all.
+  if (tier === 3) {
+    const { public_key, issuance_token, t3_session_id, issuance_timestamp } = body;
+    if (!public_key || !issuance_token || typeof t3_session_id !== "string" || !t3_session_id ||
+        typeof issuance_timestamp !== "string" || !issuance_timestamp) {
+      return jsonResponse({ error: "Tier 3 requires the /tier3/register issuance proof (public_key, issuance_token, t3_session_id, issuance_timestamp)" }, 400, origin);
+    }
+    if (!(await keyBindsTo(public_key, credential_id))) {
+      return jsonResponse({ error: "Key binding failed: SHA-256(public_key) !== credential_id" }, 403, origin);
+    }
+    const expectedToken = await hmacSHA256(env.DEDUP_SECRET, `${t3_session_id}:${public_key}:${issuance_timestamp}`);
+    if (expectedToken !== issuance_token) {
+      return jsonResponse({ error: "Invalid Tier 3 issuance token" }, 403, origin);
+    }
   }
 
   const now = new Date().toISOString();
@@ -1879,12 +1971,29 @@ async function handleRecoverCredential(request, env) {
       return jsonResponse({ error: "Voucher credential ID does not match the original voucher. Recovery requires the same person who originally vouched." }, 403, origin);
     }
 
-    // Verify the vouch signature is valid (voucher proves they hold the key)
-    // The client sends vouch_body (canonical JSON of the recovery vouch) and vouch_signature (base64)
-    // We verify using the voucher's public key from their trust record
-    // But we don't store voucher public keys in trust records — the vouch_body should contain it
-    // and the client already verified the signature. The server-side check is:
-    // the voucher_credential_id matches the trust record, which is the critical auth step.
+    // S211 BLOCKS ANNOUNCE #4: the vouch signature is now verified server-side.
+    // Before S211 vouch_signature/vouch_body were required but never checked, so
+    // knowing (old_credential_id, voucher_credential_id) was enough to migrate a
+    // Tier 2 credential's trust record, credits, Stripe link and proof index to
+    // an attacker-chosen key. The voucher's key travels inside the signed token
+    // and is bound to voucher_credential_id by hash; the token must name this
+    // old credential and be issued to the key behind new_credential_id.
+    if (oldTrust.superseded_by) {
+      return jsonResponse({ error: "Old credential has already been recovered" }, 409, origin);
+    }
+    const rv = await verifyVouchToken(vouch_body, vouch_signature, {
+      version: "hip-recovery-vouch-v1",
+      voucherCredentialId: voucher_credential_id,
+    });
+    if (!rv.ok) {
+      return jsonResponse({ error: rv.error }, rv.status, origin);
+    }
+    if (rv.token.oldCredentialId !== old_credential_id) {
+      return jsonResponse({ error: "Recovery vouch names a different old credential" }, 403, origin);
+    }
+    if (!(await keyBindsTo(rv.token.recipientPublicKey, new_credential_id))) {
+      return jsonResponse({ error: "Recovery vouch was issued to a different key" }, 403, origin);
+    }
 
     // ── Perform the rotation ──
 
@@ -1977,37 +2086,44 @@ async function handleUpgradeCredential(request, env) {
   if (upgrade_type === "tier1-idv") {
     const { session_id } = body;
 
-    // If a session_id is provided, validate the Didit session
-    if (session_id) {
-      const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
-      if (sessionRaw) {
-        const sessionData = JSON.parse(sessionRaw);
-        if (sessionData.status !== "Approved") {
-          return jsonResponse({ error: "Verification session not approved" }, 400, origin);
-        }
-
-        // Map dedup hash to this credential ID (prevents duplicate humans)
-        if (sessionData.dedupHash) {
-          const dedupKey = `dedup:${sessionData.dedupHash}`;
-          const existingDedup = await env.DEDUP_KV.get(dedupKey);
-          if (existingDedup && existingDedup !== credential_id) {
-            // This identity is already linked to a DIFFERENT credential
-            return jsonResponse({
-              error: "This government ID is already linked to a different credential (" + existingDedup.substring(0, 12) + "…). Use credential recovery if you lost access to that credential."
-            }, 409, origin);
-          }
-          // Map dedup hash → this credential
-          await env.DEDUP_KV.put(dedupKey, credential_id);
-        }
-
-        // Mark session as used for upgrade
-        sessionData.upgradedCredentialId = credential_id;
-        sessionData.upgradeTimestamp = new Date().toISOString();
-        await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
-          expirationTtl: 3600,
-        });
-      }
+    // S211 BLOCKS ANNOUNCE #4: the Didit session is MANDATORY. Before S211 a
+    // missing or expired session_id skipped validation and still set tier:1,
+    // so any caller could lift any credential to T1 (TI 400) with no ID check.
+    // Gate now mirrors /trust/initialize T1: session present, Approved, carries
+    // a dedupHash, and the identity is unbound or already bound to this id.
+    if (!session_id) {
+      return jsonResponse({ error: "Tier 1 upgrade requires session_id from Didit verification" }, 400, origin);
     }
+    const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
+    if (!sessionRaw) {
+      return jsonResponse({ error: "Verification session not found or expired" }, 403, origin);
+    }
+    const sessionData = JSON.parse(sessionRaw);
+    if (sessionData.status !== "Approved") {
+      return jsonResponse({ error: "Verification session not approved" }, 400, origin);
+    }
+    if (!sessionData.dedupHash) {
+      return jsonResponse({ error: "Verification session is missing identity data; Tier 1 cannot be issued without dedup" }, 403, origin);
+    }
+
+    // Map dedup hash to this credential ID (prevents duplicate humans)
+    const dedupKey = `dedup:${sessionData.dedupHash}`;
+    const existingDedup = await env.DEDUP_KV.get(dedupKey);
+    if (existingDedup && existingDedup !== credential_id) {
+      // This identity is already linked to a DIFFERENT credential
+      return jsonResponse({
+        error: "This government ID is already linked to a different credential (" + existingDedup.substring(0, 12) + "…). Use credential recovery if you lost access to that credential."
+      }, 409, origin);
+    }
+    await env.DEDUP_KV.put(dedupKey, credential_id);
+
+    // Mark session as used for upgrade
+    sessionData.upgradedCredentialId = credential_id;
+    sessionData.upgradeTimestamp = new Date().toISOString();
+    if (sessionData.dedup === "new") sessionData.dedup = "registered";
+    await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
+      expirationTtl: 3600,
+    });
 
     // Update the trust record in-place
     record.tier = 1;
@@ -2078,12 +2194,21 @@ async function handleUpgradeCredential(request, env) {
       return jsonResponse({ error: "Voucher has reached the limit of 10 active outstanding vouches" }, 429, origin);
     }
 
-    // Validate vouch timestamp (within 24 hours)
-    if (vouch_timestamp) {
-      const vouchAge = Math.abs(Date.now() - new Date(vouch_timestamp).getTime());
-      if (vouchAge > 86400000) {
-        return jsonResponse({ error: "Upgrade vouch has expired (older than 24 hours). Ask the voucher to create a new one." }, 400, origin);
-      }
+    // S211 BLOCKS ANNOUNCE #4: verify the voucher's signature server-side
+    // (freshness is enforced inside verifyVouchToken from the signed timestamp;
+    // the unsigned vouch_timestamp body field is no longer trusted).
+    const uv = await verifyVouchToken(body.vouch_body, body.vouch_signature, {
+      version: "hip-upgrade-vouch-v1",
+      voucherCredentialId: voucher_credential_id,
+    });
+    if (!uv.ok) {
+      return jsonResponse({ error: uv.error }, uv.status, origin);
+    }
+    if (uv.token.recipientCredentialId !== credential_id) {
+      return jsonResponse({ error: "Upgrade vouch was issued for a different credential" }, 403, origin);
+    }
+    if (uv.token.targetTier !== 2) {
+      return jsonResponse({ error: "Upgrade vouch target tier mismatch" }, 400, origin);
     }
 
     // Update the trust record in-place

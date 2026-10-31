@@ -8,3 +8,7 @@ tools/phase2-sign-smoke.js
 tools/phase106_*.js
 tools/phase106_*.sh
 tools/test-vectors/
+
+# S211: legacy/ snapshots are local-only (same bytes as git history; Pages would otherwise serve stale copies on hipprotocol.org). README documents the convention and stays tracked.
+legacy/*
+!legacy/README.md
