@@ -67,6 +67,7 @@
 //   api_key:{key_hash}   — API key → credential binding (permanent) (S82, last_used stamped S116CW)
 //   cred_api_keys:{cred_id} — Reverse index { key_hashes: [hex64], updated_at } (permanent) (S116CW)
 //   kcrate:{cred_hash}   — API key creation rate limit counter (24h TTL) (S116CW)
+//   arrate:{cred_hash}   — /attest-register rate limit counter (24h TTL) (S210)
 //   credits:{cred_id}    — Credit balance record (permanent) (S83)
 //   stripe_cust:{cred_id} — Stripe customer ID mapping (permanent) (S83)
 //
@@ -1643,48 +1644,64 @@ async function handleTrustInitialize(request, env) {
 }
 
 // POST /attest-register — Called after each attestation to update trust record
+//
+// S210 (BLOCKS ANNOUNCE #3 closure): this endpoint mutated trust records —
+// attestation_count, liveness_verified_count, active_months, last_seen, and
+// therefore trust_index (the TI>=60 attest floor on /register-proof and
+// /api/attest) — on an UNAUTHENTICATED body. Any caller who knew a public
+// credential_id could pump that credential's TI, backdate active_months via a
+// client-supplied timestamp, and even auto-create tier-3 trust records for
+// arbitrary ids. Now:
+//   * AppAuth-gated via verifyAppAuth(canonical "HIPKIT|/attest-register|{cred}|{ts}")
+//     — Ed25519 + SHA-256 key binding + trust-record existence + superseded guard.
+//   * No auto-initialize: a credential must have been created via /trust/initialize.
+//   * Server clock only: last_seen / active_months are stamped from Date.now(),
+//     never from the body.
+//   * liveness_verified_count increments only when the VERIFIED trust record is
+//     tier 3 (device-bound WebAuthn pathway) — the client's liveness_designation
+//     string is no longer trusted.
+//   * 24h rate cap per credential (arrate:{hmac(cred_id)}, same pattern as kcrate).
 async function handleAttestRegister(request, env) {
   const origin = request.headers.get("Origin") || CORS_ORIGIN;
 
-  let body;
-  try {
-    body = await request.json();
-  } catch (_) {
-    return jsonResponse({ error: "Invalid JSON" }, 400, origin);
+  const auth = await verifyAppAuth(request, "/attest-register", env);
+  if (!auth.ok) {
+    return jsonResponse({ error: auth.error }, auth.status, origin);
+  }
+  const { credential_id, trust_record: record, body } = auth;
+
+  const { bundle_hash } = body;
+  if (!bundle_hash || typeof bundle_hash !== "string" || !/^[0-9a-f]{64}$/.test(bundle_hash)) {
+    return jsonResponse({ error: "bundle_hash must be 64-char lowercase hex" }, 400, origin);
   }
 
-  const { credential_id, bundle_hash, liveness_designation, timestamp } = body;
-  if (!credential_id || !bundle_hash) {
-    return jsonResponse({ error: "Missing credential_id or bundle_hash" }, 400, origin);
+  // Rate limit: 100 attest-register calls / 24h per credential.
+  const arrateHash = await hmacSHA256(env.DEDUP_SECRET, "arrate:" + credential_id);
+  const arrateKey = `arrate:${arrateHash}`;
+  const arrateRaw = await env.DEDUP_KV.get(arrateKey);
+  const arrateCount = arrateRaw ? (JSON.parse(arrateRaw).count || 0) : 0;
+  const arrateLimit = 100;
+  if (arrateCount >= arrateLimit) {
+    return jsonResponse({
+      error: "rate_limited",
+      message: `Maximum ${arrateLimit} attestation registrations per 24 hours per credential.`,
+      limit: arrateLimit,
+      current: arrateCount,
+    }, 429, origin);
   }
 
-  // Get or create trust record
-  let record;
-  const existing = await env.DEDUP_KV.get(`trust:${credential_id}`);
-  if (existing) {
-    record = JSON.parse(existing);
-  } else {
-    // Auto-initialize if not found (backward compatibility for pre-trust credentials)
-    record = {
-      tier: 3, // default assumption; credential should have been initialized
-      first_seen: timestamp || new Date().toISOString(),
-      last_seen: timestamp || new Date().toISOString(),
-      attestation_count: 0,
-      liveness_verified_count: 0,
-      active_months: [],
-    };
-  }
+  // Update record (server clock only).
+  const nowIso = new Date().toISOString();
+  record.attestation_count = (Number(record.attestation_count) || 0) + 1;
+  record.last_seen = nowIso;
 
-  // Update record
-  record.attestation_count += 1;
-  record.last_seen = timestamp || new Date().toISOString();
-
-  if (liveness_designation === "device-attested") {
-    record.liveness_verified_count += 1;
+  if (record.tier === 3) {
+    record.liveness_verified_count = (Number(record.liveness_verified_count) || 0) + 1;
   }
 
   // Track active months
-  const monthStr = (record.last_seen).substring(0, 7); // YYYY-MM
+  if (!Array.isArray(record.active_months)) record.active_months = [];
+  const monthStr = nowIso.substring(0, 7); // YYYY-MM
   if (!record.active_months.includes(monthStr)) {
     record.active_months.push(monthStr);
   }
@@ -1696,6 +1713,7 @@ async function handleAttestRegister(request, env) {
   record.trust_index = ts.trust_index;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
+  await env.DEDUP_KV.put(arrateKey, JSON.stringify({ count: arrateCount + 1 }), { expirationTtl: 86400 });
 
   return jsonResponse({
     credential_id: credential_id,
