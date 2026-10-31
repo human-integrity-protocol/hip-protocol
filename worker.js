@@ -27,7 +27,7 @@
 //   POST /tier3/challenge    — Issue Tier 3 registration challenge (S29)
 //   POST /tier3/register     — Validate WebAuthn attestation, issue token (S29)
 //   POST /trust/initialize   — Initialize trust record for new credential (S29)
-//   POST /attest-register    — Register attestation, update trust score (S29)
+//   POST /attest-register    — RETIRED S210b (bump moved into /register-proof)
 //   GET  /trust/:cred_id     — Public trust score query (S29)
 //   POST /recover-credential — Credential recovery with trust migration (S33)
 //   POST /upgrade-credential — Credential tier upgrade with trust preservation (S34)
@@ -67,7 +67,6 @@
 //   api_key:{key_hash}   — API key → credential binding (permanent) (S82, last_used stamped S116CW)
 //   cred_api_keys:{cred_id} — Reverse index { key_hashes: [hex64], updated_at } (permanent) (S116CW)
 //   kcrate:{cred_hash}   — API key creation rate limit counter (24h TTL) (S116CW)
-//   arrate:{cred_hash}   — /attest-register rate limit counter (24h TTL) (S210)
 //   credits:{cred_id}    — Credit balance record (permanent) (S83)
 //   stripe_cust:{cred_id} — Stripe customer ID mapping (permanent) (S83)
 //
@@ -1643,93 +1642,8 @@ async function handleTrustInitialize(request, env) {
   }, 200, origin);
 }
 
-// POST /attest-register — Called after each attestation to update trust record
-//
-// S210 (BLOCKS ANNOUNCE #3 closure): this endpoint mutated trust records —
-// attestation_count, liveness_verified_count, active_months, last_seen, and
-// therefore trust_index (the TI>=60 attest floor on /register-proof and
-// /api/attest) — on an UNAUTHENTICATED body. Any caller who knew a public
-// credential_id could pump that credential's TI, backdate active_months via a
-// client-supplied timestamp, and even auto-create tier-3 trust records for
-// arbitrary ids. Now:
-//   * AppAuth-gated via verifyAppAuth(canonical "HIPKIT|/attest-register|{cred}|{ts}")
-//     — Ed25519 + SHA-256 key binding + trust-record existence + superseded guard.
-//   * No auto-initialize: a credential must have been created via /trust/initialize.
-//   * Server clock only: last_seen / active_months are stamped from Date.now(),
-//     never from the body.
-//   * liveness_verified_count increments only when the VERIFIED trust record is
-//     tier 3 (device-bound WebAuthn pathway) — the client's liveness_designation
-//     string is no longer trusted.
-//   * 24h rate cap per credential (arrate:{hmac(cred_id)}, same pattern as kcrate).
-async function handleAttestRegister(request, env) {
-  const origin = request.headers.get("Origin") || CORS_ORIGIN;
-
-  const auth = await verifyAppAuth(request, "/attest-register", env);
-  if (!auth.ok) {
-    return jsonResponse({ error: auth.error }, auth.status, origin);
-  }
-  const { credential_id, trust_record: record, body } = auth;
-
-  const { bundle_hash } = body;
-  if (!bundle_hash || typeof bundle_hash !== "string" || !/^[0-9a-f]{64}$/.test(bundle_hash)) {
-    return jsonResponse({ error: "bundle_hash must be 64-char lowercase hex" }, 400, origin);
-  }
-
-  // Rate limit: 100 attest-register calls / 24h per credential.
-  const arrateHash = await hmacSHA256(env.DEDUP_SECRET, "arrate:" + credential_id);
-  const arrateKey = `arrate:${arrateHash}`;
-  const arrateRaw = await env.DEDUP_KV.get(arrateKey);
-  const arrateCount = arrateRaw ? (JSON.parse(arrateRaw).count || 0) : 0;
-  const arrateLimit = 100;
-  if (arrateCount >= arrateLimit) {
-    return jsonResponse({
-      error: "rate_limited",
-      message: `Maximum ${arrateLimit} attestation registrations per 24 hours per credential.`,
-      limit: arrateLimit,
-      current: arrateCount,
-    }, 429, origin);
-  }
-
-  // Update record (server clock only).
-  const nowIso = new Date().toISOString();
-  record.attestation_count = (Number(record.attestation_count) || 0) + 1;
-  record.last_seen = nowIso;
-
-  if (record.tier === 3) {
-    record.liveness_verified_count = (Number(record.liveness_verified_count) || 0) + 1;
-  }
-
-  // Track active months
-  if (!Array.isArray(record.active_months)) record.active_months = [];
-  const monthStr = nowIso.substring(0, 7); // YYYY-MM
-  if (!record.active_months.includes(monthStr)) {
-    record.active_months.push(monthStr);
-  }
-
-  // Recompute trust score
-  const ts = await computeTrustScore(record, env);
-  // S92 #23 Step-2a: dual-write trust_index alongside trust_score.
-  record.trust_score = ts.score;
-  record.trust_index = ts.trust_index;
-
-  await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
-  await env.DEDUP_KV.put(arrateKey, JSON.stringify({ count: arrateCount + 1 }), { expirationTtl: 86400 });
-
-  return jsonResponse({
-    credential_id: credential_id,
-    trust_index: ts.trust_index,
-    trust_score_legacy: ts.score,
-    trust_score: ts.score,
-    attestation_count: record.attestation_count,
-    score_breakdown: {
-      tier_base: ts.tierBase,
-      age_bonus: ts.ageBonus,
-      volume_bonus: ts.volumeBonus,
-      consistency_bonus: ts.consistencyBonus,
-      liveness_bonus: ts.livenessBonus,
-    },
-  }, 200, origin);
-}
+// POST /attest-register — RETIRED S210b. The counter bump now happens inside
+// handleRegisterProof after signature verification (see "S210b" there).
 
 // GET /trust/:credential_id — Public trust score query
 async function handleTrustQuery(credentialId, request, env) {
@@ -3693,12 +3607,31 @@ async function handleRegisterProof(request, env, ctx) {
   // don't flow through this handler. Declaration key does NOT no-op the
   // counter itself (it continues accumulating) — only the 50-cap gate above
   // and the read-time TI clamp in computeTrustScore are gated on it.
-  if (trustRecord.tier === 3) {
-    const trustRecordUpdated = { ...trustRecord };
+  //
+  // S210b: /attest-register retired. This handler now owns the full trust-record
+  // bump for web-signed proofs, mirroring handleApiAttest: attestation_count,
+  // last_seen, active_months, t3 counter, and (tier 3 only — device-bound
+  // credential) liveness_verified_count, which /attest-register used to bump on
+  // a client-asserted string. Every increment is now backed by a proof whose
+  // signature this handler has already verified. Server clock only.
+  const trustRecordUpdated = { ...trustRecord };
+  trustRecordUpdated.attestation_count = (Number(trustRecordUpdated.attestation_count) || 0) + 1;
+  trustRecordUpdated.last_seen = now;
+  const monthStrRP = now.substring(0, 7);
+  if (!Array.isArray(trustRecordUpdated.active_months)) trustRecordUpdated.active_months = [];
+  if (!trustRecordUpdated.active_months.includes(monthStrRP)) {
+    trustRecordUpdated.active_months.push(monthStrRP);
+  }
+  if (trustRecordUpdated.tier === 3) {
     trustRecordUpdated.t3_original_attestation_count =
       (trustRecordUpdated.t3_original_attestation_count || 0) + 1;
-    await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordUpdated));
+    trustRecordUpdated.liveness_verified_count =
+      (Number(trustRecordUpdated.liveness_verified_count) || 0) + 1;
   }
+  const tsRP = await computeTrustScore(trustRecordUpdated, env);
+  trustRecordUpdated.trust_score = tsRP.score;
+  trustRecordUpdated.trust_index = tsRP.trust_index;
+  await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(trustRecordUpdated));
 
   // S85CW Change 2: Index this proof under the attester's credential so
   // /api/portfolio can page through it. Fire-and-continue semantics.
@@ -3735,6 +3668,17 @@ async function handleRegisterProof(request, env, ctx) {
     short_id,
     short_url,
     sealed: proofRecord.sealed,
+    // S210b: trust state after this proof, so the web client can render it
+    // without a second call (replaces the retired /attest-register response).
+    trust_index: tsRP.trust_index,
+    trust_score: tsRP.score,
+    score_breakdown: {
+      tier_base: tsRP.tierBase,
+      age_bonus: tsRP.ageBonus,
+      volume_bonus: tsRP.volumeBonus,
+      consistency_bonus: tsRP.consistencyBonus,
+      liveness_bonus: tsRP.livenessBonus,
+    },
   }, 200, origin);
 }
 
@@ -8497,9 +8441,7 @@ export default {
       return handleTrustInitialize(request, env);
     }
 
-    if (method === "POST" && path === "/attest-register") {
-      return handleAttestRegister(request, env);
-    }
+    // /attest-register route RETIRED S210b (handler deleted; 404 by fall-through).
 
     // S33: Credential recovery route
     if (method === "POST" && path === "/recover-credential") {

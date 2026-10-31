@@ -2558,15 +2558,8 @@ signalAnnotations:[]});
 var anch={anchorLink:"hip://"+ch.substring(0,8)+"/"+ch,bundleHash:ch,classification:cls,contentHash:finalHash,credentialId:cred.credentialId,timestamp:now,type:"HIPProofAnchor",version:"WF-v1.0"};
 setProofcard(buildProofcard(full,anch,cred.publicKey,fname));setBuilding(false);setStep(4);
 
-// S29: Register attestation with Trust Score system
-// S210: /attest-register is now AppAuth-gated (worker BLOCKS ANNOUNCE #3 closure).
-// Sign canonical "HIPKIT|/attest-register|{credential_id}|{timestamp}" with the
-// credential key and send public_key + signature + timestamp alongside bundle_hash.
-try{var arTs=new Date().toISOString();
-var arCanon="HIPKIT|/attest-register|"+cred.credentialId+"|"+arTs;
-var arSigBuf=await crypto.subtle.sign("Ed25519",cred._priv,new TextEncoder().encode(arCanon));
-var arResp=await fetch(HIP_WORKER_URL+"/attest-register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credential_id:cred.credentialId,public_key:cred.publicKey,timestamp:arTs,signature:b64e(arSigBuf),bundle_hash:ch})});
-if(arResp.ok){var arData=await arResp.json();setTrustScore(arData.trust_score);setTrustBreakdown(arData.score_breakdown||null)}}catch(te){}};
+// S29 /attest-register call RETIRED S210b — trust score now returned by /register-proof (see publishProof).
+};
 
 // S37: Publish proof to public registry
 var publishProof=async function(){
@@ -2646,6 +2639,8 @@ try{
   try{data=JSON.parse(text)}catch(pe){throw new Error("Server returned non-JSON (HTTP "+resp.status+"): "+text.substring(0,120))}
   if(resp.ok&&data.success){
     setProofUrl(data.short_url||data.proof_url);
+    // S210b: trust state comes back on the proof registration itself.
+    if(typeof data.trust_score==='number'){setTrustScore(data.trust_score);setTrustBreakdown(data.score_breakdown||null)}
     // S101: Stash a local attestation record so QuickVerify can recognize
     // either the pre-embed original OR the post-embed attested copy when the
     // same browser is used for both attest and verify. Pure client-side
