@@ -10,6 +10,7 @@ this is the local, offline copy. Git `HEAD` at the session's start has the same 
 | `pre-S210/` | fcf61fb-era hip-protocol HEAD (b5dbed2) | hip-tier1-worker as deployed S171CC (worker.js 8886 lines) |
 | `pre-S210b/` | S210 interim (4c5325f) | S210 interim worker (8904 lines) |
 | `pre-S211/` | f5ceee7 | S210b worker (8846 lines) — still live until the S211 deploy |
+| `pre-S212/` | 8c5b16f | S211 worker (8971 lines), deployed 2026-10-31. `stale-copies/` holds the retired `docs/index.html` + `site/index.html` (S212 decision: delete — they were live at hipprotocol.org/docs/ and /site/ with the pre-S210 unsigned attest call) |
 
 Convention for future sessions: before editing, `git show HEAD:<file> > legacy/pre-S<N>/<file>`.
 

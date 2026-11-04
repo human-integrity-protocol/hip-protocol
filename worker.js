@@ -448,6 +448,42 @@ async function sha256Bytes(input) {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
 }
 
+// ── S212: Didit claim-secret binding ──
+// POST /session mints a 32-byte secret, returns it ONLY in the JSON body (never in
+// a URL), and stores claim:{session_id} = SHA-256(secret) with a 4h TTL. The four
+// T1 bootstrap paths (/register-dedup, /trust/initialize T1, /upgrade-credential
+// tier1-idv, /recover-credential tier1-reverify) require the secret alongside
+// session_id. Pre-S212 the session_id — which transits Didit/callback URLs — was
+// the sole bearer for T1 issuance; now it proves nothing without the secret the
+// originating browser kept in localStorage across the redirect.
+const CLAIM_TTL_SECONDS = 4 * 3600;
+
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Returns null when the claim is valid; otherwise { status, error } for the caller
+// to return. `consume: true` deletes the claim key after a successful check so a
+// captured secret cannot be replayed within the TTL.
+async function verifySessionClaim(sessionId, claimSecret, env, { consume = false } = {}) {
+  if (typeof claimSecret !== "string" || !claimSecret) {
+    return { status: 400, error: "Missing claim_secret for this session" };
+  }
+  const stored = await env.DEDUP_KV.get(`claim:${sessionId}`);
+  if (!stored) {
+    return { status: 403, error: "Session claim secret invalid or expired" };
+  }
+  const presented = await sha256Hex(claimSecret);
+  if (!timingSafeEqualHex(stored, presented)) {
+    return { status: 403, error: "Session claim secret invalid or expired" };
+  }
+  if (consume) await env.DEDUP_KV.delete(`claim:${sessionId}`);
+  return null;
+}
+
 // Ed25519 verify wrapper over Web Crypto. Spec §3.2.5: signature is Ed25519 over
 // the 32-byte SHA-256(JCS(manifest)) digest. Public key and signature arrive as
 // base64 strings in manifest/collection records.
@@ -777,6 +813,10 @@ async function verifyVouchToken(vouchBody, vouchSignature, expect) {
   if (!Number.isFinite(tsMs) || Date.now() - tsMs > 86400000 || tsMs - Date.now() > 300000) {
     return { ok: false, error: "Vouch token expired (older than 24 hours) or timestamp invalid", status: 400 };
   }
+  // S212: every token carries a client-generated nonce (mkNonce in index.html).
+  if (typeof t.nonce !== "string" || t.nonce.length === 0 || t.nonce.length > 128) {
+    return { ok: false, error: "Vouch token nonce missing or malformed", status: 400 };
+  }
   let valid = false;
   try {
     valid = await verifyEd25519FromBytes(voucherPub, vouchSignature, new TextEncoder().encode(vouchBody));
@@ -784,7 +824,28 @@ async function verifyVouchToken(vouchBody, vouchSignature, expect) {
   if (!valid) {
     return { ok: false, error: "Vouch signature verification failed", status: 403 };
   }
+  // S212: used-nonce set. Replay was already bounded by recipient binding +
+  // one-record-per-credential; this makes single use explicit. Checked here
+  // (after the signature, so only authentic tokens are looked up) and marked
+  // by the caller via consumeVouchNonce() once its state change has succeeded.
+  if (expect.env) {
+    const used = await expect.env.DEDUP_KV.get(vouchNonceKey(t));
+    if (used) {
+      return { ok: false, error: "Vouch token already used", status: 409 };
+    }
+  }
   return { ok: true, token: t };
+}
+
+// S212: used-nonce key. Scoped by version + voucher so a nonce collision across
+// vouchers cannot block an unrelated token. TTL 25h > the 24h token freshness
+// window, so an expired token's entry can lapse without creating a replay gap.
+const VOUCH_NONCE_TTL_SECONDS = 25 * 3600;
+function vouchNonceKey(t) {
+  return `vnonce:${t.version}:${t.voucherCredentialId}:${t.nonce}`;
+}
+async function consumeVouchNonce(t, env) {
+  await env.DEDUP_KV.put(vouchNonceKey(t), new Date().toISOString(), { expirationTtl: VOUCH_NONCE_TTL_SECONDS });
 }
 
 // S211: SHA-256(hex public key) === credential id, for bootstrap paths that
@@ -969,10 +1030,21 @@ async function handleCreateSession(request, env) {
 
   const session = await resp.json();
 
-  // Return only what the client needs — never expose API keys
+  // S212: mint the claim secret bound to this session. Only its hash is stored.
+  const secretBytes = new Uint8Array(32);
+  crypto.getRandomValues(secretBytes);
+  const claimSecret = bytesToHexLower(secretBytes);
+  await env.DEDUP_KV.put(`claim:${session.session_id}`, await sha256Hex(claimSecret), {
+    expirationTtl: CLAIM_TTL_SECONDS,
+  });
+
+  // Return only what the client needs — never expose API keys.
+  // claim_secret travels in this body only; the client must keep it in
+  // localStorage across the Didit redirect and present it on the T1 paths.
   return jsonResponse({
     session_id: session.session_id,
     verification_url: session.verification_url || session.url,
+    claim_secret: claimSecret,
   }, 200, origin);
 }
 
@@ -1092,10 +1164,15 @@ async function handleRegisterDedup(request, env) {
     return jsonResponse({ error: "Invalid JSON" }, 400, origin);
   }
 
-  const { session_id, credential_id } = body;
+  const { session_id, credential_id, claim_secret } = body;
   if (!session_id || !credential_id) {
     return jsonResponse({ error: "Missing session_id or credential_id" }, 400, origin);
   }
+
+  // S212: claim secret proves the caller is the browser that opened the session.
+  // Verified-but-kept here: /trust/initialize T1 follows immediately and consumes it.
+  const claimErr = await verifySessionClaim(session_id, claim_secret, env);
+  if (claimErr) return jsonResponse({ error: claimErr.error }, claimErr.status, origin);
 
   // Retrieve session data
   const raw = await env.DEDUP_KV.get(`session:${session_id}`);
@@ -1581,10 +1658,14 @@ async function handleTrustInitialize(request, env) {
   //   3. Session has a dedupHash (identity signals were extracted)
   //   4. dedup:{hash} maps to this credential_id (register-dedup was called first)
   if (tier === 1) {
-    const { session_id } = body;
+    const { session_id, claim_secret } = body;
     if (!session_id) {
       return jsonResponse({ error: "Tier 1 requires session_id from Didit verification" }, 400, origin);
     }
+
+    // S212: claim secret required; consumed here (last T1 bootstrap step).
+    const claimErr = await verifySessionClaim(session_id, claim_secret, env, { consume: true });
+    if (claimErr) return jsonResponse({ error: claimErr.error }, claimErr.status, origin);
 
     const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
     if (!sessionRaw) {
@@ -1648,6 +1729,7 @@ async function handleTrustInitialize(request, env) {
     const vt = await verifyVouchToken(body.vouch_body, body.vouch_signature, {
       version: "hip-vouch-token-v1",
       voucherCredentialId: voucher_credential_id,
+      env, // S212: used-nonce check
     });
     if (!vt.ok) {
       return jsonResponse({ error: vt.error }, vt.status, origin);
@@ -1655,6 +1737,7 @@ async function handleTrustInitialize(request, env) {
     if (!(await keyBindsTo(vt.token.recipientPublicKey, credential_id))) {
       return jsonResponse({ error: "Vouch token was issued to a different key" }, 403, origin);
     }
+    body._vouchTokenForNonce = vt.token; // S212: consumed after the record write
   }
 
   // S211 BLOCKS ANNOUNCE #4: Tier 3 requires the issuance proof minted by
@@ -1710,6 +1793,7 @@ async function handleTrustInitialize(request, env) {
   record.trust_index = ts.trust_index;
 
   await env.DEDUP_KV.put(`trust:${credential_id}`, JSON.stringify(record));
+  if (tier === 2 && body._vouchTokenForNonce) await consumeVouchNonce(body._vouchTokenForNonce, env); // S212
 
   // S99 #32: Log vouch event for rate limiting
   if (tier === 2 && voucher_credential_id) {
@@ -1842,10 +1926,15 @@ async function handleRecoverCredential(request, env) {
 
   // ── Tier 1 Recovery: re-verification via Didit ──
   if (recovery_type === "tier1-reverify") {
-    const { session_id } = body;
+    const { session_id, claim_secret } = body;
     if (!session_id) {
       return jsonResponse({ error: "Missing session_id for Tier 1 recovery" }, 400, origin);
     }
+
+    // S212: claim secret required; consumed on success below (after the rotation),
+    // so a failed attempt can be retried with the same secret.
+    const claimErr = await verifySessionClaim(session_id, claim_secret, env);
+    if (claimErr) return jsonResponse({ error: claimErr.error }, claimErr.status, origin);
 
     // Retrieve session data — must be approved with dedup = "exists"
     const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
@@ -1911,12 +2000,13 @@ async function handleRecoverCredential(request, env) {
       pathwayOverride: "government-id-didit-v1",
     });
 
-    // 3. Mark session as used for recovery
+    // 3. Mark session as used for recovery; S212: consume the claim secret
     sessionData.dedup = "recovered";
     sessionData.recoveredTo = new_credential_id;
     await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
       expirationTtl: 3600,
     });
+    await env.DEDUP_KV.delete(`claim:${session_id}`);
 
     // 4. Release lock + cache idempotency result
     await env.DEDUP_KV.delete(lockKey);
@@ -1984,6 +2074,7 @@ async function handleRecoverCredential(request, env) {
     const rv = await verifyVouchToken(vouch_body, vouch_signature, {
       version: "hip-recovery-vouch-v1",
       voucherCredentialId: voucher_credential_id,
+      env, // S212: used-nonce check
     });
     if (!rv.ok) {
       return jsonResponse({ error: rv.error }, rv.status, origin);
@@ -2011,6 +2102,7 @@ async function handleRecoverCredential(request, env) {
       newTrust.voucher_credential_id = voucher_credential_id;
       await env.DEDUP_KV.put(`trust:${new_credential_id}`, JSON.stringify(newTrust));
     }
+    await consumeVouchNonce(rv.token, env); // S212
 
     const t2Result = {
       success: true,
@@ -2084,7 +2176,7 @@ async function handleUpgradeCredential(request, env) {
 
   // ── Tier 1 Upgrade: government ID verification via Didit ──
   if (upgrade_type === "tier1-idv") {
-    const { session_id } = body;
+    const { session_id, claim_secret } = body;
 
     // S211 BLOCKS ANNOUNCE #4: the Didit session is MANDATORY. Before S211 a
     // missing or expired session_id skipped validation and still set tier:1,
@@ -2094,6 +2186,9 @@ async function handleUpgradeCredential(request, env) {
     if (!session_id) {
       return jsonResponse({ error: "Tier 1 upgrade requires session_id from Didit verification" }, 400, origin);
     }
+    // S212: claim secret required; consumed on success below.
+    const claimErr = await verifySessionClaim(session_id, claim_secret, env);
+    if (claimErr) return jsonResponse({ error: claimErr.error }, claimErr.status, origin);
     const sessionRaw = await env.DEDUP_KV.get(`session:${session_id}`);
     if (!sessionRaw) {
       return jsonResponse({ error: "Verification session not found or expired" }, 403, origin);
@@ -2124,6 +2219,7 @@ async function handleUpgradeCredential(request, env) {
     await env.DEDUP_KV.put(`session:${session_id}`, JSON.stringify(sessionData), {
       expirationTtl: 3600,
     });
+    await env.DEDUP_KV.delete(`claim:${session_id}`); // S212: consume
 
     // Update the trust record in-place
     record.tier = 1;
@@ -2200,6 +2296,7 @@ async function handleUpgradeCredential(request, env) {
     const uv = await verifyVouchToken(body.vouch_body, body.vouch_signature, {
       version: "hip-upgrade-vouch-v1",
       voucherCredentialId: voucher_credential_id,
+      env, // S212: used-nonce check
     });
     if (!uv.ok) {
       return jsonResponse({ error: uv.error }, uv.status, origin);
@@ -2223,6 +2320,7 @@ async function handleUpgradeCredential(request, env) {
     record.trust_index = ts.trust_index;
 
     await env.DEDUP_KV.put(trustKey, JSON.stringify(record));
+    await consumeVouchNonce(uv.token, env); // S212
 
     // S99 #32: Log vouch event for rate limiting
     const vouchLogKeyW = `vouches:${voucher_credential_id}`;

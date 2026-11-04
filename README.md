@@ -57,7 +57,7 @@ hip-protocol/
 ├── tools/
 │   └── verify_genesis.py     ← 5-step Genesis verification script
 └── site/
-    └── hip_landing_v4.jsx    ← Landing page source
+    └── hip_landing_v4.jsx    ← Landing page source (the served page is /index.html at the repo root)
 ```
 
 **Note:** Four companion specs (PFV-SPEC-v1, PATHWAY-SPEC-v1, INT-SPEC-v1, SLA-SPEC-v1) are finalized and will be added to this repository as they are prepared for publication.
